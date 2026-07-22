@@ -54,6 +54,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = ROOT / "runtime"
 RUNS_FILE = RUNTIME_DIR / "feishu-runs.json"
 PROMPTS_DIR = RUNTIME_DIR / "prompts"
+CODEX_APP_SESSIONS_DIR = RUNTIME_DIR / "codex-app-sessions"
 PROCESSED_MESSAGES_FILE = RUNTIME_DIR / "feishu-processed-messages.json"
 PROCESSED_MESSAGES_DIR = RUNTIME_DIR / "feishu-processed-messages"
 CONVERSATIONS_FILE = RUNTIME_DIR / "feishu-conversations.json"
@@ -511,11 +512,15 @@ def build_submission_run(config: Config, text: str, chat_id: str, source: str = 
                 )
 
             duplicate = mutate_run(duplicate["id"], add_vm_name) or duplicate
-        if duplicate.get("status") == "queued" and config.runner_command and not duplicate.get("runner_log_path"):
+        if duplicate.get("status") == "queued" and not duplicate.get("codex_app_session_path"):
             def start_existing(item: dict[str, Any]) -> None:
-                launch_runner(config, item)
+                prepare_codex_app_session(config, item)
                 item.setdefault("events", []).append(
-                    {"at": utc_now(), "status": "started_existing_queued_run", "note": f"Duplicate data from {source} started queued run"}
+                    {
+                        "at": utc_now(),
+                        "status": "codex_app_session_requested",
+                        "note": f"Duplicate data from {source} created Codex App handoff for queued run",
+                    }
                 )
 
             updated = mutate_run(duplicate["id"], start_existing)
@@ -540,7 +545,7 @@ def build_submission_run(config: Config, text: str, chat_id: str, source: str = 
         "updated_at": utc_now(),
         "events": [{"at": utc_now(), "status": "created", "note": f"Submission data received from {source}"}],
     }
-    message = launch_runner(config, run)
+    message = prepare_codex_app_session(config, run)
     run["updated_at"] = utc_now()
     save_run(run)
     return run, message
@@ -757,40 +762,53 @@ def is_callback_path(raw_path: str) -> bool:
     return path == CALLBACK_PATH or path in LEGACY_CALLBACK_PATHS
 
 
-def launch_runner(config: Config, run: dict[str, Any]) -> str:
+def prepare_codex_app_session(config: Config, run: dict[str, Any]) -> str:
     prompt_path = PROMPTS_DIR / f"{run['id']}.md"
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
     prompt_path.write_text(build_codex_prompt(run), encoding="utf-8")
     run["prompt_path"] = str(prompt_path)
+    session_path = create_codex_app_session_request(run, prompt_path)
+    return (
+        f"已创建运行 {run['id']}，并生成 Codex App 会话交接。\n"
+        f"提示文件：{prompt_path}\n"
+        f"会话交接：{session_path}\n"
+        "未启动后台 runner。"
+    )
 
-    if not config.runner_command:
-        run["status"] = "queued"
-        return f"已创建运行 {run['id']}。\n未配置 SUBMISSION_RUNNER_COMMAND，先生成 Codex 执行提示：{prompt_path}"
 
-    env = os.environ.copy()
-    env.update(
+def launch_runner(config: Config, run: dict[str, Any]) -> str:
+    return prepare_codex_app_session(config, run)
+
+
+def create_codex_app_session_request(run: dict[str, Any], prompt_path: Path) -> Path:
+    CODEX_APP_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    session_path = CODEX_APP_SESSIONS_DIR / f"{run['id']}.json"
+    payload = {
+        "run_id": run["id"],
+        "app_name": run.get("app_name", ""),
+        "vm_name": run.get("vm_name", ""),
+        "chat_id": run.get("chat_id", ""),
+        "source": run.get("source", "feishu"),
+        "status": "requested",
+        "created_at": utc_now(),
+        "prompt_path": str(prompt_path),
+        "project_root": str(ROOT),
+        "instruction": (
+            "Open this prompt in a Codex App session and execute the submission "
+            "workflow in the foreground; do not run the background submission runner."
+        ),
+    }
+    write_json(session_path, payload)
+    run["codex_app_session_path"] = str(session_path)
+    run["status"] = "codex_app_session_requested"
+    run.setdefault("events", []).append(
         {
-            "SUBMISSION_RUN_ID": run["id"],
-            "SUBMISSION_APP_NAME": run["app_name"],
-            "SUBMISSION_CHAT_ID": run["chat_id"],
-            "SUBMISSION_RAW_TEXT": run["raw_text"],
-            "SUBMISSION_PROMPT_PATH": str(prompt_path),
+            "at": utc_now(),
+            "status": "codex_app_session_requested",
+            "note": "Codex App handoff created; background runner was not started",
         }
     )
-    log_path = RUNTIME_DIR / f"{run['id']}.runner.log"
-    with log_path.open("ab") as log:
-        subprocess.Popen(
-            config.runner_command,
-            shell=True,
-            cwd=str(ROOT),
-            env=env,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-    run["runner_log_path"] = str(log_path)
-    run["status"] = "running"
-    return f"已创建运行 {run['id']}，并启动提审命令。\n日志：{log_path}"
+    return session_path
 
 
 def handle_command(config: Config, text: str, chat_id: str) -> str:
@@ -827,7 +845,8 @@ def handle_command(config: Config, text: str, chat_id: str) -> str:
             f"应用：{run.get('app_name')}\n"
             f"状态：{run.get('status')}\n"
             f"更新时间：{run.get('updated_at')}\n"
-            f"提示文件：{run.get('prompt_path', '无')}"
+            f"提示文件：{run.get('prompt_path', '无')}\n"
+            f"Codex App 会话交接：{run.get('codex_app_session_path', '无')}"
             f"{pending_text}"
         )
 
@@ -838,7 +857,8 @@ def handle_command(config: Config, text: str, chat_id: str) -> str:
         return (
             f"运行：{run['id']}\n"
             f"提示文件：{run.get('prompt_path', '无')}\n"
-            f"命令日志：{run.get('runner_log_path', '无')}"
+            f"Codex App 会话交接：{run.get('codex_app_session_path', '无')}\n"
+            f"命令日志：{run.get('runner_log_path', '未启动后台 runner')}"
         )
 
     if command == "继续":

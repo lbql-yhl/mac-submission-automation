@@ -102,7 +102,7 @@ UTM 后续交接规则：
 
 - `FEISHU_WS_ENABLED=1`，使用飞书长连接接收消息回调。
 - `FEISHU_TUNNEL_ENABLED=0`，不再使用会变地址的 Cloudflare quick tunnel。
-- `SUBMISSION_RUNNER_COMMAND=python3 services/submission_runner.py`，匹配完整登记后自动启动连续主线。
+- `SUBMISSION_RUNNER_COMMAND=`，匹配完整登记后只生成 Codex App 会话交接，禁止从飞书入口后台启动连续主线。
 
 卡片回调约束：
 
@@ -114,10 +114,10 @@ UTM 后续交接规则：
 - 不使用旧版 JSON 1.0 的 `tag: "action"` 容器；旧版卡片回调不支持飞书长连接。
 - 回调协议测试使用隔离测试运行号或 mock transport，不覆盖已完成记录；生产流程不因修复自动发送额外测试卡。
 
-需要上线自动执行时，只改 `.env`：
+飞书登记入口必须交给 Codex App 前台会话接手，不配置后台 runner：
 
 ```env
-SUBMISSION_RUNNER_COMMAND=python3 services/submission_runner.py
+SUBMISSION_RUNNER_COMMAND=
 ```
 
 如果要启用群消息历史轮询兜底，把允许问答的同一个非日报群 `chat_id` 填到：

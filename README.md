@@ -190,7 +190,7 @@ NOTION_ROOT_PAGE_ID=
 NOTION_TEMPLATE_TITLE=模板
 CODEUP_USERNAME=
 CODEUP_PASSWORD=
-SUBMISSION_RUNNER_COMMAND=python3 services/submission_runner.py
+SUBMISSION_RUNNER_COMMAND=
 ```
 
 可选：
@@ -208,7 +208,7 @@ FEISHU_CODEX_MODEL=gpt-5.6-sol
 
 日报专用群只接收提审日报。日报必须先从本地项目证据生成预览，第一行写当天日期，等待用户明确确认同一份文本后才发送；任何命令回复、状态、帮助、测试消息、故障卡、成功卡或普通助手回复都不得发到该群。日报证据只取本地项目文件、`SKILL.md` 创建/修改时间、repo-local docs、运行时日志、`/health`、cloudflared/tunnel 状态和真实发送回执；除非用户明确要求，不使用 Git 状态或提交历史作为日报来源。
 
-每台机器人必须设置唯一的 `SUBMISSION_HOST_MACHINE`。只有完整固定飞书登记中的 `使用的宿主机` 与该值精确一致时，本机才会创建 run、生成 `vm_name`、回复并启动流程；不一致或配置为空时静默忽略，普通 Codex 对话不受限制。故障卡、用户确认 API、用户确认兜底卡和超时卡都使用同一 run 宿主机边界；所有交互卡回调只有在 run 宿主机与本机配置精确一致时才会执行。其他宿主机配置见 [飞书机器人宿主机设置说明](docs/feishu-host-routing.md)。
+每台机器人必须设置唯一的 `SUBMISSION_HOST_MACHINE`。只有完整固定飞书登记中的 `使用的宿主机` 与该值精确一致时，本机才会创建 run、生成 `vm_name`、回复并创建 Codex App 前台会话交接；不一致或配置为空时静默忽略，普通 Codex 对话不受限制。故障卡、用户确认 API、用户确认兜底卡和超时卡都使用同一 run 宿主机边界；所有交互卡回调只有在 run 宿主机与本机配置精确一致时才会执行。其他宿主机配置见 [飞书机器人宿主机设置说明](docs/feishu-host-routing.md)。
 
 ## 飞书登记格式
 
@@ -233,8 +233,8 @@ Account Number：<银行账户号码，可留空>
 
 银行区块可省略，两项银行号码也可留空；这不会阻止创建 run。若到 `utm-20` 时仍为空，流程在立即、5 秒、10 秒三轮重新验证父页并读取两项；三轮仍为空才发最后故障卡提示补充，卡片回复后仍以同一 Notion 页实时重读为准。
 
-标准配置会自动执行生成的流程；`SUBMISSION_RUNNER_COMMAND` 必须保持：
+飞书收到完整固定登记并通过宿主机匹配后，只创建 run、生成唯一 `vm_name`、写入提示文件和 `runtime/codex-app-sessions/<run_id>.json` 的 Codex App 会话交接；不得从飞书入口启动后台 runner。旧的 `SUBMISSION_RUNNER_COMMAND` 只保留为手动兼容字段，标准配置必须留空：
 
 ```env
-SUBMISSION_RUNNER_COMMAND=python3 services/submission_runner.py
+SUBMISSION_RUNNER_COMMAND=
 ```
