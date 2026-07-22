@@ -590,9 +590,9 @@ def build_codex_prompt(run: dict[str, Any]) -> str:
 4. 登记信息来自飞书消息：使用的宿主机、应用名、代理信息、代码链接、开发者账号国家、邮箱、初始密码、电话和短信链接。银行信息区块可整体省略，ABA Routing Number 与 Account Number 也可留空；`notion-utm` 仍须在匹配 Notion 页保留两条空标签并继续。只有到 `utm-20` 银行资料步骤时两项才必填，且只能从当前匹配 Notion 页实时读取；仍为空时发送 `utm-20-bank-info-missing` 三按钮故障卡，提示人工补充同一页，收到 `manual_continue` 或 `retry_skill` 后保留同一现场并重新执行 `verify-parent` 和两次 `read-field --copy`。不得把卡片回复当作补充证据，也不得从 Feishu/runtime/旧运行/对话/记忆回退银行号码。
 5. 固定技能顺序（31 个）：{skill_order}。按此顺序连续执行到最终 `utm-25`；不得截断、插入其他技能、跳过尚未验证的技能或按“最新”重选 run/VM。其中 `utm-5` 只在宿主机生成并覆盖 {SHARED_DIR / 'socks5.yml'}，必须在 `files` 前完成；`utm-6` 必须在 `utm-clash` 完成后验证代理出口和 guest ~/.zshrc。
 6. 有明确恢复方法且风险可控时，自动从最小恢复点修复/重试并回填运行状态，不发卡片。
-7. 无法自信判断、自动修复失败或涉及需要人工处理的风险时，调用 notify-fault 并传入当前 recovery_skill 与 completed_steps，再调用 wait-decision --timeout-seconds 3600 等待卡片动作；stop 立即停止，manual_continue 立即复核现场后继续，retry_skill 立即重跑当前技能并只跳过仍通过完成检查的步骤。
+7. 无法自信判断、自动修复失败或涉及需要人工处理的风险时，先按当前技能和共享合同完成三轮“自动诊断 → 实际修复 → 独立复验”；不可逆、不能安全重复写入或外部不可修复状态做三轮独立只读复核。三轮仍无法解决后才调用 notify-fault，并传入 recovery_attempts>=3、recovery_actions、recovery_result、当前 recovery_skill 与 completed_steps，再调用 wait-decision --timeout-seconds 3600 等待卡片动作；stop 立即停止，manual_continue 立即复核现场后继续，retry_skill 立即重跑当前技能并只跳过仍通过完成检查的步骤。
 8. SSH 不通时先回到 utm-2：修复 Remote Login、重新按 MAC/ARP 获取 IP、重试三轮；仍失败则按当前技能的故障边界发卡。停止结果只更新原故障卡，不再发送独立停止通知。
-9. 不可恢复、无授权、不可逆风险或超过重试次数时，调用 notify-fault 发送同一三按钮故障卡；每次反馈都由当前等待中的执行上下文立即处理，不等待人工再次触发。故障卡发送后当前执行器原地等待，等待期间不发送提醒卡；首次确认送达满 3600 秒无回复时，只向原 chat_id 发送一次无按钮超时卡片、记录 decision_timeout_stop 并停止整个流程，之后不再重发、不再轮询、不再恢复，迟到回调无效。成功通知卡无按钮、无需回复，不进入超时等待。
+9. 不可恢复、无授权、不可逆风险或超过重试次数时，也必须先满足三轮恢复/只读复核证据门禁；少于三轮或证据缺失时运行时拒绝 notify-fault。故障卡发送后当前执行器原地等待，等待期间不发送提醒卡；首次确认送达满 3600 秒无回复时，只向原 chat_id 发送一次无按钮超时卡片、记录 decision_timeout_stop 并停止整个流程，之后不再重发、不再轮询、不再恢复，迟到回调无效。成功通知卡无按钮、无需回复，不进入超时等待。
 10. 运行状态或阻塞点需要回填到 runtime/feishu-runs.json 对应运行记录。
 11. 不把 Apple ID、验证码、密码、代理完整凭证写入仓库。
 """
