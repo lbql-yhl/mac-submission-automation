@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 from pathlib import Path
 
 
@@ -181,11 +182,68 @@ def main() -> None:
 
     for required in (
         ROOT / "scripts" / "install_project_skills.sh",
+        ROOT / "scripts" / "notion_api.py",
+        ROOT / "scripts" / "notion_utm_prepare.py",
         ROOT / "scripts" / "preflight.py",
         ROOT / "scripts" / "shared_operations.py",
+        ROOT / "scripts" / "utm_16_generate_env.py",
+        ROOT / "scripts" / "utm_21_clone.py",
+        ROOT / "scripts" / "utm_22_distribute.mjs",
+        ROOT / "services" / "feishu_bot.py",
+        ROOT / "services" / "feishu_gateway.py",
+        ROOT / "services" / "feishu_supervisor.py",
+        ROOT / "services" / "project_paths.py",
+        ROOT / "services" / "submission_runner.py",
         ROOT / "config" / "workflow.env.example",
+        ROOT / "shared-files" / "README.md",
+        ROOT / "shared-files" / "Fire_One_en1.2" / ".env.example",
+        ROOT / "shared-files" / "Fire_One_en1.2" / "package-lock.json",
+        ROOT / "shared-files" / "Fire_One_en1.2" / "package.json",
+        ROOT / "shared-files" / "Fire_One_en1.2" / "src" / "fill-description.ts",
+        ROOT / "shared-files" / "Fire_One_en1.2" / "tsconfig.json",
+        ROOT / "shared-files" / "apple-store-bm" / "README.md",
+        ROOT / "shared-files" / "apple-store-bm" / "apple_store_tools",
+        ROOT / "shared-files" / "apple-store-bm" / "config" / "prod.example.yml",
     ):
         assert required.is_file(), required
+
+    shared_files = ROOT / "shared-files"
+    forbidden_shared_paths = (
+        shared_files / ".env",
+        shared_files / "socks5.yml",
+        shared_files / "Fire_One_en1.2" / ".env",
+        shared_files / "Fire_One_en1.2" / "node_modules",
+        shared_files / "apple-store-bm" / "config" / "prod.yml",
+        shared_files / "tools" / "flutter",
+    )
+    for forbidden in forbidden_shared_paths:
+        assert not forbidden.exists(), forbidden
+    assert not tuple(shared_files.rglob("*.p8")), "shared source must not contain P8 keys"
+    assert all(path.stat().st_size < 100 * 1024 * 1024 for path in shared_files.rglob("*") if path.is_file())
+    assert (shared_files / "apple-store-bm" / "apple_store_tools").stat().st_mode & 0o100
+
+    fire_package = json.loads(
+        (shared_files / "Fire_One_en1.2" / "package.json").read_text(encoding="utf-8")
+    )
+    assert "test:description" not in fire_package["scripts"], (
+        "--dry-run is not implemented and must not be advertised as a safe test"
+    )
+    fire_tsconfig = json.loads(
+        (shared_files / "Fire_One_en1.2" / "tsconfig.json").read_text(encoding="utf-8")
+    )
+    assert fire_tsconfig["compilerOptions"]["module"] == "NodeNext"
+    fire_source = (
+        shared_files / "Fire_One_en1.2" / "src" / "fill-description.ts"
+    ).read_text(encoding="utf-8")
+    assert "const APP_ID = process.env.APP_ID ?? '';" in fire_source
+    require_all(fire_source, ("APP_ID 必须为纯数字", "Issuer ID 已读取", "Key ID 已读取"), "Fire_One")
+    for forbidden in (
+        "已记录 issuer: ${issuer}",
+        "已记录 key: ${key}",
+        "已记录 p8 文件名: ${p8FileName}",
+        "已强制保存 p8 文件到: ${downloadPath}",
+    ):
+        assert forbidden not in fire_source, f"Fire_One: sensitive log {forbidden}"
     assert not (ROOT / "docs" / "superpowers").exists(), "historical execution contracts must be removed"
     assert not (ROOT / "runtime" / "utm_22_game_center_rebuild.zsh").exists(), "stale executable"
 

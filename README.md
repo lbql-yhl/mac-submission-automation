@@ -8,6 +8,12 @@
 
 执行、复盘或故障恢复中发现的可复用卡点、修复动作、成功证据、禁止动作和交接条件，必须回写对应 `skills/<skill>/SKILL.md`；跨技能通用动作只写入 `skills/_shared/AUTOMATION_CONTRACT.md`，并在具体技能保留调用点。涉及对外说明或验收口径时同步对应文档和测试，不得只保存在 Codex 记忆、聊天、历史 run、旧机器路径或 `~/.codex/skills` 第二份正文中。
 
+## 仓库范围与桌面共享文件
+
+仓库同时保存项目运行脚本和桌面共享目录中的项目自有内容：根目录 `scripts/`、`services/`、技能内脚本，以及 [`shared-files/`](shared-files) 下的 `Fire_One_en1.2` 源码与 `apple-store-bm` 工具。跨机器恢复时把 `shared-files/` 的内容合并到当前机器 `${SUBMISSION_SHARED_DIR}`，不能写死旧机器桌面路径。
+
+真实 `.env`、代理配置、P8/证书、生产 `prod.yml`、运行历史、`node_modules`、Flutter SDK/cache 和构建产物不上传；它们分别由技能安全生成或通过锁文件/版本说明重建。完整边界和恢复顺序见 [`shared-files/README.md`](shared-files/README.md)。
+
 所有技能统一执行 [`skills/_shared/AUTOMATION_CONTRACT.md`](skills/_shared/AUTOMATION_CONTRACT.md)：异常先自动诊断、自动修复、自动复验；GUI 每次动作后至少等待 3 秒并读取最新状态，误点先用 `Escape`/`Back`/`Cancel` 回到最近验证锚点再重做。只有三轮恢复/只读复核穷尽后，才允许发送飞书故障卡。下文任何“发故障卡”均以此门禁为前置，不表示首次失败就发卡。
 
 ## 共享重复操作记忆
