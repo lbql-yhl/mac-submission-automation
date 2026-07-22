@@ -22,11 +22,11 @@ SUBMISSION_HOST_MACHINE=<本机宿主机名称>
 示例：
 
 ```env
-# 海淋宿主机
-SUBMISSION_HOST_MACHINE=海淋
+# mac-a 宿主机
+SUBMISSION_HOST_MACHINE=mac-a
 
-# dev1 宿主机
-SUBMISSION_HOST_MACHINE=dev1
+# mac-b 宿主机
+SUBMISSION_HOST_MACHINE=mac-b
 ```
 
 不要同时保留两行 `SUBMISSION_HOST_MACHINE`。
@@ -70,7 +70,7 @@ python3 tests/test_feishu_submission_parse.py
 | 本机未设置 `SUBMISSION_HOST_MACHINE` | 安全失败，不启动任何提审登记 |
 | `/提审 开始` 未附完整登记信息 | 不启动 |
 
-例如所有机器人都收到 `使用的宿主机：dev1` 时，只有配置为 `dev1` 的机器人接取；配置为“海淋”或其他名称的机器人保持静默。
+例如所有机器人都收到 `使用的宿主机：mac-a` 时，只有配置为 `mac-a` 的机器人接取；配置为其他名称的机器人保持静默。
 
 普通 Codex 对话不使用这条宿主机过滤。只有完整固定登记模板会触发提审路由判断。
 

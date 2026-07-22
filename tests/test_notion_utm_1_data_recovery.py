@@ -19,6 +19,8 @@ def main() -> None:
         "重新实时读取同一应用的唯一飞书记录",
         "自动覆盖现有 `应用信息`", "--replace-existing",
         "无需用户确认，也不发送故障卡",
+        "FEISHU_TABLE_CONTEXT_MISMATCH=verified",
+        "字段正文、URL、账号或 token 仍必须来自同一固定表/view 的 API 重新查询",
     ):
         assert value in skill, value
 
@@ -31,6 +33,11 @@ def main() -> None:
         "空值", "URL 无效", "三轮", "最后故障卡", "自动覆盖",
     ):
         assert value in docs, value
+
+    for path in ("README.md", "AGENTS.md", "docs/utm-feishu-bot.md"):
+        summary = (ROOT / path).read_text(encoding="utf-8")
+        assert "FEISHU_TABLE_CONTEXT_MISMATCH=verified" in summary, path
+        assert "禁止抄取字段值" in summary or "never copy field values" in summary, path
 
     print("NOTION_UTM_1_RECOVERY_FIRST=verified")
 

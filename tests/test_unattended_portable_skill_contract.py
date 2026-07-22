@@ -231,6 +231,9 @@ def main() -> None:
         path.read_text(encoding="utf-8", errors="replace")
         for path in (ROOT / "README.md", ROOT / "AGENTS.md", *sorted((ROOT / "docs").glob("*.md")))
     )
+    for path in (ROOT / "README.md", ROOT / "AGENTS.md"):
+        text = path.read_text(encoding="utf-8")
+        require_all(text, ("skills/<skill>/SKILL.md", "Codex 记忆"), path.name)
     assert "/Users/yehailin" not in active_text
     assert "/Volumes/AutoA" not in active_text
     assert "computer-use/1.0." not in active_text

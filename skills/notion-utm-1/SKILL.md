@@ -44,6 +44,7 @@ python3 services/feishu_bot.py wait-decision \
 | 故障点 | 自动诊断、修复和复验 | 最后发卡边界 |
 |---|---|---|
 | 飞书表格读取失败 | 对同一 wiki/table/view/app 做 5/15/30 秒 GET 重试；每轮重新取 token 并做一次 GET/POST 精确查询，重新去重并验证唯一行 | 三轮后仍无唯一结果才 `exhausted` |
+| 可见表格上下文与 API 结果矛盾 | 可见证据只用于核对文档/view/记录上下文；重新解析固定 wiki/table/view/app 并执行同一 API 查询，禁止抄取可见字段值 | 确认配置不一致时记录 `FEISHU_TABLE_CONTEXT_MISMATCH=verified`，停止 Notion 写入并先修复项目技能或脚本 |
 | Notion 现有内容冲突 | 重新读取同一唯一飞书行，重建完整区块，保存 before 后一次 `--replace-existing`，独立回读；失败则还原 before | 自动覆盖/还原仍不能闭环才发卡 |
 | URL/类别格式异常 | 重新获取原始单元格，做固定规范化并复验，不自行补 URL 或猜类别 | 同一权威行仍为空/非法为 `unrepairable` |
 | 瞬时 API 限流/网络 | 遵守 `Retry-After`，同一请求最多三轮，不创建第二页面 | 恢复耗尽才发卡 |
@@ -68,7 +69,7 @@ After `notion-utm` creates the UTM Notion page, fetch the target `应用名` fro
 
 ## Hard Rules
 
-- Read the `金鳞产品表格` view in `26财年巨风做包表` by Feishu API only. Do not click, filter, open, scrape, or edit the Feishu web table.
+- Read the `金鳞产品表格` view in `26财年巨风做包表` by Feishu API only. Do not click, filter, open, scrape, or edit the Feishu web table. If API results contradict user-visible evidence from an already open Feishu table, use that evidence only to confirm the visible document/view/record context and then re-query the API against the matching fixed wiki/table/view; never copy field values from the web table.
 - Use the Wiki node API to resolve the real bitable `app_token`, then use bitable `records/search` with `应用名` exact match.
 - The current project data contract guarantees one matching row. Still verify that the API result is exactly one row; any unexpected zero-row or multiple-row result is a defensive Feishu data fault and must use the fault-card recovery below. Never select the first, latest, or any other row as a fallback.
 - Do not edit Feishu data.
@@ -125,7 +126,7 @@ with:
    - The unique row's exact same-named `研发金币图链接` does not contain a valid complete HTTP(S) URL: use the same stage, fault `研发金币图链接 URL 无效`, evidence `RND_COIN_IMAGE_URL=invalid`.
    - The unique row's `美女截图链接-UI` (target `截图链接`) is blank: stage `notion-utm-1 截图链接`, fault `截图链接为空`, evidence `SCREENSHOT_URL=blank`.
    - The unique row's `美女截图链接-UI` does not contain a valid complete HTTP(S) URL: use the same stage, fault `截图链接 URL 无效`, evidence `SCREENSHOT_URL=invalid`.
-3. 先自动恢复：重新取得 Feishu tenant token，重新核对固定 app/table/view identity，并在 5/15/30 秒各重新执行一次相同精确过滤；每轮都重新验证返回条数、目标字段名和 URL 语法，禁止使用旧响应、其他 view、第一条或最新一条。任一轮得到唯一完整行即记录 `DATA_RECOVERY=verified` 并继续。
+3. 先自动恢复：重新取得 Feishu tenant token，重新核对固定 app/table/view identity，并在 5/15/30 秒各重新执行一次相同精确过滤；每轮都重新验证返回条数、目标字段名和 URL 语法，禁止使用旧响应、其他 view、第一条或最新一条。若用户已提供截图、浏览器调试上下文或已经打开的飞书表格证明“页面可见有值但 API 读空”，只能把该证据用于只读核对当前打开的是不是 `26财年巨风做包表` / `金鳞产品表格` / 目标应用行所在上下文；字段正文、URL、账号或 token 仍必须来自同一固定表/view 的 API 重新查询。发现 API 配置与可见上下文不一致时，记录 `FEISHU_TABLE_CONTEXT_MISMATCH=verified`，停止写 Notion，并把修复沉淀回本技能或对应脚本后再继续。任一轮得到唯一完整行即记录 `DATA_RECOVERY=verified` 并继续。
 4. 三轮仍为零/多行、字段空白或 URL 无效时，这些值只能由外部权威表格补齐，记录 `AUTO_RECOVERY_ATTEMPTS=3`、具体 `AUTO_RECOVERY_ACTIONS`、`AUTO_RECOVERY_RESULT=unrepairable`；此时才使用文件开头的统一 `notify-fault` 命令向原 `chat_id` 发送最后故障卡并等待 fresh decision。不得发送到日报群。
 5. 收到卡片反馈后由当前等待中的执行上下文立即处理，不需要人工再次触发：
    - `stop`：原故障卡更新为已停止，立即停止整个流程并结束当前 run，不再发送独立停止通知。
@@ -293,6 +294,7 @@ Before the Notion API write, verify:
 
 - Feishu `金鳞产品表格` view was read by API only.
 - No Feishu web table click, filter, scrape, edit, or row detail operation was used.
+- Any user-visible table evidence was used only to verify document/view/record context; no field value was copied from it, and no unresolved `FEISHU_TABLE_CONTEXT_MISMATCH` remains.
 - Exactly one target row matched.
 - No Feishu data fault is pending; any unexpected `0`/multiple-row result or blank/invalid `金币表格`, `研发金币图链接`, or `截图链接` URL was resolved by the bounded 5/15/30-second live rereads or, after a delivered last-card decision, by a new successful exact API query.
 - The fixed template was generated with the category-code normalization.

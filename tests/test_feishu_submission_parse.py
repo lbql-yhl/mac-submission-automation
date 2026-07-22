@@ -13,6 +13,16 @@ from scripts.notion_utm_prepare import format_account_block, validate_account_bl
 
 
 def main() -> None:
+    root = Path(__file__).resolve().parents[1]
+    daily_docs = "\n".join(
+        (root / path).read_text(encoding="utf-8")
+        for path in ("AGENTS.md", "README.md", "docs/utm-feishu-bot.md")
+    )
+    assert "日报必须先从本地项目证据生成预览" in daily_docs
+    assert "等待用户明确确认同一份文本后" in daily_docs
+    assert "故障卡、成功卡" in daily_docs
+    assert "不使用 Git 状态或提交历史" in daily_docs
+
     config = replace(feishu_bot.load_config(), allowed_chat_id="oc_allowed")
     assert (
         feishu_bot.handle_incoming_text(
@@ -96,7 +106,7 @@ Account Number：000000000000
             prompt_paths = list(feishu_bot.PROMPTS_DIR.glob("*.md"))
             assert len(prompt_paths) == 1
             prompt = prompt_paths[0].read_text(encoding="utf-8")
-            agents = (Path(__file__).resolve().parents[1] / "AGENTS.md").read_text(encoding="utf-8")
+            agents = (root / "AGENTS.md").read_text(encoding="utf-8")
             current_line = next(
                 line for line in agents.splitlines()
                 if line.startswith("- Current important skills in order:")

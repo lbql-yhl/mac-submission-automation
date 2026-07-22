@@ -6,6 +6,8 @@
 
 项目内 [`skills/`](skills) 是当前 31 个技能的唯一源；运行时只以本文件、`AGENTS.md`、匹配的 `skills/<当前技能>/SKILL.md` 和对应 `docs/utm-*.md` 为执行合同。`scripts/install_project_skills.sh` 只在 `~/.codex/skills` 建立指向项目源的发现链接，那里不再保存第二份技能。历史 plans/specs 已移除，不能作为执行输入。最终阶段的唯一边界是：`utm-24` 完成系统自检授权、提审与加急并记录通知未发送，`utm-25` 完成唯一 Active Key/P8 登记和 Notion 独立回读后才发送绿色成功卡。
 
+执行、复盘或故障恢复中发现的可复用卡点、修复动作、成功证据、禁止动作和交接条件，必须回写对应 `skills/<skill>/SKILL.md`；跨技能通用动作只写入 `skills/_shared/AUTOMATION_CONTRACT.md`，并在具体技能保留调用点。涉及对外说明或验收口径时同步对应文档和测试，不得只保存在 Codex 记忆、聊天、历史 run、旧机器路径或 `~/.codex/skills` 第二份正文中。
+
 所有技能统一执行 [`skills/_shared/AUTOMATION_CONTRACT.md`](skills/_shared/AUTOMATION_CONTRACT.md)：异常先自动诊断、自动修复、自动复验；GUI 每次动作后至少等待 3 秒并读取最新状态，误点先用 `Escape`/`Back`/`Cancel` 回到最近验证锚点再重做。只有三轮恢复/只读复核穷尽后，才允许发送飞书故障卡。下文任何“发故障卡”均以此门禁为前置，不表示首次失败就发卡。
 
 ## 共享重复操作记忆
@@ -25,7 +27,7 @@
 → 解析登记数据并创建 submission run
 → 生成四位小写虚拟机名称，并和已有 .utm / 历史 run 去重
 → notion-utm：通过 Notion API 从模板创建 <应用名>-<虚拟机名称> 并登记账号信息；初始银行区块/号码允许缺省并保留空标签，其他异常先重读 run/父页/模板、按 before 回滚并独立复验，只有恢复穷尽或外部数据冲突才发最后故障卡
-→ notion-utm-1：通过 Notion API 补填应用信息
+→ notion-utm-1：通过 Feishu API 精确读取固定表/view，再通过 Notion API 补填应用信息；若已打开表格的可见上下文与 API 结果矛盾，可见证据只用于核对文档/view/记录上下文，字段值仍只取 API，配置不一致时停止写 Notion 并记录 `FEISHU_TABLE_CONTEXT_MISMATCH=verified`
 → utm-clone-macos：用同一个虚拟机名称和 `${SUBMISSION_VM_TEMPLATE}` 克隆到 `${SUBMISSION_VM_IMAGES_DIR}`；模板或克隆异常先对同一路径、复制 attempt、plist/身份和目标所有权自动恢复，穷尽后才发最后故障卡
 → utm-1：配置并启动这个 VM；克隆交接缺失时先自动重跑同一 run 的克隆步骤
 → utm-2：自动启用 SSH、确保宿主 Key 存在、安装给 demo、核对 authorized_keys 权限/指纹和 BatchMode，再记录 guest 三码；三轮同 VM 修复与复验仍失败后才发送最后故障卡
@@ -98,7 +100,7 @@
 ## 固定技能职责
 
 1. `notion-utm`：从 Feishu bot runtime/API 读取登记数据，用 `scripts/notion_api.py` 从当前宿主机页面的唯一 `模板` 创建 `<应用名>-<vm_name>`，只填写并回读验证 `账号信息`。初始银行区块可省略、两项号码可留空。其他异常先重新解析同一 run、三轮读取父页/模板、使用 before 恢复可逆写入并独立回读；仍不唯一、冲突或回滚失败才向原 `chat_id` 发最后故障卡。
-2. `notion-utm-1`：通过 Feishu API 精确读取多维表格 `26财年巨风做包表` 的 `金鳞产品表格` 视图（`view_id=vewKUW4q4W`），再通过 Notion API 补填并回读已有页面的 `应用信息`。0 条/多条、URL 空白或无效时先重取 token、核对固定表/view 并在 5/15/30 秒三次实时重读；仍缺失才作为外部权威数据故障发最后卡。若 Notion `应用信息` 已有冲突内容，则重新实时读取同一条唯一飞书记录、重建并校验模板，使用 `--replace-existing` 自动覆盖并精确回读，不发确认卡。`应用类型` 按项目固定映射自动规范化，不设人工选择分支。
+2. `notion-utm-1`：通过 Feishu API 精确读取多维表格 `26财年巨风做包表` 的 `金鳞产品表格` 视图（`view_id=vewKUW4q4W`），再通过 Notion API 补填并回读已有页面的 `应用信息`。0 条/多条、URL 空白或无效时先重取 token、核对固定表/view 并在 5/15/30 秒三次实时重读；若用户提供的可见表格证据与 API 结果矛盾，只用它核对文档/view/记录上下文，禁止抄取字段值，发现 API 配置不一致时记录 `FEISHU_TABLE_CONTEXT_MISMATCH=verified` 并停止写 Notion。仍缺失才作为外部权威数据故障发最后卡。若 Notion `应用信息` 已有冲突内容，则重新实时读取同一条唯一飞书记录、重建并校验模板，使用 `--replace-existing` 自动覆盖并精确回读，不发确认卡。`应用类型` 按项目固定映射自动规范化，不设人工选择分支。
 3. `utm-clone-macos`：模板从 `${SUBMISSION_VM_TEMPLATE}` 解析，目标固定为 `${SUBMISSION_VM_IMAGES_DIR}/<vm_name>.utm`；复制后更新名称、UUID、MAC 和 Apple `MachineIdentifier`。模板、目标或 plist 异常先核对同一 run 所有权、清理仅由本 attempt 创建的不完整目标并重试一次；仍失败才发最后故障卡，不搜索替代模板。
 4. `utm-1`：继承不可变 run/`vm_name`；克隆标记或 VM 包缺失时自动重跑同一 run 的 `utm-clone-macos` 并复查，仍异常才发送 `utm-1-handoff-recovery` 故障卡。随后配置只读共享目录、随机化网络 MAC，启动 VM 并登录 `demo` 桌面。
 5. `utm-2`：确认 Apple `MachineIdentifier` 不重复，获取 VM IP，自动启用 Remote Login；确保固定私钥存在、缺失公钥时从私钥导出，安装给 `demo`，核对 `authorized_keys` 权限、宿主/guest SHA-256 指纹和 BatchMode，再读取 guest `IOPlatformSerialNumber`/`IOPlatformUUID`。同一 VM 三轮修复耗尽并复验后才发送最后故障卡，不向用户索取 SSH 信息。
@@ -197,6 +199,8 @@ FEISHU_CODEX_MODEL=gpt-5.6-sol
 ```
 
 问答机器人同时使用飞书长连接与历史轮询；两条通道按 `message_id` 原子去重，只会回复一次。日报专用群不得配置为问答轮询目标。
+
+日报专用群只接收提审日报。日报必须先从本地项目证据生成预览，第一行写当天日期，等待用户明确确认同一份文本后才发送；任何命令回复、状态、帮助、测试消息、故障卡、成功卡或普通助手回复都不得发到该群。日报证据只取本地项目文件、`SKILL.md` 创建/修改时间、repo-local docs、运行时日志、`/health`、cloudflared/tunnel 状态和真实发送回执；除非用户明确要求，不使用 Git 状态或提交历史作为日报来源。
 
 每台机器人必须设置唯一的 `SUBMISSION_HOST_MACHINE`。只有完整固定飞书登记中的 `使用的宿主机` 与该值精确一致时，本机才会创建 run、生成 `vm_name`、回复并启动流程；不一致或配置为空时静默忽略，普通 Codex 对话不受限制。故障卡、通用用户确认卡和超时卡都显示所属宿主机；所有交互卡回调只有在 run 宿主机与本机配置精确一致时才会执行。其他宿主机配置见 [飞书机器人宿主机设置说明](docs/feishu-host-routing.md)。
 
