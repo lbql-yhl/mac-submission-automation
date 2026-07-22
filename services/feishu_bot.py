@@ -133,6 +133,8 @@ class Config:
     codex_model: str
     codex_timeout_seconds: int
     verify_delivery: bool
+    user_confirm_api_url: str
+    user_confirm_timeout_seconds: int
 
 
 def load_dotenv(path: Path) -> None:
@@ -178,6 +180,8 @@ def load_config() -> Config:
         codex_model=os.getenv("FEISHU_CODEX_MODEL", "gpt-5.6-sol"),
         codex_timeout_seconds=int(os.getenv("FEISHU_CODEX_TIMEOUT_SECONDS", "180")),
         verify_delivery=os.getenv("FEISHU_VERIFY_DELIVERY", "1").lower() in {"1", "true", "yes"},
+        user_confirm_api_url=os.getenv("USER_CONFIRM_API_URL", "http://127.0.0.1:8000/confirm"),
+        user_confirm_timeout_seconds=int(os.getenv("USER_CONFIRM_API_TIMEOUT_SECONDS", "20")),
     )
 
 
@@ -2365,6 +2369,66 @@ def record_fault_notification(run_id: str, message_id: str) -> dict[str, Any] | 
     return mutate_run(run_id, apply_notification)
 
 
+def user_confirmation_api_decision(
+    run: dict[str, Any], action_summary: str, config: Config
+) -> tuple[str, str]:
+    url = str(getattr(config, "user_confirm_api_url", "") or "").strip()
+    if not url:
+        return "", ""
+    payload = {
+        "宿主机名": run_host_machine(run),
+        "应用名": str(run.get("app_name") or "").strip(),
+        "要确认的动作": str(action_summary or "").strip(),
+    }
+    if not all(payload.values()):
+        return "", ""
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    try:
+        timeout = int(getattr(config, "user_confirm_timeout_seconds", 20) or 20)
+        completed = subprocess.run(
+            [
+                "curl",
+                "-sS",
+                "--fail-with-body",
+                "-X",
+                "POST",
+                url,
+                "-H",
+                "Content-Type: application/json",
+                "--data-binary",
+                "@-",
+            ],
+            input=body,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(completed.stderr.decode("utf-8", errors="replace").strip())
+        response = json.loads(completed.stdout.decode("utf-8"))
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
+        safe_print(f"[user_confirm_api_error] {exc}", file=sys.stderr)
+        return "", ""
+
+    raw_text = json.dumps(response, ensure_ascii=False, sort_keys=True)
+    status = str(response.get("status") or "").lower()
+    if (
+        response.get("approved") is True
+        or response.get("confirmed") is True
+        or response.get("can_operate") is True
+        or status in {"approved", "confirmed", "confirm_continue"}
+    ):
+        return "confirm_continue", raw_text
+    if (
+        response.get("approved") is False
+        or response.get("can_operate") is False
+        or status in {"denied", "rejected", "cancelled", "cancel_operation"}
+    ):
+        return "cancel_operation", raw_text
+    return "", raw_text
+
+
 def notify_fault(args: argparse.Namespace, config: Config) -> int:
     if not args.run_id:
         print("notify-fault requires an existing --run-id", file=sys.stderr)
@@ -2459,6 +2523,22 @@ def notify_confirmation(args: argparse.Namespace, config: Config) -> int:
             action_summary,
             evidence,
         )
+        pending = run.get("pending_decision") or {}
+        api_decision, api_response = user_confirmation_api_decision(
+            run, action_summary, config
+        )
+        if api_decision in {"confirm_continue", "cancel_operation"}:
+            decided = record_decision_by_run_id(
+                args.run_id,
+                api_decision,
+                api_response or "user_confirmation_api",
+                "user-api",
+                str(pending.get("decision_id") or ""),
+            )
+            if not decided:
+                raise RuntimeError("Unable to record user API confirmation")
+            print(decided["id"])
+            return 0
         delivered = ensure_decision_card_delivered(run, config)
     except RuntimeError as exc:
         print(f"notify-confirmation refused: {exc}", file=sys.stderr)
@@ -3176,7 +3256,7 @@ def main() -> int:
             "notify-review-success",
             "wait-decision",
         ),
-        help="serve starts the HTTP bot; ws starts Feishu SDK long-connection callbacks; poll reads Feishu history as a control fallback; notify-fault sends a last-resort fault card; notify-confirmation sends a required user-decision card; notify-review keeps the optional legacy review card; record-auto-review-approval persists the unattended self-check authorization; record-review-submit-attempt persists the single submit click state; notify-review-success sends the one-way success card; wait-decision waits for the selected card action.",
+        help="serve starts the HTTP bot; ws starts Feishu SDK long-connection callbacks; poll reads Feishu history as a control fallback; notify-fault sends a last-resort fault card; notify-confirmation asks the user API first and falls back to a user-decision card only when needed; notify-review keeps the optional legacy review card; record-auto-review-approval persists the unattended self-check authorization; record-review-submit-attempt persists the single submit click state; notify-review-success sends the one-way success card; wait-decision waits for the selected decision.",
     )
     parser.add_argument("--host", default=FeishuHandler.config.host)
     parser.add_argument("--port", type=int, default=FeishuHandler.config.port)

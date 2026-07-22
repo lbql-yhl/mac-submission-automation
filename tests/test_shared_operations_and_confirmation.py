@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
@@ -15,6 +16,7 @@ from services.feishu_bot import (  # noqa: E402
     ensure_decision_card_delivered,
     handle_card_action,
     notify_confirmation,
+    user_confirmation_api_decision,
     wait_decision,
 )
 
@@ -119,6 +121,129 @@ def main() -> None:
     assert mutable_run["pending_decision"]["status"] == "answered"
     assert mutable_run["pending_decision"]["decision"] == "confirm_continue"
     assert mutable_run["pending_decision"]["operator_id"] == "approver"
+
+    safety_confirmation_run = {
+        **run,
+        "id": "safety-policy-confirmation",
+        "app_name": "yehailin",
+        "submission_data": {"host_machine": "yehailin"},
+        "pending_decision": {
+            **run["pending_decision"],
+            "decision_id": "safety-decision-1",
+            "stage": "utm-test:safety-policy",
+            "question": "检测到安全策略限制，是否允许继续当前操作？",
+            "action_summary": "测试操作",
+            "evidence": "SECURITY_POLICY=user_confirmation_required",
+        },
+    }
+
+    class FakeResponse:
+        returncode = 0
+        stderr = b""
+
+        @property
+        def stdout(self):
+            return json.dumps(
+                {
+                    "ok": True,
+                    "approved": True,
+                    "can_operate": True,
+                    "status": "approved",
+                }
+            ).encode()
+
+    def fake_curl(cmd, input, stdout, stderr, timeout, check):
+        assert cmd == [
+            "curl",
+            "-sS",
+            "--fail-with-body",
+            "-X",
+            "POST",
+            "http://127.0.0.1:8000/confirm",
+            "-H",
+            "Content-Type: application/json",
+            "--data-binary",
+            "@-",
+        ]
+        assert timeout == 1
+        assert check is False
+        assert stdout is not None
+        assert stderr is not None
+        assert json.loads(input.decode()) == {
+            "宿主机名": "yehailin",
+            "应用名": "yehailin",
+            "要确认的动作": "测试操作",
+        }
+        return FakeResponse()
+
+    with patch("services.feishu_bot.subprocess.run", side_effect=fake_curl):
+        api_decision, api_response = user_confirmation_api_decision(
+            safety_confirmation_run,
+            "测试操作",
+            SimpleNamespace(
+                user_confirm_api_url="http://127.0.0.1:8000/confirm",
+                user_confirm_timeout_seconds=1,
+            ),
+        )
+    assert api_decision == "confirm_continue"
+    assert json.loads(api_response)["status"] == "approved"
+
+    api_run = {
+        "id": "safety-policy-confirmation",
+        "app_name": "yehailin",
+        "chat_id": "original-chat",
+        "submission_data": {"host_machine": "yehailin"},
+        "status": "running",
+        "events": [],
+    }
+
+    def mutate_api_confirmation(run_id: str, mutator):
+        assert run_id == "safety-policy-confirmation"
+        mutator(api_run)
+        return api_run
+
+    notify_api_args = SimpleNamespace(
+        run_id="safety-policy-confirmation",
+        chat_id="original-chat",
+        stage="utm-test:safety-policy",
+        current_skill="utm-test",
+        confirmation_question="检测到安全策略限制，是否允许继续当前操作？",
+        confirmation_action="测试操作",
+        evidence="SECURITY_POLICY=user_confirmation_required",
+    )
+    stdout = StringIO()
+    with (
+        patch("services.feishu_bot.find_run", return_value=api_run),
+        patch("services.feishu_bot.mutate_run", side_effect=mutate_api_confirmation),
+        patch("services.feishu_bot.subprocess.run", side_effect=fake_curl),
+        patch("services.feishu_bot.FeishuClient.send_card") as forbidden_send_card,
+        redirect_stdout(stdout),
+    ):
+        assert notify_confirmation(
+            notify_api_args,
+            SimpleNamespace(
+                submission_host_machine="yehailin",
+                user_confirm_api_url="http://127.0.0.1:8000/confirm",
+                user_confirm_timeout_seconds=1,
+            ),
+        ) == 0
+    assert stdout.getvalue().strip() == "safety-policy-confirmation"
+    assert api_run["status"] == "decision_confirm_continue"
+    assert api_run["pending_decision"]["status"] == "answered"
+    assert api_run["pending_decision"]["operator_id"] == "user-api"
+    forbidden_send_card.assert_not_called()
+    stdout = StringIO()
+    with patch("services.feishu_bot.find_run", return_value=api_run), redirect_stdout(stdout):
+        assert wait_decision(
+            SimpleNamespace(
+                run_id="safety-policy-confirmation",
+                decision_kind="confirmation",
+                timeout_seconds=3600,
+                poll_seconds=1,
+            ),
+            object(),
+        ) == 0
+    assert stdout.getvalue().strip() == "confirm_continue"
 
     wait_args = SimpleNamespace(
         run_id="confirmation-test",

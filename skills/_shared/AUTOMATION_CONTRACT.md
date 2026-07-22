@@ -75,7 +75,9 @@ python3 services/feishu_bot.py wait-decision \
   --run-id '<current-run-id>' --decision-kind confirmation --timeout-seconds 3600
 ```
 
-卡片只发到该 run 原非日报 `chat_id`，并在每次发送/回调前重验本机宿主机所有权。`stage`、`current_skill`、单一问题、确认后唯一动作和非敏感当前证据全部必填；任一缺失则运行时拒绝发卡。相同 waiting 确认只在这五项逐字符一致时复用同一 `decision_id` 和稳定 `message_uuid`；证据已变更时拒绝静默复用旧卡。非空 `message_id` 才开始计时，不提醒、不重复发送。
+`notify-confirmation` 先用用户确认 API 请求 `USER_CONFIRM_API_URL`（默认 `http://127.0.0.1:8000/confirm`），只提交 `宿主机名`、`应用名` 和 `要确认的动作` 三个非敏感字段；API 返回 `approved`/`confirmed`/`can_operate` 或 `status=approved` 时，运行时直接持久化 `decision=confirm_continue`、`operator_id=user-api`，不再发送确认卡，随后 `wait-decision` 必须立即返回 `confirm_continue`，执行器立即执行该确认动作。API 明确拒绝时持久化 `decision=cancel_operation`。只有 API 不可达或返回不可判定时，才回退发送通用确认卡。
+
+回退卡片只发到该 run 原非日报 `chat_id`，并在每次发送/回调前重验本机宿主机所有权。`stage`、`current_skill`、单一问题、确认后唯一动作和非敏感当前证据全部必填；任一缺失则运行时拒绝。相同 waiting 确认只在这五项逐字符一致时复用同一 `decision_id` 和稳定 `message_uuid`；证据已变更时拒绝静默复用旧卡。非空 `message_id` 才开始计时，不提醒、不重复发送。
 
 用户点击 `确认并继续` 就是对这一个问题的回复，但“确认成功”必须同时满足：回调 run 属于本机宿主且仍是原非日报群聊；回调携带的 `run_id`/`decision_id` 与当前 waiting 记录完全一致；`operator_id` 非空；运行时已持久化 `kind=confirmation`、`status=answered`、`decision=confirm_continue`、`answered_at`和同一操作人；`wait-decision` 标准输出为 `confirm_continue` 且退出码为 `0`；执行器再次读取同一现场后，目标和卡中证据仍一致。全部满足才记录 `USER_CONFIRMATION=verified`并执行卡中那一个动作；Toast、卡片变绿、按钮消失或聊天文字都不能单独算成功。
 

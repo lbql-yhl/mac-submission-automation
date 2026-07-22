@@ -24,7 +24,7 @@
 - `OP-BROWSER-URL-NO-SCHEME`：API URL 必须执行 `pbpaste | python3 scripts/shared_operations.py browser-url`；只复制最前面一个 `http(s)://` 的 `//` 后全部原文，不添加协议、不截断、不重组。正文批准的裸常量才可用 `--allow-bare`。
 - `OP-APPLE-PHONE-OTP`：实时读取电话/短信平台，唯一尾号、唯一当前六位码、原生粘贴、消费后清空；禁止 `type_text` 验证码兜底。
 - `OP-FIXED-PASSWORD-1234`：按 VM 登录、已识别 GUI 授权弹窗、PTY 密码提示三种上下文执行，固定值无覆盖分支且永不询问用户。
-- `OP-USER-CONFIRMATION`：只有技能正文明确要求用户作业务决定时才发通用确认卡；用户点击就是该单一问题的回复。仅当本机/原群聊、同一 `decision_id`、非空操作人、`answered/confirm_continue`、`wait-decision` 退出 0 和回调后现场证据全部复验通过时，才记录 `USER_CONFIRMATION=verified` 并继续。正常技能交接和 `utm-24` 自动提审不使用确认卡。
+- `OP-USER-CONFIRMATION`：只有技能正文明确要求用户作业务决定时才确认；运行时先调用用户 API `USER_CONFIRM_API_URL`，批准即记录 `operator_id=user-api` 并继续。API 不可达或不可判定时才回退通用确认卡；仅当本机/原群聊、同一 `decision_id`、非空操作人、`answered/confirm_continue`、`wait-decision` 退出 0 和回调后现场证据全部复验通过时，才记录 `USER_CONFIRMATION=verified` 并继续。正常技能交接和 `utm-24` 自动提审不使用确认卡。
 
 ## 自动化主线
 
@@ -94,7 +94,7 @@
 - 满一小时仍无回复时，机器人记录 `decision_timeout_stop`，只向当前 run 原 `chat_id` 发送一次无按钮超时卡片。超时卡片发送后停止整个流程；不再重发、不再轮询、不再恢复、不再执行任何后续技能，迟到、旧卡或旧 `decision_id` 回调均无效。
 - 故障卡固定三个按钮：`停止流程`、`已人工处理，继续流程`、`重试技能，跳过已处理成功的步骤`，对应决定值 `stop`、`manual_continue`、`retry_skill`。当前执行器收到回调后立即执行，不需要第二次人工触发；每个继续分支都先重新执行自动恢复，仍不可修复才形成新的故障事件和新卡。
 - 停止结果只更新原故障卡，不另发停止通知。
-- 飞书运行时保留四类卡片能力：最后故障卡、通用用户确认卡、兼容旧运行的提审确认卡、`utm-25` 成功通知卡。通用确认使用 `notify-confirmation` 和 `wait-decision --decision-kind confirmation`；相同 waiting 决定复用稳定 UUID，`confirm_continue` 等价于用户确认并继续，`cancel_operation` 停止。当前 31 步正常主线没有必须确认节点，因此不发送通用确认卡或提审确认卡；`utm-24` 自检通过后自动授权并提交一次。每个卡片副作用前仍重新核对 run 宿主机与原群聊；`utm-25` 只有在唯一 Active Key/P8 已写入并独立回读后，才以稳定 UUID 最多发送一张无按钮成功卡。
+- 飞书运行时保留四类卡片能力：最后故障卡、用户确认 API 失败时的通用确认兜底卡、兼容旧运行的提审确认卡、`utm-25` 成功通知卡。必须由用户确认的业务操作使用 `notify-confirmation` 创建同一 `pending_decision` 后先调用 `USER_CONFIRM_API_URL`；API 批准即记录 `confirm_continue`、`operator_id=user-api`，`wait-decision --decision-kind confirmation` 立即返回并执行已审批操作，不发送确认卡。API 不可达或不可判定时才回退通用确认卡；`cancel_operation` 停止。当前 31 步正常主线没有必须确认节点，因此不发送通用确认卡或提审确认卡；`utm-24` 自检通过后自动授权并提交一次。每个卡片副作用前仍重新核对 run 宿主机与原群聊；`utm-25` 只有在唯一 Active Key/P8 已写入并独立回读后，才以稳定 UUID 最多发送一张无按钮成功卡。
 
 ## SSH 全自动硬规则
 
@@ -208,7 +208,7 @@ FEISHU_CODEX_MODEL=gpt-5.6-sol
 
 日报专用群只接收提审日报。日报必须先从本地项目证据生成预览，第一行写当天日期，等待用户明确确认同一份文本后才发送；任何命令回复、状态、帮助、测试消息、故障卡、成功卡或普通助手回复都不得发到该群。日报证据只取本地项目文件、`SKILL.md` 创建/修改时间、repo-local docs、运行时日志、`/health`、cloudflared/tunnel 状态和真实发送回执；除非用户明确要求，不使用 Git 状态或提交历史作为日报来源。
 
-每台机器人必须设置唯一的 `SUBMISSION_HOST_MACHINE`。只有完整固定飞书登记中的 `使用的宿主机` 与该值精确一致时，本机才会创建 run、生成 `vm_name`、回复并启动流程；不一致或配置为空时静默忽略，普通 Codex 对话不受限制。故障卡、通用用户确认卡和超时卡都显示所属宿主机；所有交互卡回调只有在 run 宿主机与本机配置精确一致时才会执行。其他宿主机配置见 [飞书机器人宿主机设置说明](docs/feishu-host-routing.md)。
+每台机器人必须设置唯一的 `SUBMISSION_HOST_MACHINE`。只有完整固定飞书登记中的 `使用的宿主机` 与该值精确一致时，本机才会创建 run、生成 `vm_name`、回复并启动流程；不一致或配置为空时静默忽略，普通 Codex 对话不受限制。故障卡、用户确认 API、用户确认兜底卡和超时卡都使用同一 run 宿主机边界；所有交互卡回调只有在 run 宿主机与本机配置精确一致时才会执行。其他宿主机配置见 [飞书机器人宿主机设置说明](docs/feishu-host-routing.md)。
 
 ## 飞书登记格式
 
