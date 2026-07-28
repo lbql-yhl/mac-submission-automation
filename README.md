@@ -28,6 +28,8 @@
 
 ## 自动化主线
 
+完整的项目级入口、31 步顺序、输入来源、成功证据、故障边界和交接检查见 [项目总流程与交接手册](docs/project-workflow.md)。
+
 ```text
 飞书收到用户提审信息
 → 解析登记数据并创建 submission run
@@ -82,6 +84,8 @@
 `utm-23` 的 Add Build 有界只读可见性恢复、部分现场状态账本、构建与合规处理、14 项内购和 App Version 唯一草稿、App Information 清理及移交步骤见 [docs/utm-23.md](docs/utm-23.md)。
 `utm-24` 紧接 `utm-23` 的五图校验、系统自检授权、自动一次性提交和加急审核步骤见 [docs/utm-24.md](docs/utm-24.md)。
 `utm-25` 的唯一 Active Key/P8 登记、Notion API 哈希回读及成功通知防重步骤见 [docs/utm-25.md](docs/utm-25.md)。
+
+前置技能的详细步骤：[`notion-utm`](docs/notion-utm.md)、[`notion-utm-1`](docs/notion-utm-1.md)、[`utm-3`](docs/utm-3.md)、[`utm-4`](docs/utm-4.md)、[`utm-5`](docs/utm-5.md)、[`files`](docs/files.md)、[`utm-clash`](docs/utm-clash.md)、[`utm-6`](docs/utm-6.md)、[`utm-10`](docs/utm-10.md)、[`utm-11`](docs/utm-11.md)。
 
 虚拟机名称只在 Feishu 创建运行时生成一次。后续技能必须复用 run 里的 `vm_name`，不要在 `utm-clone-macos` 里重新生成。
 
