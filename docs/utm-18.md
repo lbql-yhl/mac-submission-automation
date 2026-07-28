@@ -15,6 +15,7 @@
    - 重新核对 SSH 用户、`$HOME` 和 `Downloads/Fire_One_en1.2`；
    - 用 `command -v node`、`command -v npm`、`node --version`、`npm --version` 确认 Node/npm 环境；
    - 只检查 `.env` 中 `CDP_ENDPOINT=` 恰好出现一次且值严格为 `CDP_ENDPOINT=http://127.0.0.1:9222`，不得 source 或显示 `.env`；
+   - 如果后置 `apple-store-bm/config/prod.yml` 校验失败，先只读确认 YAML 中 `key_id`、`private_key_path`、`bundle_id` 的两个前导空格与 `grep -Fqx` 的匹配文本一致；不得为缩进问题重换 Team Key、重下 `.p8` 或重跑业务命令；
    - 执行 `set -o pipefail`；
    - 业务 SSH 前由宿主生成 `UTM_18_ATTEMPT_ID`，在当前 run 的 mode-600 ledger 中预先保存固定日志/status 绝对路径；独立 SSH 以 noclobber 创建两文件并回读 `ATTEMPT_ID=<id>`、`RUN_STATE=prepared`、权限 600，记录 `UTM_18_LOG_PATH=precommitted`；
    - 前台执行 `npm run fill:description 2>&1 | /usr/bin/tee "$log_path"`；

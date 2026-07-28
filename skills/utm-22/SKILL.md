@@ -167,7 +167,7 @@ Xcode GUI 操作复用当前 Computer Use 的 `node_repl`/`sky` 驱动器；它�
      --attempt-file '/Users/<vm_name>/Downloads/utm-22-<run-id>-<version>-<build>.upload-attempt.json'
    ```
 
-3. 脚本必须先用 `/v1/apps/<id>` 验证 API App 的 Bundle ID，再查询同一 App、平台、版本和构建号：零条才允许创建；唯一 `PROCESSING`/`COMPLETE` 自动绑定并恢复只读轮询；失败、等待上传、未知或多条状态都不得再创建。创建前已写入 `UPLOAD_ATTEMPT_ID`，POST 返回后立即写入 `BUILD_UPLOAD_ID`；创建结果不明时按 5/10/20 秒先查询同一版本和构建号，只恢复唯一同一上传，禁止再次 POST。只有新建分支才以 `com.apple.ipa` 创建 `buildUploadFiles`，严格按 Apple 返回的 offset、length、method 和 headers 上传分片，最后只提交最小 `uploaded=true`。
+3. 脚本必须先用 `/v1/apps/<id>` 验证 API App 的 Bundle ID，再用支持集合读取的 `/v1/builds` 对同一 App、版本和构建号做只读查询：仅零条才允许创建；任何已有 Build（包括多条）都记录到 attempt 并拒绝新建。不得把仅支持单条 GET 的 `/v1/buildUploads/<id>` 当作集合查询。创建前已写入 `UPLOAD_ATTEMPT_ID`，POST 返回后立即写入 `BUILD_UPLOAD_ID`；POST 结果不明时按 5/10/20 秒只读重查 `/v1/builds`，发现 Build 则记录 `recovered_after_create_result_unknown`，否则记录 `create_result_ambiguous`，两种结果都禁止再次 POST。只有新建分支才以 `com.apple.ipa` 创建 `buildUploadFiles`，严格按 Apple 返回的 offset、length、method 和 headers 上传分片，最后只提交最小 `uploaded=true`。
 4. 记录 IPA SHA-256，并对同一 `BUILD_UPLOAD_ID` 做 15/30/60/120 秒有界只读轮询，持续读取关联 Build。只有以下五项同时满足才完成：
 
    ```text

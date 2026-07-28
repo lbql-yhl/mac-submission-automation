@@ -12,7 +12,7 @@ ORDERED = (
     "utm-17", "utm-18", "utm-19", "utm-20", "utm-21", "utm-22", "utm-23", "utm-24", "utm-25",
 )
 GUI_SKILLS = {
-    "utm-clone-macos", "utm-1", "utm-3", "vm-down", "utm-clash", "utm-7", "utm-8",
+    "utm-1", "utm-3", "utm-clash", "utm-8",
     "utm-9", "utm-10", "utm-11", "utm-12", "utm-13", "utm-14", "utm-15", "utm-17",
     "utm-18", "utm-19", "utm-20", "utm-22", "utm-23", "utm-24", "utm-25",
 }
@@ -179,6 +179,23 @@ def main() -> None:
         ),
         "utm-25",
     )
+
+    utm_7 = read_skill("utm-7")
+    require_all(
+        utm_7,
+        (
+            "scripts/utm_7_login.py",
+            "--stdin-json",
+            "Accessibility API",
+            "不使用视觉",
+            "APPLE_ACCOUNT=verified",
+            "UTM_7=verified",
+            "首次确认后自动关闭 System Settings",
+            "第二次确认成功后保留 System Settings 打开",
+        ),
+        "utm-7",
+    )
+    assert "不启动 UTM Computer Use" in utm_7
 
     for required in (
         ROOT / "scripts" / "install_project_skills.sh",

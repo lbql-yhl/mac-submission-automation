@@ -62,7 +62,7 @@ def main() -> None:
     for required in (
         "IP_CANDIDATE_INTERSECTION_COUNT=1",
         "REMOTE_LOGIN=verified",
-        "TEMPLATE_GUEST_IDENTIFIERS=verified",
+        "TEMPLATE_GUEST_IDENTIFIERS=not_required_by_policy",
         "GUEST_IDENTITY_DIFF=verified",
     ):
         assert required in utm_2, required

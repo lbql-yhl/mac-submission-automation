@@ -1,138 +1,142 @@
 ---
 name: utm-clone-macos
-description: Use when the user asks to clone, duplicate, or prepare the UTM macOS virtual machine at ${SUBMISSION_VM_TEMPLATE} for a Feishu-triggered submission run.
+description: Use when the current submission run needs a nonvisual UTM macOS clone created from the configured template on the current host.
 ---
 
 # UTM Clone macOS
 
-## 全局自动恢复与最后故障卡规则
+## 无视觉执行边界
 
-本技能强制继承共享重复操作记忆：原生粘贴调用 `OP-NATIVE-PASTE`，浏览器 URL 调用 `OP-BROWSER-URL-NO-SCHEME`，Apple 电话/验证码调用 `OP-APPLE-PHONE-OTP`，固定 VM 密码调用 `OP-FIXED-PASSWORD-1234`，必须由用户决定的业务节点才调用 `OP-USER-CONFIRMATION`。不得在本技能内发明简化版或冲突步骤。可安全修复的故障必须做满三轮“诊断→实际修复→独立复验”；只有不可逆动作、不能安全重复写入或外部不可修复状态，才改做三轮独立只读复核。少于三轮时运行时拒绝发卡。
+本技能只允许 UTM CLI/Registry、宿主 shell、plist/文件操作和命令回读；其他交互方式不属于本技能。所有路径从 `preflight.py` 的当前宿主配置读取；克隆包只能写入 `${SUBMISSION_VM_IMAGES_DIR}`，不得写入系统盘默认 Documents 目录。
 
-执行任何命令前，在项目根目录运行 `eval "$(python3 scripts/preflight.py --project-only --emit-shell)"`，取得当前机器的动态路径。必须先完整遵守 [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md)：固定顺序是自动诊断、自动修复、自动复验，只有智能体确实无法修复时才允许发送飞书故障卡。
-
-- 正常成功路径连续自动执行，不发送故障卡，不等待用户确认或普通聊天回复。
-- 可逆误点先回到本技能矩阵列出的最近验证锚点，作废旧坐标，等待至少 3 秒并用最新截图重做当前最小动作；成功后记录 `GUI_RECOVERY=verified` 并继续。
-- SSH、API、文件和页面瞬态错误按共享合同有界恢复；不可逆动作只执行一次，结果不明时只读查询同一 attempt，禁止盲目重做。
-- 只有恢复预算穷尽或只读证明为外部不可修复状态，才记录 `AUTO_RECOVERY_ATTEMPTS`、`AUTO_RECOVERY_ACTIONS`、`AUTO_RECOVERY_RESULT=exhausted|unrepairable` 和最后验证锚点。
-- 自动恢复穷尽后，使用下列最后出口；`--unrepairable` 只允许用于 CAPTCHA、账号锁定、权威数据缺失、权限/所有权冲突或不可逆结果仍不明确，不能绕过可执行的恢复：
+执行任何命令前，在项目根目录运行：
 
 ```bash
-python3 services/feishu_bot.py notify-fault \
-  --run-id '<current-run-id>' \
-  --chat-id '<original-chat-id>' \
-  --stage 'utm-clone-macos:<fault-stage>' \
-  --fault '<non-sensitive-fault>' \
-  --suggested-action '<safe-next-action>' \
-  --failure-action '自动恢复穷尽后暂停副作用并等待故障卡决定' \
-  --evidence '<non-sensitive-evidence>' \
-  --completed-steps '<verified-completed-steps>' \
-  --recovery-skill 'utm-clone-macos' \
-  --recovery-attempts '<actual-count-at-least-3>' \
-  --recovery-actions '<diagnose,repair,reverify>' \
-  --recovery-result '<exhausted|unrepairable>'
-python3 services/feishu_bot.py wait-decision \
-  --run-id '<current-run-id>' --decision-kind fault --timeout-seconds 3600
+eval "$(python3 scripts/preflight.py --project-only --emit-shell)"
 ```
 
-规则：`--recovery-result unrepairable` 必须同时追加 `--unrepairable`；恢复穷尽的 `exhausted` 分支不得追加该参数。两种分支都必须填写真实的恢复次数和动作，不能把占位符原样执行。
-
-故障卡仍固定保留 `stop`、`manual_continue`、`retry_skill` 三个决定及稳定 UUID/首次送达后一小时超时规则。当前执行器收到继续决定后立即重读同一精确现场；已验证步骤只有在证据仍成立时才跳过。故障卡是最后恢复出口，不是正常确认节点。
+本技能继承 [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md) 的自动诊断、自动修复、自动复验和最后故障卡规则；其中 `OP-NATIVE-PASTE`、`OP-BROWSER-URL-NO-SCHEME`、`OP-APPLE-PHONE-OTP`、`OP-FIXED-PASSWORD-1234`、`OP-USER-CONFIRMATION` 不在本技能正常路径调用。正常成功路径不等待用户确认。
 
 ## 本技能自动恢复矩阵
 
-| 故障点 | 自动诊断、修复和复验 | 最后发卡边界 |
+| 故障点 | 自动诊断、修复和复验 | 最后出口 |
 |---|---|---|
-| 模板暂时不可读 | 重载动态路径，验证固定模板包、plist 和卷可读性三轮 | 模板确实缺失/损坏为 `unrepairable` |
-| 目标已存在/半成品 | 比较当前 run 克隆标记、目标名和 identity；完整匹配即幂等完成；只有当前 run 明确拥有的未完成目标才移入隔离临时路径、重建并验证后删除隔离副本 | 所有权不明或完整但身份冲突时不删除，发卡 |
-| 复制/identity 写入失败 | 在同一目标上核对实际完成点；可逆 plist 写入用 before 自动还原，再重新应用一次；第三轮只读比较 before/after/identity | 三轮复验仍失败才 `exhausted` |
-| GUI 注册误点 | 窗口尺寸/焦点变化或误点后，等待至少 3 秒读取最新截图，`Escape`/`Cancel` 回到 VM 列表并重新定位精确包；成功记录 `GUI_RECOVERY=verified` | 三轮可逆修复且每轮独立定位后仍不能唯一注册才发卡 |
+| 模板/目标卷不可读 | 间隔 2/5/10 秒重读动态路径、模板包、`config.plist` 和目标卷挂载状态 | 同一固定模板仍缺失或损坏 |
+| 目标包已存在 | 只读比较 marker 的 run/name/source/attempt；完全匹配才续跑 | 缺 marker、符号链接或归属不明，绝不覆盖 |
+| 复制/identity 写入失败 | 保留同一 attempt，比较清单；对本次 plist 写入用 before bytes 原子还原后独立复验 | 三轮后仍不一致 |
+| UTM 注册不匹配 | 三轮读取 `utmctl list` 与 UTM Registry；计数 0 时只对精确 bundle 调用一次系统注册命令 | 多条、名称/UUID/路径不一致或状态不明 |
 
-## Fixed Paths
+## 输入与不可变目标
 
-- Source VM: `${SUBMISSION_VM_TEMPLATE}`
-- Clone output folder: `${SUBMISSION_VM_IMAGES_DIR}/`
-- Clone package path: `${SUBMISSION_VM_IMAGES_DIR}/<vm_name>.utm`
-- 固定模板由项目预先提供 at `${SUBMISSION_VM_TEMPLATE}`; its presence is a required infrastructure invariant, not an optional user input. If unavailable, reload this host's dynamic path configuration and check the exact package, parent volume, mount/readability and `config.plist` at 2/5/10 seconds. Do not search for or substitute another template. Only a persistent missing/damaged configured asset after `utm-clone-template` recovery exhaustion may use the last global fault-card exit.
+1. 从同一 Feishu run 继承 `run_id`、四位小写 `vm_name` 和登记宿主机。`run_id` 必须匹配 `^[A-Za-z0-9-]{8,80}$`，`vm_name` 必须匹配 `^[a-z]{4}$`；不得重新生成名称或选择其他 run。
+2. 固定并验证路径。`src` 只能是 `${SUBMISSION_VM_TEMPLATE}`，`dst` 只能是 `${SUBMISSION_VM_IMAGES_DIR}/$name.utm`，二者均非符号链接；模板、目标目录和目标卷均必须存在且可读写。
 
-Use the global card with these stages: invalid/missing immutable run context = `utm-clone-run-context`; fixed template unavailable = `utm-clone-template`; existing or partial destination = `utm-clone-destination`; unexpected plist shape = `utm-clone-schema`; copy/identity/registration verification failure = `utm-clone-verification`. `manual_continue` rechecks the same exact source/run/destination. `retry_skill` must 立即重跑当前技能 and skip only verified checks; it must never overwrite or delete an ambiguous destination. Repeated failure sends a new card.
+```bash
+src="${SUBMISSION_VM_TEMPLATE}"
+name="<inherited-vm_name>"
+run_id="<inherited-run-id>"
+dst="${SUBMISSION_VM_IMAGES_DIR}/$name.utm"
+marker="$dst/.submission-clone.json"
+[[ "$run_id" =~ ^[A-Za-z0-9-]{8,80}$ ]]
+[[ "$name" =~ ^[a-z]{4}$ ]]
+test -d "$src" -a ! -L "$src"
+test -f "$src/config.plist" -a ! -L "$src/config.plist"
+test "$(dirname "$dst")" = "$SUBMISSION_VM_IMAGES_DIR"
+```
 
-## Workflow
+3. 两次相隔 3 秒执行 `utmctl list`，要求模板 UUID 的状态均为 `stopped`。模板不是 stopped 时只读等待同一状态变化；不得复制运行中的磁盘，也不得替换模板。
 
-1. 运行 preflight 后，从同一 Feishu run 取 `run_id`、`vm_name` 和宿主机名称；要求 `run_id` 只含字母、数字和连字符且长度 8–80，`vm_name` 精确匹配 `^[a-z]{4}$`，本机 `SUBMISSION_HOST_MACHINE` 与 run 宿主机精确相等。解析并固定路径：
+## 克隆、身份与文件回读
 
-   ```bash
-   src="${SUBMISSION_VM_TEMPLATE}"
-   name="<run vm_name>"
-   run_id="<current-run-id>"
-   dst="${SUBMISSION_VM_IMAGES_DIR}/$name.utm"
-   marker="$dst/.submission-clone.json"
-   [[ "$run_id" =~ ^[A-Za-z0-9-]{8,80}$ ]]
-   [[ "$name" =~ ^[a-z]{4}$ ]]
-   test -d "$src" -a ! -L "$src"
-   test -f "$src/config.plist" -a ! -L "$src/config.plist"
-   test "$(dirname "$dst")" = "$SUBMISSION_VM_IMAGES_DIR"
-   ```
+1. 在任何复制前分类目标。分类枚举固定为 `CLONE_DESTINATION=absent|resume_verified|conflict`：目标不存在时以 mode `600` 原子写入 marker，包含 `run_id`、`vm_name`、模板规范路径、稳定 `CLONE_ATTEMPT_ID` 和 `status=copying`。目标已存在时，只有 marker 四项逐字节匹配才复用同一 attempt；其他情况记录 `CLONE_DESTINATION=conflict`，完成三轮独立只读比较后进入最后出口。
+2. 对当前 run 拥有的 absent 或 copying 目标执行一次复制：
 
-2. 在两次相隔 3 秒的只读检查中确认模板 VM 为 `stopped`，且 UTM 没有正在保存/编辑该模板。模板仍运行时只请求一次 guest 正常关机并等待 stopped；结果不明时不得复制磁盘。记录 `CLONE_SOURCE_STATE=stopped`。
-3. 在任何复制前分类目标：
-   - 目标不存在：创建目标目录，并以原子 replace 写入 mode-600 `marker`，内容绑定 `run_id`、`vm_name`、源模板规范路径、随机稳定 `CLONE_ATTEMPT_ID` 和 `status=copying`；记录 `CLONE_DESTINATION=absent`。
-   - 目标存在且 marker 四项完全匹配：记录 `CLONE_DESTINATION=resume_verified`，继承原 attempt；不得生成新 attempt 或新身份。
-   - 目标存在但 marker 缺失、不可解析、符号链接或任一所有权字段不匹配：记录 `CLONE_DESTINATION=conflict`，不执行 `ditto`、删除或改名；完成三轮独立只读核对后才进入最后故障卡。
+```bash
+/usr/bin/ditto "$src/." "$dst/"
+```
 
-   marker 必须先于第一个复制副作用落盘；后续每次状态更新都写同目录临时文件、`fsync`、`chmod 600`、`os.replace` 并重新读取精确匹配。
+只接受 exit `0`。中断时保留 marker，比较源/目标清单后只对同一 attempt 允许一次补齐复制；不得创建第二个目标包。
 
-4. 对 `absent` 或 `resume_verified/status=copying` 的同一 attempt 执行：
+3. 先将唯一计划身份写入 marker，再用原子 Python/plist 写入修改 `$dst/config.plist`。必须只改 `Information.Name`、`Information.UUID`、唯一 `Network[0].MacAddress` 与 Apple `System.MacPlatform.MachineIdentifier` 的新非零 ECID；`HardwareModel` 必须逐字节保留。MAC 必须 locally-administered unicast，UUID、MAC、MachineIdentifier 必须均不同于模板。写前保存 before bytes，写后独立回读；任一断言失败先原子还原 before bytes 并停止。
+4. 用单个只读 Python 比较器递归枚举源/目标，排除 `config.plist` 与当前 marker 后逐项核对类型、链接目标、权限类别、字节数和 SHA-256。只接受下列输出：
 
-   ```bash
-   /usr/bin/ditto "$src/." "$dst/"
-   ```
+```text
+CLONE_SOURCE_MANIFEST_SHA256=<sha256>
+CLONE_DESTINATION_MANIFEST_SHA256=<same-sha256>
+CLONE_MISSING=0
+CLONE_EXTRA=0
+CLONE_MISMATCHED=0
+CLONE_CONFIG_IDENTITY=verified
+```
 
-   仅 exit 0 可进入下一步。传输中断时保留 run-owned marker，重新比较源/目标清单；只对这个同一 attempt 再执行一次 `ditto` 补齐，禁止创建第二目标。
-5. 先把计划身份持久化进 marker，再改 plist。计划只生成一次，包括新 `Information.UUID`、locally-administered unicast MAC 和 Apple backend 的非零 ECID；恢复时复用相同计划值。随后由 Python 原子改写 `$dst/config.plist`：
-   - schema 必须唯一存在 `Information.Name`、`Information.UUID`、恰好一个 `Network[0].MacAddress`；Apple backend 还必须有 `System.MacPlatform.HardwareModel` 和 `MachineIdentifier`；
-   - 保存本次 config before bytes；写临时文件、`fsync`、保留权限并 `os.replace`；
-   - 立即回读，要求名称等于 `vm_name`，UUID/MAC/ECID 等于 marker 的计划值，UUID、MAC、MachineIdentifier 均不同于模板，`HardwareModel` 与模板逐字节相同；
-   - 任一断言失败就用 before bytes 原子还原并独立回读，然后停止；不得再生成一组身份。
+## UTM CLI/Registry 注册与回读
 
-   配置 plist 中没有由本技能安全修改的 guest serial 字段，因此本技能不得声称“已修改序列号”。guest `IOPlatformSerialNumber`/`IOPlatformUUID` 的模板对账只由启动后的 `utm-2` 完成。
-6. 用单个只读 Python 校验器递归枚举源/目标。排除仅允许不同的 `config.plist` 和目标 marker 后，对每个相对路径核对类型、符号链接目标、权限类别、字节数和文件 SHA-256；任何额外、缺失或哈希不同都失败。输出仅含：
+1. 从目标 `config.plist` 读取精确 UUID。连续两次执行 `utmctl list`，并读取 UTM Registry；不得从名称相似的包、默认目录或其他 UUID 推断注册结果。
 
-   ```text
-   CLONE_SOURCE_MANIFEST_SHA256=<manifest-sha256>
-   CLONE_DESTINATION_MANIFEST_SHA256=<same-value>
-   CLONE_MISSING=0
-   CLONE_EXTRA=0
-   CLONE_MISMATCHED=0
-   CLONE_CONFIG_IDENTITY=verified
-   ```
+```bash
+target_uuid="$(/usr/libexec/PlistBuddy -c 'Print :Information:UUID' "$dst/config.plist")"
+utmctl list
+defaults read com.utmapp.UTM Registry
+```
 
-   这一步替代“目录大小差不多”的判断；比较器自身异常也算失败，不能把非 0 一律解释为“身份不同”。
-7. 先读 `utmctl list` 并以目标 UUID + 精确 `vm_name` 计数：
-   - 计数 0：执行一次 `open "$dst"`，等待至少 3 秒，重新读取；
-   - 计数 1：要求同一行状态为 `stopped`；
-   - 计数大于 1、名称与 UUID 分属不同条目或状态不明：不再打开，进入注册冲突恢复。
+2. 若目标 UUID 在 UTM CLI 和 Registry 均为零条，且 bundle、marker、plist identity 都已验证，才允许一次：
 
-   成功证据必须为 `UTM_REGISTRATION_MATCH_COUNT=1` 和 `UTM_REGISTRATION_STATE=stopped`。
-8. 将 marker 原子更新为 `status=complete`，写入两个 manifest SHA-256、最终 config SHA-256、UTM UUID 与完成时间；再开一个全新只读进程回读 marker、plist 和 `utmctl list`。只有全部仍匹配才记录：
+```bash
+open "$dst"
+sleep 3
+utmctl list
+defaults read com.utmapp.UTM Registry
+```
 
-   ```text
-   CLONE_ATTEMPT_ID=<stable-attempt-id>
-   CLONE_DESTINATION=absent|resume_verified|conflict
-   CLONE_MARKER=verified
-   CLONE_SOURCE_MANIFEST_SHA256=<sha256>
-   CLONE_DESTINATION_MANIFEST_SHA256=<same-sha256>
-   UTM_REGISTRATION_MATCH_COUNT=1
-   UTM_REGISTRATION_STATE=stopped
-   UTM_CLONE_MACOS=verified
-   ```
+这是系统注册调用，不得对任何其他包执行；调用后不进行界面操作。
+3. 在新的只读进程中按 Registry 的精确 UUID 条目验证：名称等于 `$name`、包规范路径等于 `$dst`、UTM CLI 同 UUID/名称组合计数为 `1` 且状态为 `stopped`。任何多条、路径不匹配或状态不明都完成三轮只读复核，不得删除、重命名或重新注册其他 VM。
+4. 将 marker 原子更新为 `status=complete`，写入两个 manifest SHA-256、最终 config SHA-256、UTM UUID 和完成时间。新进程再次读取 marker、plist、UTM CLI 和 Registry；全部精确一致才记录：
 
-   `CLONE_DESTINATION=conflict` 绝不属于成功取值；该枚举保留在契约中用于明确阻断分类。Only after `UTM_CLONE_MACOS=verified` immediately hand the same run/clone/attempt to `utm-1`. Do not start it here; `utm-2` owns guest-visible identity verification after `utm-1` boots it.
+```text
+CLONE_ATTEMPT_ID=<stable-attempt-id>
+CLONE_DESTINATION=absent|resume_verified
+CLONE_MARKER=verified
+CLONE_SOURCE_MANIFEST_SHA256=<sha256>
+CLONE_DESTINATION_MANIFEST_SHA256=<same-sha256>
+CLONE_CONFIG_IDENTITY=verified
+UTM_REGISTRATION_MATCH_COUNT=1
+UTM_REGISTRATION_STATE=stopped
+UTM_CLONE_MACOS=verified
+```
 
 ## Guardrails
 
-- Do not generate or substitute a clone name here.
-- Do not search for or substitute another source template.
-- Do not skip the final destination-exists check.
-- Do not change CPU, memory, disk, display, or boot settings.
-- If the plist schema is different from expected, do not guess keys. Re-read the exact source/destination plist with `plutil -lint` and the known schema paths twice, restore any current-attempt reversible write from its before copy, and preserve both packages. Only persistent incompatible schema after `utm-clone-schema` recovery exhaustion may use the last global fault-card exit.
+- 不得修改 CPU、内存、磁盘、显示、启动参数或网络以外的 VM 配置。
+- 不得在系统盘、默认 UTM Documents 目录或模板包中创建目标。
+- 不得把 guest `IOPlatformSerialNumber` 或 `IOPlatformUUID` 当作本技能成功证据；`utm-2` 负责经 SSH 的 guest 三码读取和模板对账。
+- 不得把 UTM 已启动、命令无错误或历史状态当作注册成功证据。
+
+## 最后出口
+
+每个不可恢复状态必须先完成同一模板、目标包和 attempt 的三轮诊断、可安全修复和独立复验，记录：
+
+```text
+AUTO_RECOVERY_ATTEMPTS=<actual-count-at-least-3>
+AUTO_RECOVERY_ACTIONS=<diagnose,repair,reverify>
+AUTO_RECOVERY_RESULT=exhausted|unrepairable
+```
+
+自动恢复穷尽后才执行：
+
+```bash
+python3 services/feishu_bot.py notify-fault \
+  --run-id '<current-run-id>' --chat-id '<original-chat-id>' \
+  --stage 'utm-clone-macos:<fault-stage>' --fault '<non-sensitive-fault>' \
+  --suggested-action '<safe-next-action>' \
+  --failure-action '自动恢复穷尽后暂停副作用并等待故障卡决定' \
+  --evidence '<non-sensitive-evidence>' --completed-steps '<verified-completed-steps>' \
+  --recovery-skill 'utm-clone-macos' --recovery-attempts '<actual-count-at-least-3>' \
+  --recovery-actions '<diagnose,repair,reverify>' --recovery-result '<exhausted|unrepairable>'
+python3 services/feishu_bot.py wait-decision --run-id '<current-run-id>' --decision-kind fault --timeout-seconds 3600
+```
+
+`--recovery-result unrepairable` 必须同时追加 `--unrepairable`；少于三轮时运行时拒绝发卡。`manual_continue` 与 `retry_skill` 都只重读同一 source/destination/attempt。
+
+## 连续交接
+
+仅当 `UTM_CLONE_MACOS=verified` 后，将同一 run、`vm_name`、bundle、config UUID、MAC、marker 和 `CLONE_ATTEMPT_ID` 原样交接给 `utm-1`。不得启动 guest 或改选其他目标。

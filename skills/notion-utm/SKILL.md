@@ -100,6 +100,8 @@ Account Number：<银行账户号码，可留空>
 
 Omitting the entire bank section and leaving either or both bank values empty are equivalent. `format_account_block` must still emit the fixed blank `ABA Routing Number：` and `Account Number：` lines for later Notion completion.
 
+The parser also accepts the same account fields when they are written with labels (`国家：`, `邮箱：`, `初始密码：`, `电话：`, `短信接收链接：`) or when the SMS URL token itself contains `@`; it must still normalize them into the same 33-line `账号信息` block and must not treat the SMS URL line as the Apple ID email.
+
 For an explicit user-requested test run with supplied or generated test data, still use the project parser/formatter (`services.feishu_bot.parse_submission_data`, `scripts.notion_utm_prepare.format_account_block`, and `validate_account_block`) to produce the same 33-line `账号信息` block. Create a uniquely named template copy through the API, write and read it back exactly, then move only that test page to Notion trash. Re-read the page and record `TEST_PAGE_IN_TRASH=verified` only when `in_trash=true`; the test page remains recoverable. Do not use the Feishu desktop app or a browser write path.
 
 ## Workflow

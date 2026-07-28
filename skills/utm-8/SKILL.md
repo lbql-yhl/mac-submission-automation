@@ -50,7 +50,7 @@ python3 services/feishu_bot.py wait-decision \
 
 ## Preconditions
 
-- `utm-7` recorded `UTM_7=verified` on the current `vm_name`; do not create or rename a VM.
+- `utm-7` recorded `APPLE_ACCOUNT=verified` and `UTM_7=verified` after the project SSH helper's exact email match and close/reopen confirmation on the current `vm_name`; do not create or rename a VM.
 - The target UTM guest is running, logged in as `<vm_name>`, and shows the signed-in Apple Account.
 - `.env` contains a working Notion connection; `NOTION_ROOT_PAGE_ID` points directly to the current host page and the matching child page is `<应用名>-<vm_name>`.
 - The page contains `账号信息` labels `用户名：`, `生日：`, `初始密码：`, and `修改后的密码：`.
@@ -85,15 +85,16 @@ python3 services/feishu_bot.py wait-decision \
 
 4. **Open password change.** Return to the guest Apple Account page, screenshot-confirm `Sign-In & Security`, open it, wait for the page to load, and screenshot-confirm `Change Password`. Handle an Apple Account password prompt with the effective current password from step 1 using the UTM right-click paste procedure. Never guess a password.
 
-5. **Generate and fill the new password.** Use this host-side generator; it sends the candidate directly to `pbcopy` and prints only safe metadata:
+5. **Generate and fill the new password.** Use this host-side generator. It creates a 16-character random base and appends the literal trailing `y`; the final 17-character value is sent directly to `pbcopy` and only safe metadata is printed:
 
    ```bash
    python3 - <<'PY'
-   import hashlib, secrets, string, subprocess
-   alphabet = string.ascii_letters + string.digits
+   import hashlib, secrets, subprocess
+   alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
    while True:
-       candidate = "".join(secrets.choice(alphabet) for _ in range(16))
-       if any(c.isupper() for c in candidate) and any(c.islower() for c in candidate) and any(c.isdigit() for c in candidate):
+       base = "".join(secrets.choice(alphabet) for _ in range(16))
+       if any(c.isupper() for c in base) and any(c.islower() for c in base) and any(c.isdigit() for c in base):
+           candidate = base + "y"
            break
    subprocess.run(["pbcopy"], input=candidate.encode(), check=True)
    copied = subprocess.check_output(["pbpaste"])
@@ -104,26 +105,21 @@ python3 services/feishu_bot.py wait-decision \
    PY
    ```
 
-   Keep candidate values only in executor memory/current verified clipboard; persist only their SHA-256 and a stable attempt number. Put the same value into `New Password` and `Verify` through the highlighted-blue `Paste` flow, verifying both fields and equal bullet counts. On a policy rejection, clear the clipboard before generating the next value and require its hash differs from all earlier hashes. Record `PASSWORD_CANDIDATE_ATTEMPTS<=3`.
+   Keep candidate values only in executor memory/current verified clipboard; persist only their SHA-256 and a stable attempt number. For each field, set the 16-character random base through the verified AX field path, then send the fixed trailing `y` as a real keyboard edit event to wake the macOS validator; verify both fields contain the same final 17-character value and equal bullet counts. If bullets are visible but `Change` remains disabled, do not submit; refill the same base and repeat the `y` wake-up event. On a policy rejection, clear the clipboard before generating the next value and require its hash differs from all earlier hashes. Record `PASSWORD_CANDIDATE_ATTEMPTS<=3`.
 
 6. **Final change submission.** Re-read the latest guest state and confirm the current Apple Account is correct, both new-password fields remain filled with equal bullet counts, and the final `Change`/`Continue` action is uniquely identified and enabled. 全部自检通过后自动点击一次最终 `Change`/`Continue`，无需用户确认或操作。Wait at least 3 seconds and re-read the result page; do not click twice. If the account, fields, unique target, or enabled state changes, return to the verified account/form anchor, re-read the exact run/page/account and refill only reversible fields through `utm-8-run-context`. Only exhausted recovery or a proven ownership conflict may send the last global fault card, without clicking the final action.
 
 7. **Verify acceptance and write back by API.** Confirm the password form closed or `Sign-In & Security` returned without an error. If Apple rejects complexity, read the exact non-sensitive rejection category, discard that value, and generate a new candidate that changes the rejected characteristic; never repeat or derive from the old value. Up to three distinct candidates may be tried automatically. Before every attempt, refill both fields and repeat every step 6 account/field/button check；重填验证通过后再次自动点击一次最终 `Change`/`Continue`。Each candidate is submitted exactly once. A successful attempt continues without user confirmation. Only three distinct policy rejections, rate limiting, account lock or an unknown security challenge may record recovery exhausted/unrepairable and enter the `utm-8-password-complexity-rejected` last fault card.
 
-   After Apple accepts, the password change is irreversible from this workflow: never claim that a Notion failure can roll Apple back and never try the old password. Freeze all other clipboard use, retain the accepted candidate in executor memory plus verified clipboard, and perform this immediate/5/10-second transaction:
-   1. run `verify-parent`;
-   2. revalidate clipboard byte count/SHA-256 against the accepted candidate;
-   3. pipe `pbpaste` to `set-field --label '修改后的密码：' --value-stdin --replace-existing`;
-   4. run `verify-parent` again, `read-field --copy`, and compare byte count/SHA-256;
-   5. independently confirm `初始密码：` is unchanged.
-
-   Stop on the first exact readback and record `NOTION_PASSWORD_WRITE_RECOVERY=verified` (the first immediate attempt also counts as a verified closure). Three failures are an external persistence fault; keep the accepted value protected in the active executor and use the last fault card without attempting another Apple password change. After exact Notion readback, run `pbcopy </dev/null`, require empty `pbpaste`, and discard the in-memory value.
+   Before each guest attempt, run `verify-parent`, invoke `scripts/notion_register_password.py` to write the final candidate to `修改后的密码：`, and independently read it back by byte count/SHA-256. Only then send the same candidate to the unchanged guest helper. If the guest returns a known non-zero failure, restore the exact preflight value (including blank) and independently verify `PASSWORD_NOTION_ROLLBACK=verified`; do not leave a rejected candidate in Notion. If Apple accepts, run `verify-parent` and independently re-read the prewritten candidate without writing again, then record `NOTION_PASSWORD_WRITE_RECOVERY=verified`. Never try the old password after Apple accepts and never claim that a later Notion read failure can roll Apple back. After exact readback, clear the clipboard and discard the in-memory value.
 
 ## Popup handling
 
 - Solve ordinary loading, confirmation, and macOS permission dialogs by screenshot-confirming the text and choosing the button that continues the requested password-change flow.
 - For a Mac password prompt belonging to the current `<vm_name>` guest, call `OP-FIXED-PASSWORD-1234` and its `OP-NATIVE-PASTE` GUI-authorization subflow; no run or user override exists.
-- For a dialog asking whether to sign out other devices, choose `Sign Out` when it is clearly part of this password-change flow.
+- When the first real `y` wake-up key causes any `<requesting app> wants access to control System Events` consent dialog (for example `Terminal` or `sshd-keygen-wrapper`), detect that dialog, activate its unique `Allow`, wait for the `osascript` child to finish, and continue the same password-field attempt; do not relaunch the workflow or treat the consent dialog as an Apple challenge.
+- If the random Apple Account dialog `Enter your password to view account details.` appears, read the current page's non-empty `修改后的密码：` through the Notion API, falling back to `初始密码：` only when the modified field is empty. Pass that value to the guest only through the current stdin payload, fill this dialog's password field, and click its unique `Continue` once after the field is verified. This is the Apple Account password, never the fixed `1234`; missing/ambiguous source is blocked before entry.
+- For a dialog asking whether to sign out other devices, choose `Don’t Sign Out` when it is clearly part of this password-change flow; preserve other-device sessions.
 - For the known SMS/2FA flow, reuse `utm-7`'s live Notion phone/SMS path automatically. For an iPhone passcode, CAPTCHA, account lock/disabled state, unknown security prompt, or unclear target account, first pause new credential entry, return to the verified account/page anchor, and perform the matrix's read-only account classification plus immediate/5/10-second live-source checks. A resolved known flow continues automatically. Only a proven CAPTCHA/lock/external challenge or an exhausted ownership ambiguity may record `AUTO_RECOVERY_RESULT=unrepairable|exhausted` and use the last fault card. `manual_continue` and `retry_skill` both re-run the same classification and live-source checks; neither response is evidence by itself.
 - If the guest account, VM, Notion page, email, or password source does not match the current run, re-read the exact run and 重新读取同一 Notion 页面, refocus only the same guest, and repeat the identity/source checks through the bounded `utm-8-run-context` matrix. Only an exhausted mismatch proven to be an external ownership conflict may send the last global fault card; do not enter credentials first.
 

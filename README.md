@@ -35,7 +35,7 @@
 → notion-utm：通过 Notion API 从模板创建 <应用名>-<虚拟机名称> 并登记账号信息；初始银行区块/号码允许缺省并保留空标签，其他异常先重读 run/父页/模板、按 before 回滚并独立复验，只有恢复穷尽或外部数据冲突才发最后故障卡
 → notion-utm-1：通过 Feishu API 精确读取固定表/view，再通过 Notion API 补填应用信息；若已打开表格的可见上下文与 API 结果矛盾，可见证据只用于核对文档/view/记录上下文，字段值仍只取 API，配置不一致时停止写 Notion 并记录 `FEISHU_TABLE_CONTEXT_MISMATCH=verified`
 → utm-clone-macos：用同一个虚拟机名称和 `${SUBMISSION_VM_TEMPLATE}` 克隆到 `${SUBMISSION_VM_IMAGES_DIR}`；模板或克隆异常先对同一路径、复制 attempt、plist/身份和目标所有权自动恢复，穷尽后才发最后故障卡
-→ utm-1：配置并启动这个 VM；克隆交接缺失时先自动重跑同一 run 的克隆步骤
+→ utm-1：只接管流程开始前已经运行的 VM，配置并登录；绝不启动或打开克隆机
 → utm-2：自动启用 SSH、确保宿主 Key 存在、安装给 demo、核对 authorized_keys 权限/指纹和 BatchMode，再记录 guest 三码；三轮同 VM 修复与复验仍失败后才发送最后故障卡
 → utm-3：通过 SSH 创建与 demo 同权限的管理员用户，并一次性配置同一宿主机 Key
 → vm-down：SSH 正常关机，停机态检查 UTM 共享设置，再开机并登录虚拟机同名管理员用户
@@ -44,7 +44,7 @@
 → files：通过 SSH 把 guest 共享目录内容复制到当前用户的 Downloads 并校验
 → utm-clash：配置 VM 内 Clash Verge 固定开关，并导入、选中 Downloads/socks5.yml
 → utm-6：验证 guest 出口 IP 等于当前代理 IP，并设置、校验 guest ~/.zshrc 环境变量
-→ utm-7：通过 Notion API 读取已登记账号，在目标 UTM guest 的系统设置中登录 Apple Account
+→ utm-7：通过 Notion API 读取已登记账号，经 SSH-stdin JSON 调用项目登录 helper，在目标 UTM guest 内无视觉登录 Apple Account 并完成邮箱复核
 → utm-8：读取 Apple Account Personal Information，回写 Notion 用户名/生日，修改密码并登记修改后的密码
 → utm-9：通过 Notion API 读取邮箱，在同一 UTM guest 的钥匙串访问中请求证书并保存到 guest Desktop
 → utm-10：必要时通过 Notion API 读取登录/短信字段，在同一 guest Edge 中打开 Apple Developer 并确认账号页
@@ -65,6 +65,7 @@
 → utm-25：在同一 guest Edge 打开 App Store Connect API 页面，只接受唯一 Active Key；安全取得已下载 P8，通过 Notion API 写入并独立回读 `退款回调及p8`，验证成功后才按 runtime 稳定 UUID 防重发送绿色成功卡
 ```
 
+`utm-1` 克隆交接、只读共享、三轮网络随机化、一次启动与视觉登录的恢复账本见 [docs/utm-1.md](docs/utm-1.md)。
 `utm-8` 测试前置、输入状态和验收标记见 [docs/utm-8.md](docs/utm-8.md)。
 `utm-9` 测试前置、操作顺序和验收标记见 [docs/utm-9.md](docs/utm-9.md)。
 `utm-12` 会员信息、App ID 和 App Store Connect 创建步骤见 [docs/utm-12.md](docs/utm-12.md)。
@@ -106,18 +107,18 @@
 ## 固定技能职责
 
 1. `notion-utm`：从 Feishu bot runtime/API 读取登记数据，用 `scripts/notion_api.py` 从当前宿主机页面的唯一 `模板` 创建 `<应用名>-<vm_name>`，只填写并回读验证 `账号信息`。初始银行区块可省略、两项号码可留空。其他异常先重新解析同一 run、三轮读取父页/模板、使用 before 恢复可逆写入并独立回读；仍不唯一、冲突或回滚失败才向原 `chat_id` 发最后故障卡。
-2. `notion-utm-1`：通过 Feishu API 精确读取多维表格 `26财年巨风做包表` 的 `金鳞产品表格` 视图（`view_id=vewKUW4q4W`），再通过 Notion API 补填并回读已有页面的 `应用信息`。0 条/多条、URL 空白或无效时先重取 token、核对固定表/view 并在 5/15/30 秒三次实时重读；若用户提供的可见表格证据与 API 结果矛盾，只用它核对文档/view/记录上下文，禁止抄取字段值，发现 API 配置不一致时记录 `FEISHU_TABLE_CONTEXT_MISMATCH=verified` 并停止写 Notion。仍缺失才作为外部权威数据故障发最后卡。若 Notion `应用信息` 已有冲突内容，则重新实时读取同一条唯一飞书记录、重建并校验模板，使用 `--replace-existing` 自动覆盖并精确回读，不发确认卡。`应用类型` 按项目固定映射自动规范化，不设人工选择分支。
+2. `notion-utm-1`：通过 Feishu API 精确读取多维表格 `26财年巨风做包表` 的当前产品表格视图。金鳞产品表格完成三轮精确查询仍为 0 条后，才查询祥云产品表格：先以 `金鳞产品表格`（`view_id=vewKUW4q4W`）在 5/15/30 秒三次 `is` 精确读取；三次均为零才以 `contains` 读取同表 `祥云产品表格`（`view_id=vew1k7hwhJ`）。祥云回退查询只接受应用名字段包含目标应用名的候选，祥云产品表格也必须恰好 1 条才继续，包含匹配候选必须恰好 1 条；金鳞一旦唯一命中就绝不查询祥云。记录 `FEISHU_PRODUCT_VIEW=<view-name>`，即 `FEISHU_PRODUCT_VIEW=金鳞产品表格` 或 `FEISHU_PRODUCT_VIEW=祥云产品表格`。任一已查询视图多条、或有序回退后仍为空、URL 空白或无效时才作为外部权威数据故障发最后卡。若用户提供的可见表格证据与 API 结果矛盾，只用它核对文档/view/记录上下文，禁止抄取字段值，发现 API 配置不一致时记录 `FEISHU_TABLE_CONTEXT_MISMATCH=verified` 并停止写 Notion。若 Notion `应用信息` 已有冲突内容，则重新实时读取同一条唯一飞书记录、重建并校验模板，使用 `--replace-existing` 自动覆盖并精确回读，不发确认卡。`应用类型` 按项目固定映射自动规范化，不设人工选择分支。
 3. `utm-clone-macos`：模板从 `${SUBMISSION_VM_TEMPLATE}` 解析，目标固定为 `${SUBMISSION_VM_IMAGES_DIR}/<vm_name>.utm`；复制后更新名称、UUID、MAC 和 Apple `MachineIdentifier`。模板、目标或 plist 异常先核对同一 run 所有权、清理仅由本 attempt 创建的不完整目标并按技能矩阵完成三轮同目标恢复/独立复验；仍失败才发最后故障卡，不搜索替代模板。
-4. `utm-1`：继承不可变 run/`vm_name`；克隆标记或 VM 包缺失时自动重跑同一 run 的 `utm-clone-macos` 并复查，仍异常才发送 `utm-1-handoff-recovery` 故障卡。随后配置只读共享目录、随机化网络 MAC，启动 VM 并登录 `demo` 桌面。
+4. `utm-1`：继承不可变 run/`vm_name`；克隆标记或 VM 包缺失时自动重跑同一 run 的 `utm-clone-macos` 并复查，仍异常才发送 `utm-1-handoff-recovery` 故障卡。随后仅对已运行 VM 配置只读共享目录、随机化网络 MAC，并登录 `demo` 桌面；绝不启动或打开克隆机。
 5. `utm-2`：确认 Apple `MachineIdentifier` 不重复，获取 VM IP，自动启用 Remote Login；确保固定私钥存在、缺失公钥时从私钥导出，安装给 `demo`，核对 `authorized_keys` 权限、宿主/guest SHA-256 指纹和 BatchMode，再读取 guest `IOPlatformSerialNumber`/`IOPlatformUUID`。同一 VM 三轮修复耗尽并复验后才发送最后故障卡，不向用户索取 SSH 信息。
 6. `utm-3`：只通过 SSH 使用 `sudo sysadminctl` 和固定 `1234` 创建 `<vm_name>` 管理员、开启 Secure Token，随后把同一宿主公钥自动安装到最终用户并记录 `SSH_KEY_AUTH=verified`。预检发现同名用户时先用两条只读 SSH 对账 run marker、UID/home/admin/Secure Token/Key 指纹；同一中断 run 自动补完，外部账号冲突才进入 `utm-3-user-exists` 最后故障卡，绝不自动删除用户。
-7. `vm-down`：只通过 SSH 在 guest macOS 内执行 `/sbin/shutdown` 正常关机；禁止 `utmctl stop` 和 UTM GUI 电源控制。停机后、开机前必须在 UTM 的目标 VM 编辑/设置窗口 `共享` 页确认 `${SUBMISSION_SHARED_DIR}` 已添加且 `只读?` 已启用；如果缺失就勾选 `添加只读` 后添加该目录并保存，若已有但非只读则移除后按只读重加。复查通过后再用 `utmctl start` 开机，登录 `<vm_name>`，完成首次登录固定选择，并验证 SSH/admin、guest 共享目录挂载和只读写入失败。`socks5.yml` 由后续 `utm-5` 生成，不是 `vm-down` 前置条件。
+7. `vm-down`：只通过 SSH 在 guest macOS 内执行 `/sbin/shutdown` 正常关机；禁止 `utmctl stop`、`utmctl start` 和 UTM GUI 电源控制。停机后只完成共享配置与持久设置校验；若后续步骤要求运行中的 VM，必须由流程外部明确启动后再接管，技能不得启动或打开克隆机。
 8. `utm-4`：只通过 SSH 关闭软件更新自动开关，删除 `demo` 用户和 `/Users/demo`，并用命令验证。
 9. `utm-5`：只在宿主机生成并覆盖 `${SUBMISSION_SHARED_DIR}/socks5.yml`，代理数据来自当前 Feishu 提交；不 SSH、不改 UTM、不打开 Clash。
 10. `files`：在 guest 内通过 SSH 将 `/Volumes/My Shared Files/共享文件` 的内容复制到 `$HOME/Downloads`，保留隐藏文件和目录，并逐项校验。
 11. `utm-clash`：在克隆 VM 内配置 Clash Verge，导入并选中 `$HOME/Downloads/socks5.yml`；Profile 选择复用当前 Computer Use GUI 驱动器。延迟检查五次仍不显示数字时自动核对配置/端口/公网出口并重启 Clash Verge 一次，修复后复验；仍失败才发最后故障卡。最终状态为 Tun Mode on、System Proxy off、Auto Launch on、Silent Start on、IPv6 off、Unified Delay on。
 12. `utm-6`：在 guest 内通过终端验证公共出口 IPv4 与当前 Feishu 代理 IP 完全一致；成功后设置并检查 `~/.zshrc` 中 Ruby、Flutter、Pub 镜像环境变量和 PATH。出口不一致时不得报告成功。
-13. `utm-7`：先用 `scripts/notion_api.py` 校验父页面并实时读取匹配页账号字段，再在目标 UTM guest 的 macOS 系统设置登录 Apple Account；已知电话/SMS 双重认证自动重新读取实时电话尾号/短信链接并在宿主终端取码，Mac Password 提示自动使用固定 `1234`。账号、号码、验证码或挑战异常先执行实时来源重读、页面/账号只读分类和可逆 GUI 恢复；只有 CAPTCHA、锁号、持续零/多当前验证码、所有权冲突或未知外部挑战才发最后故障卡；不修改 Notion 或 UTM 设置。
+13. `utm-7`：先用 `scripts/notion_api.py` 校验父页面和匹配页，再由 `scripts/utm_7_login.py` 读取 `邮箱：`、当前密码、`电话：`、`电话短信接收平台：`，经 SSH-stdin JSON 调用项目 helper；helper 无视觉完成 Apple Account 登录、电话/SMS、固定 `1234` Mac Password、随机安全弹窗和邮箱关闭/重开复核。脚本验证码按时间字段取当前最新，缺少时间字段时按页面顺序取最后一条。账号、号码、无法判定最新验证码或挑战异常先执行同一 VM/Notion/SSH 的自动恢复；只有 CAPTCHA、锁号、所有权冲突或未知外部挑战才发最后故障卡；不修改 Notion 或 UTM 设置。
 14. `utm-8`：在 `utm-7` 成功后的同一 UTM guest 中读取 Apple Account Name/Birthday，并通过字段级 Notion API 更新 `用户名：`、`生日：`；核对当前账号、两处新密码、相同圆点数和已启用的唯一最终控件。Apple 因复杂度拒绝时按拒绝类别最多自动生成三组互不重复的新候选，每次完整自检后自动提交；三次策略拒绝、限流、账号锁定或未知挑战才发最后故障卡。接受后只通过 API 更新 `修改后的密码：`，不覆盖 `初始密码：`。
 15. `utm-9`：先用 `scripts/notion_api.py read-field --copy` 读取 `邮箱：`，再只通过 SSH 执行 `open -a "Keychain Access"`，之后使用 Computer Use。用菜单键盘导航确认并高亮 `Certificate Assistant` -> `Request a Certificate From a Certificate Authority...` 后按确认键；在证书信息页保持 Common Name 当前值、CA 邮箱为空、选择 Saved to disk、不要勾选密钥对信息；邮箱输入框必须右键并确认 `Paste` 高亮后粘贴；保存位置必须是 guest Desktop。完成页显示证书请求已创建并存储到磁盘后才算成功。
 16. `utm-10`：继续使用同一 guest Microsoft Edge 会话，打开 Apple Developer Small Business 页面并确认账号页；需要登录或短信验证时只用 `scripts/notion_api.py` 读取当前字段，不得启动新浏览器进程。
@@ -230,6 +231,8 @@ FEISHU_CODEX_MODEL=gpt-5.6-sol
 ABA Routing Number：<ABA 路由号码，可留空>
 Account Number：<银行账户号码，可留空>
 ```
+
+解析器兼容开发者账号字段写成 `国家：`、`电话：`、`短信接收链接：`、`邮箱：`、`初始密码：` 标签形式，短信链接 token 内含 `@` 时仍按短信链接处理，不得误判为邮箱行；写入 Notion 时仍统一生成同一个 33 行 `账号信息` 模板。
 
 银行区块可省略，两项银行号码也可留空；这不会阻止创建 run。若到 `utm-20` 时仍为空，流程在立即、5 秒、10 秒三轮重新验证父页并读取两项；三轮仍为空才发最后故障卡提示补充，卡片回复后仍以同一 Notion 页实时重读为准。
 

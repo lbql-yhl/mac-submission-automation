@@ -34,7 +34,7 @@ guest 目标：/Users/<vm_name>/Downloads/Fire_One_en1.2/.env
      --page-title '<应用名>-<vm_name>'
    ```
 
-3. 生成器精确读取账号标签 `用户名：`、`邮箱：`、`电话：`、`APP_ID：`，以及应用标签 `应用名: `、`顶级域名: `、`正式包名: `、`隐私协议: `、`用户协议: `、`支持链接: `、`应用类型：`、`应用描述：`、`关键词: `；所有匹配必须唯一。描述读取到 `关键词: ` 之前，真实换行写入 `.env` 时转换为字面量 `\n`。
+3. 生成器精确读取账号标签 `用户名：`、`邮箱：`、`电话：`、`APP_ID：`，以及应用标签 `应用名: `、`顶级域名: `、`正式包名: `、`隐私协议: `、`用户协议: `、`支持链接: `、`应用类型：`、`应用描述：`、`关键词: `；所有匹配必须唯一。`应用名: ` 的第一个全角或半角左括号及其后内容视为备注，标题匹配与 `COPYRIGHT` 仅使用括号前的非空名称。描述读取到 `关键词: ` 之前，真实换行写入 `.env` 时转换为字面量 `\n`。
 4. 校验 `APP_ID`、四位小写 `VM_NAME`、联系人姓名、正式包名、顶级域名、描述、关键词和三个 URL；`PRIMARY_CATEGORY` 必须按下表转换或保持已规范化枚举。成功后记录 `NOTION_SOURCE=api_unique_matched_and_read` 和 `ENV_DATA=validated`。
 5. 生成器必须以 mode-600 同目录临时文件写入、`fsync`、`os.replace` 并同步目录；未变化时保持 inode。重新读取宿主 `.env`，验证字段唯一、类别、禁止字段、权限、字节数/行数/SHA-256，记录 `ENV_WRITE=changed|unchanged` 与 `ENV_READBACK=exact`；写后失败则恢复旧字节/权限并独立回读。
 6. 直接继承 `utm-15` 的当前 VM/IP/SSH 身份，先验证 `${SUBMISSION_SSH_PRIVATE_KEY}` 为非符号链接普通文件并记录 `SSH_PRIVATE_KEY=verified`；每条 SSH 都显式带 `-i "$private_key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=5`。只有继承 IP 不可达时才恢复同一精确 VM。

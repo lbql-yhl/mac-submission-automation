@@ -51,7 +51,7 @@ python3 services/feishu_bot.py wait-decision \
 
 ## Purpose
 
-After `notion-utm` creates the UTM Notion page, fetch the target `应用名` from the Feishu Bitable app `26财年巨风做包表`, view `金鳞产品表格`, by API only. Build the fixed `应用信息` template, verify it, then write it through `scripts/notion_api.py` to the existing matching page under `应用信息`.
+After `notion-utm` creates the UTM Notion page, fetch the target `应用名` from the Feishu Bitable app `26财年巨风做包表`, using the run's product-table view by API only. Build the fixed `应用信息` template, verify it, then write it through `scripts/notion_api.py` to the existing matching page under `应用信息`.
 
 ## Required Inputs
 
@@ -62,16 +62,20 @@ After `notion-utm` creates the UTM Notion page, fetch the target `应用名` fro
 - Local `.env` with `NOTION_TOKEN` and `NOTION_ROOT_PAGE_ID` pointing directly to the current host-machine page.
 - Feishu Bitable identifiers:
   - Wiki node title: `26财年巨风做包表`
-  - View name: `金鳞产品表格`
+  - Default view name: `金鳞产品表格`
   - `FEISHU_PACKAGE_WIKI_NODE_TOKEN=BvyIww0GIi1EankyFiCcZyJyn9Y`
   - `FEISHU_PACKAGE_TABLE_ID=tblywCNVLJlTcOH9`
   - `FEISHU_PACKAGE_VIEW_ID=vewKUW4q4W`
+  - Known product views in the same table:
+    - `金鳞产品表格` -> `vewKUW4q4W`
+    - `祥云产品表格` -> `vew1k7hwhJ`
+    - `焰燃产品表格` -> `vewn2LYqXG`
 
 ## Hard Rules
 
-- Read the `金鳞产品表格` view in `26财年巨风做包表` by Feishu API only. Do not click, filter, open, scrape, or edit the Feishu web table. If API results contradict user-visible evidence from an already open Feishu table, use that evidence only to confirm the visible document/view/record context and then re-query the API against the matching fixed wiki/table/view; never copy field values from the web table.
+- Read product views in `26财年巨风做包表` by Feishu API only. First query `金鳞产品表格` (`view_id=vewKUW4q4W`) for the exact application name and complete all three 5/15/30-second recovery reads there. 金鳞产品表格完成三轮精确查询仍为 0 条后，才查询祥云产品表格 (`view_id=vew1k7hwhJ`). 祥云回退查询只接受应用名字段包含目标应用名的候选: use Feishu `contains` for that view only, so a target `Brovax` may match `Brovax（web A）(IP更新)`. 祥云产品表格也必须恰好 1 条才继续，包含匹配候选必须恰好 1 条; then record `FEISHU_PRODUCT_VIEW=<view-name>` as `FEISHU_PRODUCT_VIEW=祥云产品表格`. 金鳞一旦唯一命中就绝不查询祥云, and record `FEISHU_PRODUCT_VIEW=<view-name>` as `FEISHU_PRODUCT_VIEW=金鳞产品表格`. Do not click, filter, open, scrape, or edit the Feishu web table. If API results contradict user-visible evidence from an already open Feishu table, use that evidence only to confirm the visible document/view/record context and then re-query the API against the required fixed wiki/table/view; never copy field values from the web table.
 - Use the Wiki node API to resolve the real bitable `app_token`, then use bitable `records/search` with `应用名` exact match.
-- The current project data contract guarantees one matching row. Still verify that the API result is exactly one row; any unexpected zero-row or multiple-row result is a defensive Feishu data fault and must use the fault-card recovery below. Never select the first, latest, or any other row as a fallback.
+- The current project data contract guarantees one matching row across the ordered 金鳞→祥云 lookup. Still verify that the accepted API result is exactly one row; a multiple-row result in either queried view, or zero rows after the complete 祥云 query, is a defensive Feishu data fault and must use the fault-card recovery below. Never select the first, latest, or any other row as a fallback.
 - Do not edit Feishu data.
 - Do not invent missing values. `金币表格`, the exact same-named `研发金币图链接`, and source field `美女截图链接-UI` (written as `截图链接`) are required. Any 空值或不包含有效完整的 `http://` 或 `https://` URL is a Feishu data fault and must use the same fault-card recovery below; never write the invalid value to Notion.
 - The current project data contract guarantees that `应用类型` is covered by the category map below. Normalize and self-check it automatically; do not create a user-confirmation or data-repair branch for category selection.
@@ -91,7 +95,7 @@ GET /open-apis/wiki/v2/spaces/get_node?token=<wiki_node_token>&obj_type=wiki
 
 3. Confirm `data.node.obj_type` is `bitable`.
 4. Use `data.node.obj_token` as the bitable `app_token`.
-5. Search only the `金鳞产品表格` view (`view_id=vewKUW4q4W`):
+5. Search `金鳞产品表格` (`view_id=vewKUW4q4W`) first with `operator: is`. Repeat that exact filtered search at 5/15/30 seconds with a fresh token and resolved table identity. Only after all three 金鳞 reads return exactly `0` items, search `祥云产品表格` (`view_id=vew1k7hwhJ`) with `operator: contains`; require exactly one containing item. A 金鳞 unique result is final and prohibits querying 祥云.
 
 ```text
 POST /open-apis/bitable/v1/apps/<app_token>/tables/<table_id>/records/search
@@ -106,7 +110,7 @@ with:
   "filter": {
     "conjunction": "and",
     "conditions": [
-      { "field_name": "应用名", "operator": "is", "value": ["<应用名>"] }
+      { "field_name": "应用名", "operator": "is|contains", "value": ["<应用名>"] }
     ]
   }
 }
@@ -126,8 +130,8 @@ with:
    - The unique row's exact same-named `研发金币图链接` does not contain a valid complete HTTP(S) URL: use the same stage, fault `研发金币图链接 URL 无效`, evidence `RND_COIN_IMAGE_URL=invalid`.
    - The unique row's `美女截图链接-UI` (target `截图链接`) is blank: stage `notion-utm-1 截图链接`, fault `截图链接为空`, evidence `SCREENSHOT_URL=blank`.
    - The unique row's `美女截图链接-UI` does not contain a valid complete HTTP(S) URL: use the same stage, fault `截图链接 URL 无效`, evidence `SCREENSHOT_URL=invalid`.
-3. 先自动恢复：重新取得 Feishu tenant token，重新核对固定 app/table/view identity，并在 5/15/30 秒各重新执行一次相同精确过滤；每轮都重新验证返回条数、目标字段名和 URL 语法，禁止使用旧响应、其他 view、第一条或最新一条。若用户已提供截图、浏览器调试上下文或已经打开的飞书表格证明“页面可见有值但 API 读空”，只能把该证据用于只读核对当前打开的是不是 `26财年巨风做包表` / `金鳞产品表格` / 目标应用行所在上下文；字段正文、URL、账号或 token 仍必须来自同一固定表/view 的 API 重新查询。发现 API 配置与可见上下文不一致时，记录 `FEISHU_TABLE_CONTEXT_MISMATCH=verified`，停止写 Notion，并把修复沉淀回本技能或对应脚本后再继续。任一轮得到唯一完整行即记录 `DATA_RECOVERY=verified` 并继续。
-4. 三轮仍为零/多行、字段空白或 URL 无效时，这些值只能由外部权威表格补齐，记录 `AUTO_RECOVERY_ATTEMPTS=3`、具体 `AUTO_RECOVERY_ACTIONS`、`AUTO_RECOVERY_RESULT=unrepairable`；此时才使用文件开头的统一 `notify-fault` 命令向原 `chat_id` 发送最后故障卡并等待 fresh decision。不得发送到日报群。
+3. 先自动恢复：重新取得 Feishu tenant token，重新核对固定 app/table/view identity，并在 5/15/30 秒各重新执行一次金鳞 `is` 精确过滤；每轮都重新验证返回条数、目标字段名和 URL 语法，禁止使用旧响应、第一条或最新一条。金鳞三轮均为零后，才以新 token、重新解析的固定 table identity 和 `contains` 过滤条件查询祥云；包含匹配候选必须恰好 1 条，才记录 `DATA_RECOVERY=verified` 并继续，金鳞唯一行则直接继续且不得查询祥云。若用户已提供截图、浏览器调试上下文或已经打开的飞书表格证明“页面可见有值但 API 读空”，只能把该证据用于只读核对当前打开的是不是 `26财年巨风做包表` / 当前查询 view / 目标应用行所在上下文；字段正文、URL、账号或 token 仍必须来自同一固定表/view 的 API 重新查询。发现 API 配置与可见上下文不一致时，记录 `FEISHU_TABLE_CONTEXT_MISMATCH=verified`，停止写 Notion，并把修复沉淀回本技能或对应脚本后再继续。
+4. 金鳞三轮后祥云 `contains` 查询仍为零、任一已查询 view 多行、字段空白或 URL 无效时，这些值只能由外部权威表格补齐，记录 `AUTO_RECOVERY_ATTEMPTS=3`、具体 `AUTO_RECOVERY_ACTIONS`、`AUTO_RECOVERY_RESULT=unrepairable`；此时才使用文件开头的统一 `notify-fault` 命令向原 `chat_id` 发送最后故障卡并等待 fresh decision。不得发送到日报群。
 5. 收到卡片反馈后由当前等待中的执行上下文立即处理，不需要人工再次触发：
    - `stop`：原故障卡更新为已停止，立即停止整个流程并结束当前 run，不再发送独立停止通知。
    - `manual_continue`：立即重新读取同一应用的 Feishu API 精确匹配结果，复核人工修正后的现场并从阻断点继续。
@@ -218,8 +222,8 @@ The current project guarantees that the Feishu value belongs to this map. Perfor
 
 Before the Notion API write, verify:
 
-- Exactly one Feishu row matched the target `应用名`.
-- The API query used the `金鳞产品表格` view ID `vewKUW4q4W`.
+- Exactly one Feishu row matched the target `应用名`: a 金鳞 unique match ends lookup immediately, while a 金鳞 three-read zero result may continue only to a 祥云 unique match.
+- The API query recorded `FEISHU_PRODUCT_VIEW=金鳞产品表格` or `FEISHU_PRODUCT_VIEW=祥云产品表格`; a 祥云 result is valid only after the three 金鳞 zero-result reads, and its view ID must be `vew1k7hwhJ`.
 - `支持链接` equals `隐私协议` when `支持协议` is blank.
 - `应用类型` is one of the category codes above, not an English display name such as `Graphics & Design`.
 - `金币表格`, `研发金币图链接`, and `截图链接` must each be a non-empty full URL; read `研发金币图链接` only from the exact same-named Feishu field, not from an attachment or another similarly named field.

@@ -84,6 +84,14 @@ def main() -> None:
     assert parsed == dict(data, PRIMARY_CATEGORY="GRAPHICS_AND_DESIGN")
     assert parsed["DESCRIPTION"] == "First paragraph.\n\nSecond paragraph."
 
+    annotated_application = APPLICATION_SECTION.replace(
+        "应用名: Example", "应用名: Example（web A）(IP更新)"
+    )
+    annotated = parse_notion_sections(
+        ACCOUNT_SECTION, annotated_application, "Example-abcd"
+    )
+    assert annotated["COPYRIGHT"] == "Example"
+
     with tempfile.TemporaryDirectory() as tmp:
         try:
             output = write_env(data, Path(tmp))

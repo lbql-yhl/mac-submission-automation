@@ -48,6 +48,16 @@
 6. Apple 消费或拒绝验证码后立即清空剪贴板并清除 `code`、`body`、`SMS_URL` 等变量；错误码不得复用。成功记录 `PHONE_OPTION=verified_unique`、`OTP_SOURCE=verified_fresh_unique`、`OTP_PASTE=verified_six_boxes`、`SENSITIVE_CLIPBOARD=cleared`。
 7. 瞬态失败执行三轮：每轮都重新核对当前提示、重新读取电话/短信平台、重新请求并只接受当前唯一新码。CAPTCHA、账号锁定、账号不匹配、未知挑战或持续零/多码不能安全修复时，也必须完成三轮独立只读复核并记录后，才允许调用最后故障卡。
 
+### `OP-APPLE-ACCOUNT-LOGIN-SCRIPT`：Notion API 到 guest 的 Apple Account 登录
+
+1. 仅由 `utm-7` 调用。先确认当前 run、精确 `vm_name`、guest IP、最终 SSH 用户和 `${SUBMISSION_SSH_PRIVATE_KEY}`；不得重新选择 VM、读取其他页面或使用宿主桌面视觉操作。
+2. 在项目根目录执行 `python3 scripts/notion_api.py verify-parent --title '<宿主机名称>'`，然后从唯一匹配的 `<应用名>-<vm_name>` 页面 `账号信息` 依次读取 `邮箱：`、非空的 `修改后的密码：`（为空才读 `初始密码：`）、`电话：` 和 `电话短信接收平台：`。值只能进入当前脚本内存，不能进入 argv、日志、卡片或临时明文文件；短信 URL 必须是有效 `http(s)`。
+3. 使用 `scripts/utm_7_login.py` 将项目内四个登录 helper 上传到同一 guest Downloads 目录，并用新 SSH 只读核对四个 SHA-256；脚本文件不从旧 guest、聊天记录或宿主 Downloads 路径回退。上传失败只修复同一 SSH 目标并独立复验三轮。
+4. 账号值通过 SSH 标准输入 JSON 传给 guest `apple_account_login.py --stdin-json`；不得把账号、密码、电话、短信 URL 放在 SSH 命令参数、环境导出命令、剪贴板、日志或截图中。guest 入口每次启动先结束同一路径的旧登录实例，再加载同目录的最新 helper。
+5. guest helper 自动打开/复用 System Settings，使用 Accessibility API 完成邮箱、密码、Continue、唯一电话尾号、最新短信验证码、Mac Password `1234`、`Don't know passcode?`/`Enter Passcode Later` 和 `Don't Merge`；全流程不得调用 Computer Use、坐标、截图点击、键盘盲输或人工确认。邮箱在任意阶段出现即视为登录成功，跳过不必要步骤。
+6. 验证码由 guest helper 从当前 Notion SMS URL 获取最新六位码：有时间字段按时间窗取最新，无时间字段按页面顺序取最后一条；该解析只属于本脚本路径，不把页面历史条目误判为“多码”。安全提示按钮任意一个出现就点击；AX 瞬态错误只在同一页面重读，不把 `-25205` 直接当作外部故障。
+7. 成功证据必须同时包括：guest helper 退出码为 `0`、Apple Account 详情页邮箱与 Notion `邮箱：` 完全匹配、首次邮箱确认后 System Settings 已关闭、重开后再次确认同一邮箱、第二次确认后保持 System Settings 打开；记录 `APPLE_ACCOUNT=verified`、`UTM_7=verified`。邮箱不匹配、账号锁定、CAPTCHA、未知挑战、无法判定最新验证码或第二次复核失败，先按同一 VM 三轮自动恢复/只读复核，穷尽后才进入最后故障卡。
+
 ### `OP-FIXED-PASSWORD-1234`：项目固定 VM 密码
 
 固定密码只有 `1234`，无用户、run 或账号覆盖分支，也不得向用户询问。先按当前提示类型选择唯一子流程：
@@ -229,7 +239,7 @@ python3 services/feishu_bot.py wait-decision \
 
 外部不可修复状态同样必须用 `--recovery-attempts 3 --recovery-result unrepairable --unrepairable`，并在 `--recovery-actions` 分别写明三轮独立只读复核；不存在 `0` 次直接发卡例外，也不能用 `unrepairable` 绕过可执行的自动恢复。
 
-同一故障事件只发送一张卡，复用稳定 `decision_id` 和 `message_uuid`；任何其他 waiting 决定存在时禁止覆盖 pending 或发第二张卡。只有取得非空 `message_id` 后才开始 3600 秒计时。新卡回调必须携带当前 `decision_id` 且 `operator_id` 非空；旧卡、缺操作人、非本机或原 `chat_id` 无效的回调只审计并拒绝，不修改 run。回调只解除等待，不降低检查标准。`manual_continue` 和 `retry_skill` 都先重读同一现场并跳过仍有当前证据的完成步骤。已投递且历史上不含 `decision_id` 的旧故障卡仅保留兼容，但仍必须有非空操作人且只能决定当前同一 legacy pending；一旦已创建新 `decision_id`，旧卡立即失效。
+同一故障事件只发送一张卡，复用稳定 `decision_id` 和 `message_uuid`；任何其他 waiting 决定存在时禁止覆盖 pending 或发第二张卡。只有取得非空 `message_id` 后才开始 3600 秒计时。新卡回调必须携带当前 `decision_id` 且 `operator_id` 非空；旧卡、缺操作人、非本机或原 `chat_id` 无效的回调只审计并拒绝，不修改 run。回调只解除等待，不降低检查标准。`manual_continue` 和 `retry_skill` 都先重读同一现场并跳过仍有当前证据的完成步骤。已投递且历史上不含 `decision_id` 的旧故障卡仅保留兼容，但仍必须有非空操作人且只能决定当前同一 legacy pending；一旦已创建新 `decision_id`，旧卡立即失效。长连接 `CARD` 帧先兼容归一化 `event.action.value` 的 JSON 字符串，再进入 SDK 严格模型；HTTP 回调仍复用同一业务解析器，避免传输层 500/-101 被误判为业务决定失败。
 
 ## 10. 完成与交接
 

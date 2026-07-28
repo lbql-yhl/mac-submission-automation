@@ -305,7 +305,8 @@ python3 services/feishu_bot.py wait-decision \
    - `RUN_STATE=prepared`：业务命令未越过运行态提交，可修复预检后使用同一 attempt 启动一次；
    - `RUN_STATE=running` 但进程不存在、status 缺失/截断或与 ledger ID 不同：状态不明，记录 `FILL_DESCRIPTION=blocked_ambiguous`，先按 `utm-18-business-ambiguous` 执行恢复矩阵；恢复穷尽后才发送最后故障卡；不得猜测最新日志或自动重跑。
 11. 在 SSH 已恢复且传输状态明确的前提下，任一环境预检、npm、`tee`、状态文件或日志验证失败时先暂停新的业务副作用，不得立刻发卡或盲重试。完整读取本轮唯一 ledger/log/status/进程与 App Store Connect 14 项当前状态并自动分类：
-    - 业务命令尚未启动、status 仍为 `prepared` 的环境/路径/CDP/登录问题：修复同一环境，重新执行第 6 步预检；全部通过后只使用同一 prepared attempt 启动一次。
+   - 若日志指向 `apple-store-bm/config/prod.yml` 的 API-Key 校验，先只读核对生成器写出的 YAML 缩进；`key_id`、`private_key_path` 与 `bundle_id` 都必须以两个前导空格写入，也必须以同样的完整行进行 `grep -Fqx` 校验。不得因为缺少该缩进而更换 Team Key、重下 `.p8` 或再次启动业务命令。
+   - 业务命令尚未启动、status 仍为 `prepared` 的环境/路径/CDP/登录问题：修复同一环境，重新执行第 6 步预检；全部通过后只使用同一 prepared attempt 启动一次。
     - `tee` 失败但 npm 进程仍在：继续只读等待同一进程并从其 status/业务页面核对，不启动第二次。
     - npm 明确在处理任何产品前失败，且日志、status、进程和业务页面四方共同证明零业务副作用：记录 `ZERO_BUSINESS_SIDE_EFFECTS=verified`，修复明确根因，生成新的唯一 attempt/ledger/log 并自动重试一次。
     - 已产生任意部分业务结果：只读对账并保留证据，禁止创建新 attempt、禁止以“幂等”推定续跑；作为不可逆结果不明确进入最后故障卡。

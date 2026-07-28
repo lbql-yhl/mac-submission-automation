@@ -72,6 +72,26 @@ Account Number：000000000000
     }
     assert data["code_link"] == "https://example.com/ios/sample-app.git"
 
+    labeled_text = """使用的宿主机：海淋
+应用名：LabelApp
+代理信息：198.51.100.20:6967:proxyuser:proxypass
+代码链接：https://example.com/ios/label-app.git
+开发者账号信息：
+国家：英国
+电话：18457393658
+短信接收链接：https://example.com/sms-record?token=sample@example.com
+邮箱：label@example.com
+初始密码：InitialPass123!
+"""
+    labeled_data = parse_submission_data(labeled_text)
+    assert labeled_data is not None
+    assert labeled_data["developer_account"]["country"] == "英国"
+    assert labeled_data["developer_account"]["email"] == "label@example.com"
+    assert labeled_data["developer_account"]["password"] == "InitialPass123!"
+    assert labeled_data["developer_account"]["phone"] == "18457393658"
+    assert labeled_data["developer_account"]["sms_url"] == "https://example.com/sms-record?token=sample@example.com"
+    assert labeled_data["bank_info"] == {"aba_routing_number": "", "account_number": ""}
+
     with tempfile.TemporaryDirectory() as tmp:
         old_images_dir = feishu_bot.VM_IMAGES_DIR
         old_runs_file = feishu_bot.RUNS_FILE

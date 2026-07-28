@@ -16,6 +16,7 @@ import test from 'node:test';
 
 import {
   buildStatus,
+  matchingBuildsQuery,
   classifyMatchingUploads,
   commitBuildUploadFileBody,
   createBuildUploadBody,
@@ -28,6 +29,13 @@ import {
   swiftLibraries,
   writeAttempt,
 } from '../scripts/utm_22_distribute.mjs';
+
+test('queries existing builds through the supported builds collection', () => {
+  assert.equal(
+    matchingBuildsQuery({ version: '1.2.3', build: '45' }, '1234567890'),
+    '/builds?filter%5Bapp%5D=1234567890&filter%5Bversion%5D=45&include=preReleaseVersion&fields%5Bbuilds%5D=version%2CprocessingState%2CpreReleaseVersion&fields%5BpreReleaseVersions%5D=version&limit=200',
+  );
+});
 
 test('writes upload attempts atomically as mode 600 and rejects symlinks', () => {
   const directory = mkdtempSync(join(tmpdir(), 'utm22-attempt-ledger-test-'));

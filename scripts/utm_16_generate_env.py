@@ -84,7 +84,9 @@ def parse_notion_sections(account_text: str, application_text: str, page_title: 
     if len(name_parts) != 2:
         raise ValueError("用户名： must contain first and last names")
 
-    app_name = _field(application_lines, "应用名: ")
+    app_name = re.split(r"[（(]", _field(application_lines, "应用名: "), maxsplit=1)[0].rstrip()
+    if not app_name:
+        raise ValueError("应用名: must contain a name before any remark")
     if app_name != title_app_name:
         raise ValueError("Notion page title does not match 应用名: ")
 

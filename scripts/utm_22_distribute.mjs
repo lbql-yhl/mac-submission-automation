@@ -525,20 +525,26 @@ function loadOrCreateAttempt(path, metadata, appId) {
   return attempt;
 }
 
-async function matchingBuildUploads(metadata, appId, credentials) {
+export function matchingBuildsQuery(metadata, appId) {
   const query = new URLSearchParams({
     'filter[app]': appId,
-    'filter[cfBundleShortVersionString]': metadata.version,
-    'filter[cfBundleVersion]': metadata.build,
-    'filter[platform]': 'IOS',
-    'fields[buildUploads]': 'cfBundleShortVersionString,cfBundleVersion,platform,state,build',
+    'filter[version]': metadata.build,
+    include: 'preReleaseVersion',
+    'fields[builds]': 'version,processingState,preReleaseVersion',
+    'fields[preReleaseVersions]': 'version',
     limit: '200',
   });
-  const response = await apiRequest('GET', `/buildUploads?${query}`, credentials);
+  return `/builds?${query}`;
+}
+
+async function matchingBuilds(metadata, appId, credentials) {
+  const response = await apiRequest('GET', matchingBuildsQuery(metadata, appId), credentials);
+  const preReleaseVersions = new Map((response.included || [])
+    .filter((item) => item?.type === 'preReleaseVersions')
+    .map((item) => [item.id, item.attributes?.version]));
   return (response.data || []).filter((item) => (
-    item?.attributes?.cfBundleShortVersionString === metadata.version
-    && item?.attributes?.cfBundleVersion === metadata.build
-    && item?.attributes?.platform === 'IOS'
+    item?.attributes?.version === metadata.build
+    && preReleaseVersions.get(item?.relationships?.preReleaseVersion?.data?.id) === metadata.version
   ));
 }
 
@@ -587,29 +593,14 @@ export async function uploadIpa(metadata, options) {
 
   const attempt = loadOrCreateAttempt(options.attemptFile, metadata, options.appId);
   console.log(`UPLOAD_ATTEMPT_ID=${attempt.attemptId}`);
-  const classification = classifyMatchingUploads(await matchingBuildUploads(metadata, options.appId, credentials));
-  if (classification.action === 'ambiguous') {
-    writeAttempt(options.attemptFile, { ...attempt, state: 'ambiguous_existing_upload', classification });
-    throw new Error('same-version build upload state is ambiguous; refusing to create another upload');
-  }
-  if (classification.action === 'failed') {
-    writeAttempt(options.attemptFile, { ...attempt, state: 'failed', buildUploadId: classification.uploadId });
-    throw new Error('same-version build upload is already failed; refusing to create another upload');
-  }
-  if (classification.action === 'resume') {
+  const existingBuilds = await matchingBuilds(metadata, options.appId, credentials);
+  if (existingBuilds.length > 0) {
     writeAttempt(options.attemptFile, {
       ...attempt,
-      state: 'resuming',
-      buildUploadId: classification.uploadId,
+      state: existingBuilds.length === 1 ? 'existing_build_no_create' : 'ambiguous_existing_upload',
+      existingBuildIds: existingBuilds.map((item) => item.id),
     });
-    const resumed = await pollBuildUpload(classification.uploadId, credentials, options.waitSeconds);
-    writeAttempt(options.attemptFile, {
-      ...attempt,
-      state: resumed.state === 'COMPLETE' && resumed.buildProcessingState === 'VALID' ? 'verified' : 'processing',
-      buildUploadId: classification.uploadId,
-      buildId: resumed.buildId,
-    });
-    return resumed;
+    throw new Error('same-version build already exists; refusing to create another upload');
   }
 
   writeAttempt(options.attemptFile, { ...attempt, state: 'creating_build_upload' });
@@ -618,26 +609,17 @@ export async function uploadIpa(metadata, options) {
     upload = await apiRequest('POST', '/buildUploads', credentials,
       createBuildUploadBody(options.appId, metadata.version, metadata.build));
   } catch (error) {
-    const recoveryDelays = [5000, 10000, 20000];
-    for (const delay of recoveryDelays) {
+    for (const delay of [5000, 10000, 20000]) {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, delay));
-      const recovered = classifyMatchingUploads(await matchingBuildUploads(metadata, options.appId, credentials));
-      if (recovered.action === 'resume') {
+      const recoveredBuilds = await matchingBuilds(metadata, options.appId, credentials);
+      if (recoveredBuilds.length > 0) {
         writeAttempt(options.attemptFile, {
           ...attempt,
           state: 'recovered_after_create_result_unknown',
-          buildUploadId: recovered.uploadId,
+          existingBuildIds: recoveredBuilds.map((item) => item.id),
         });
-        const resumed = await pollBuildUpload(recovered.uploadId, credentials, options.waitSeconds);
-        writeAttempt(options.attemptFile, {
-          ...attempt,
-          state: resumed.state === 'COMPLETE' && resumed.buildProcessingState === 'VALID' ? 'verified' : 'processing',
-          buildUploadId: recovered.uploadId,
-          buildId: resumed.buildId,
-        });
-        return resumed;
+        throw new Error('build appeared after an ambiguous create result; refusing to create another upload');
       }
-      if (recovered.action !== 'create') break;
     }
     writeAttempt(options.attemptFile, { ...attempt, state: 'create_result_ambiguous' });
     throw new Error(`build upload create result is ambiguous; no retry was performed (${error.message})`);

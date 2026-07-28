@@ -49,7 +49,7 @@ SSH 直接继承 `utm-21` 已验证的同一 VM/IP/用户、工作区和宿主�
       --private-key '<绝对 AuthKey_*.p8 路径>'
     ```
 
-14. 在任何 Apple 创建请求前，先为当前 run + App ID + Archive manifest + 版本 + 构建号持久化稳定 `UPLOAD_ATTEMPT_ID`。attempt 路径必须显式传入脚本并位于当前用户 Downloads，只能是不存在或非符号链接普通文件；脚本用随机同目录临时文件、创建时 mode 600、文件/目录 `fsync` 和原子替换，每次写后独立回读身份/内容/权限，记录 `UPLOAD_ATTEMPT_MODE=600`。唯一 `PROCESSING`/`COMPLETE` 自动绑定并恢复；多个匹配、`FAILED`/`INVALID` 或身份冲突不新建上传。只有零匹配时才创建 `buildUploads` / `buildUploadFiles`，并一旦获得就持久化 `BUILD_UPLOAD_ID`。POST 结果未知时按 5/10/20 秒只读查询，禁止重发；随后按 15/30/60/120 秒轮询同一 Build Upload。最终必须为 `COMPLETE`，关联 Build 必须为 `VALID`。
+14. 在任何 Apple 创建请求前，先为当前 run + App ID + Archive manifest + 版本 + 构建号持久化稳定 `UPLOAD_ATTEMPT_ID`。attempt 路径必须显式传入脚本并位于当前用户 Downloads，只能是不存在或非符号链接普通文件；脚本用随机同目录临时文件、创建时 mode 600、文件/目录 `fsync` 和原子替换，每次写后独立回读身份/内容/权限，记录 `UPLOAD_ATTEMPT_MODE=600`。脚本以 `/v1/builds`（而不是不支持集合读取的 `buildUploads`）只读查询同一 App、版本和构建号；任何已有 Build 或多个候选均拒绝新建。只有零匹配时才创建 `buildUploads` / `buildUploadFiles`，并一旦获得就持久化 `BUILD_UPLOAD_ID`。POST 结果未知时按 5/10/20 秒只读重查 `/v1/builds`，记录 `recovered_after_create_result_unknown` 或 `create_result_ambiguous`，禁止重发；随后按 15/30/60/120 秒轮询同一 Build Upload。最终必须为 `COMPLETE`，关联 Build 必须为 `VALID`。
 
 ## Game Center 恢复
 

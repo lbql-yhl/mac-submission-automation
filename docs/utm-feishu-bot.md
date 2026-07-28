@@ -11,7 +11,7 @@
 - 生成 `runtime/feishu-runs.json` 和 `runtime/prompts/<run-id>.md`。
 - 故障记录、恢复证据门禁和三按钮最后故障卡；`utm-24` 以五图/15 项自动自检授权并自动提交，正常主线不发提审确认卡；`utm-25` 先通过 Notion API 登记唯一 Active Key/P8，再发送无按钮成功通知卡。旧运行的提审确认回调仅保留兼容能力。
 
-飞书用户提交格式以 [README.md 的“飞书登记格式”](../README.md#飞书登记格式) 为唯一版本；宿主机、应用、代理、代码链接和开发者账号信息仍为初始必填。银行区块可整体省略，`ABA Routing Number：` 和 `Account Number：` 也可留空；解析器仍创建 run，`notion-utm` 在匹配 Notion 页 `账号信息` 中保留两条空标签。到 `utm-20` 时只通过 `scripts/notion_api.py` 实时读取；空值会在立即、5 秒、10 秒三轮 `verify-parent` + 双字段重读后复验，三轮仍为空才以权威数据缺失发送 `utm-20-bank-info-missing` 最后故障卡。
+飞书用户提交格式以 [README.md 的“飞书登记格式”](../README.md#飞书登记格式) 为唯一版本；宿主机、应用、代理、代码链接和开发者账号信息仍为初始必填。解析器兼容开发者账号字段写成 `国家：`、`电话：`、`短信接收链接：`、`邮箱：`、`初始密码：` 标签形式，且短信链接 token 内含 `@` 时不得把该行误判为邮箱行。银行区块可整体省略，`ABA Routing Number：` 和 `Account Number：` 也可留空；解析器仍创建 run，`notion-utm` 在匹配 Notion 页 `账号信息` 中保留两条空标签。到 `utm-20` 时只通过 `scripts/notion_api.py` 实时读取；空值会在立即、5 秒、10 秒三轮 `verify-parent` + 双字段重读后复验，三轮仍为空才以权威数据缺失发送 `utm-20-bank-info-missing` 最后故障卡。
 
 每台机器必须在自己的 `.env` 配置唯一 `SUBMISSION_HOST_MACHINE`：只有完整登记模板中的 `使用的宿主机` 精确匹配时才启动提审，其他宿主机登记静默忽略；普通 Codex 对话不受限制。所有卡片和兼容回调在修改 run 前都重新校验 run 宿主机与本机配置，缺失或不匹配时不得执行。
 
@@ -62,19 +62,19 @@ UTM 后续交接规则：
 - 同一故障事件只发送一次故障卡。当前 pending fault 仍处于 `waiting` 时复用原 pending、稳定 `decision_id` 和飞书消息 `uuid`；任何其他 waiting 决定都不得覆盖 pending 或产生第二张卡。确认送达后不再调用发送接口。卡片发送结果不明时只允许用同一 `uuid` 完成底层投递，不产生第二张卡；新卡回调必须匹配当前 `decision_id`、非空操作人、本机宿主和 run 原非日报 `chat_id`，旧卡不能决定新故障。用户决定处理完成后再次检测到故障，属于新的故障事件，只发送一张新卡。
 - 只有飞书返回非空 `message_id` 才算首次确认送达，写入 `first_notified_at` 并开始固定 3600 秒等待；故障卡发送后当前执行器原地等待，等待期间不发送提醒卡。一小时无回复时记录 `decision_timeout_stop`，只向原 `chat_id` 发送一次无按钮超时卡片。超时卡片发送后停止整个流程；不再重发、不再轮询、不再恢复、不再执行任何后续技能，迟到、旧卡或旧 `decision_id` 回调无效。
 - 飞书机器人保留四类卡片能力：最后故障卡、用户确认 API 失败时的通用确认兜底卡、旧运行兼容提审确认卡、成功通知卡。四类卡在修改 runtime 或发送前均校验本机 host 所有权和 run 内原始非日报 `chat_id`。只有技能正文明确要求用户作业务决定时才调用 `notify-confirmation`；它先请求 `USER_CONFIRM_API_URL`，批准即记录 `confirm_continue` 和 `operator_id=user-api` 并立即执行已审批动作，不发送确认卡；API 不可达或不可判定时才回退卡片，`cancel_operation` 停止，回调后仍重验现场。新 run 的 `utm-24` 不创建任何 waiting 确认：自检通过后自动授权并提交一次。旧 review-card/callback 仍可完成旧 run但不能进入新主线。`utm-25` 只有在唯一 Active Key/P8 与 Notion 独立回读全部验证后才调用 `notify-review-success`，用户可见成功卡最多一张。
-- `notion-utm-1` 的项目数据约定唯一匹配，0 条/多条仅保留为防御性故障检查。空值、URL 无效或行数异常先重新读取固定 view 三轮并核对应用唯一键；若已打开表格的可见上下文与 API 结果矛盾，可见证据只用于核对文档/view/记录上下文，禁止抄取字段值。确认 API 上下文不一致时记录 `FEISHU_TABLE_CONTEXT_MISMATCH=verified`、停止写 Notion，并先把修复沉淀到项目技能或脚本；恢复仍不唯一/无数据才发最后故障卡。Notion `应用信息` 冲突则自动重读唯一飞书记录、重建校验、覆盖并精确回读。`应用类型` 使用固定映射自动规范化，不设人工选择分支。
+- `notion-utm-1` 的项目数据约定在有序回退中唯一匹配。金鳞产品表格完成三轮精确查询仍为 0 条后，才查询祥云产品表格：先以 `金鳞产品表格`（`view_id=vewKUW4q4W`）在 5/15/30 秒三轮 `is` 精确读取并核对应用唯一键；三轮均为零才以 `contains` 查询同表 `祥云产品表格`（`view_id=vew1k7hwhJ`）。祥云回退查询只接受应用名字段包含目标应用名的候选，祥云产品表格也必须恰好 1 条才继续，包含匹配候选必须恰好 1 条；金鳞一旦唯一命中就绝不查询祥云，并记录 `FEISHU_PRODUCT_VIEW=<view-name>` 为 `FEISHU_PRODUCT_VIEW=金鳞产品表格` 或 `FEISHU_PRODUCT_VIEW=祥云产品表格`。任一已查询视图多条、有序回退后仍零条、空值或 URL 无效才进入最后故障卡。若已打开表格的可见上下文与 API 结果矛盾，可见证据只用于核对文档/view/记录上下文，禁止抄取字段值。确认 API 上下文不一致时记录 `FEISHU_TABLE_CONTEXT_MISMATCH=verified`、停止写 Notion，并先把修复沉淀到项目技能或脚本；恢复仍不唯一/无数据才发最后故障卡。Notion `应用信息` 冲突则自动重读唯一飞书记录、重建校验、覆盖并精确回读。`应用类型` 使用固定映射自动规范化，不设人工选择分支。
 
 - 固定密码/SSH 全自动硬规则：`demo` 与所有 `<vm_name>` 用户的项目固定登录/提权密码始终为 `1234`，不存在用户或 run 覆盖分支；完整调用 `OP-FIXED-PASSWORD-1234`，VM 登录逐键输入、已识别 GUI 授权弹窗走原生粘贴、PTY 提示只交互输入且绝不进入 argv/管道/日志。`utm-2` 保留或自动创建宿主私钥，缺失 `.pub` 时从现有私钥导出，安装给 `demo` 后核对权限、指纹和 BatchMode；`utm-3` 自动配置最终用户。连接失效时锁定同一精确 VM，最多三轮刷新 IP、检查 Remote Login/端口、恢复同一公钥并复验身份；三轮仍失败才记录恢复证据并发送最后故障卡，不向用户索取信息或切换 VM。
 - `utm-1` 完成后必须停在目标 VM 的 macOS 桌面。
 - `utm-2` 在宿主机通过目标配置 MAC/ARP 找到 VM IP，最多自动修复 Remote Login 三轮，验证 Apple `MachineIdentifier` 和 guest 三码；随后用宿主 PTY/`ssh-copy-id` 自动为 `demo` 安装并验证宿主公钥，记录 `SSH_SERVICE=verified` 和 `SSH_DEMO_KEY=verified`。
 - `utm-3` 只通过宿主机 SSH 执行 `sudo sysadminctl` 创建 `<vm_name>` 管理员、开启 Secure Token，并验证 `admin` 组；随后自动安装同一宿主公钥并核对权限/指纹。首次发现同名或部分账号时先做三轮独立只读所有权、admin、token、home 和 key 检查；可证明属于同一中断 run 时从首个缺失项恢复，外部冲突或无法证明所有权时才发送 `utm-3-user-exists` 最后故障卡，绝不删除或猜测复用。
-- `vm-down` 只通过 SSH 在 guest macOS 内执行 `/sbin/shutdown` 正常关机或重启；禁止 `utmctl stop` 和 UTM GUI 电源控制。停机后、开机前必须在 UTM 的目标 VM 编辑/设置窗口 `共享` 页确认 `${SUBMISSION_SHARED_DIR}` 已添加且 `只读?` 已启用；如果缺失就勾选 `添加只读` 后添加该目录并保存，若已有但非只读则移除后按只读重加。复查通过后再用 `utmctl start` 开机，登录 `<vm_name>`，完成首次登录固定选择，并验证 SSH/admin、guest 共享目录挂载和只读写入失败。`socks5.yml` 由后续 `utm-5` 生成，不是 `vm-down` 前置条件。
+- `vm-down` 只通过 SSH 在 guest macOS 内执行 `/sbin/shutdown`；禁止 `utmctl stop`、`utmctl start` 和 UTM GUI 电源控制。停机后只完成共享配置与持久设置校验；后续需要运行态时仅接管外部已启动的同一 VM。
 - `utm-4` 只通过宿主机 SSH 关闭软件更新自动开关，删除 `demo` 用户和 `/Users/demo`，并用命令验证；不再修改“点按墙纸以显示桌面”。
 - `utm-5` 只在宿主机生成并覆盖 `${SUBMISSION_SHARED_DIR}/socks5.yml`，代理数据来自当前 Feishu 提交；不 SSH、不改 UTM、不打开 Clash。
 - `files` 在克隆 VM 内通过 SSH 把 `/Volumes/My Shared Files/共享文件` 内容复制到当前用户的 `$HOME/Downloads`，保留隐藏文件和子目录，并逐项校验路径、类型、链接目标和 SHA-256 内容；源目录不删除。
 - `utm-clash` 在克隆 VM 内配置固定开关并导入 `$HOME/Downloads/socks5.yml`。Profile/Proxy 点击每次使用最新截图；五次延迟未变为数字后，自动核对配置、端口、进程和公网出口，确定性修复并重启 Clash Verge 一次，再完整复验。仍失败才发最后故障卡。匹配当前 UTM/Computer Use 的 Automation 权限弹窗自动 `Allow` 并确认关闭；来源不明时先独立重读进程/窗口归属三轮，仍不明才发最后卡。
 - `utm-6` 必须在 `utm-clash` 后执行；在 guest 终端用当前 Feishu 运行的代理 IP 与公共出口 IPv4 做精确比较，只有一致才算代理成功。随后按 `utm-6` 设置并检查 guest `~/.zshrc` 的 Ruby/Flutter PATH、Pub 镜像和 Flutter 存储镜像变量；不一致或检查失败时不得继续。
-- `utm-7` 在 `utm-6` 后执行，只通过 `scripts/notion_api.py` 读取匹配页已登记的 Apple Account 字段，再在目标 UTM guest 的系统设置登录；已知电话/SMS 验证与固定 `1234` Mac Password 提示自动处理。账号、号码、验证码或挑战异常先执行 5/10/20 秒实时来源重读、同一页面/账号只读分类和可逆 GUI 恢复；只有验证码仍零/多、CAPTCHA、锁号或未知挑战被证明为外部不可修复时才进入最后故障卡。
+- `utm-7` 在 `utm-6` 后执行，只通过 `scripts/utm_7_login.py` 调用同一 Notion API 读取匹配页的邮箱、当前密码、电话和短信链接，再经 SSH-stdin JSON 将值交给项目登录 helper；helper 在 guest 内无视觉完成 Apple Account 登录、电话/SMS 验证、固定 `1234` Mac Password、随机安全弹窗和邮箱关闭/重开复核；验证码按时间字段取当前最新、无时间字段按页面顺序取最后一条。账号、号码、无法判定最新验证码或挑战异常先执行同一 VM/Notion/SSH 的自动恢复；只有 CAPTCHA、锁号或未知挑战被证明为外部不可修复时才进入最后故障卡。
 - `utm-8` 在 `utm-7` 后执行，仅操作同一目标 UTM guest；通过字段级 Notion API 读写并核对最终控件。全部自检通过后自动点击一次 `Change`/`Continue`；复杂度拒绝时最多自动生成三个互不相同且符合规则的候选，每次重新填写、复验后再提交一次，接受后才更新 `修改后的密码：`。已知短信/2FA 自动处理；账号锁定或未知安全弹窗经只读分类后才进入最后故障卡。
 - `utm-9` 在 `utm-8` 后执行：通过 Notion API 读取 `邮箱：`，通过 SSH 打开 guest Keychain Access，用 Computer Use 进入 Certificate Assistant，创建并保存证书请求到 guest Desktop，验证文件已生成。
 - `utm-10` 在 `utm-9` 后执行：继续使用同一个 guest Edge 会话打开 Apple Developer 并确认账户页；需要登录或短信验证时只通过 Notion API 读取当前字段。
@@ -108,6 +108,7 @@ UTM 后续交接规则：
 
 - 故障卡片使用 JSON 2.0（`schema: "2.0"`、`body.elements`）。
 - 按钮使用 `behaviors: [{"type": "callback", "value": {...}}]`，且 `value` 必须是对象。
+- 长连接收到 `card.action.trigger` 时，先在原始 CARD 帧边界把历史客户端可能传回的 JSON 字符串 `event.action.value` 归一化为对象，再交给 SDK；否则 SDK 严格 Dict 反序列化会返回 500，客户端显示 -101。HTTP 回调继续使用同一业务解析器。
 - 三个故障按钮必须保持固定顺序和决定值；回调处理完成后更新原卡，`stop` 不派生第二张停止卡。
 - 通用用户确认先调用用户 API `USER_CONFIRM_API_URL`（默认 `http://127.0.0.1:8000/confirm`），只发送 `宿主机名`、`应用名`、`要确认的动作`；返回批准时直接记录 `confirm_continue` 和 `operator_id=user-api`，不发送卡片。API 不可达或返回不可判定时才回退使用 `submission_confirmation_decision` callback、当前 `decision_id` 和决定值 `confirm_continue|cancel_operation`；点击回调就是用户对该单一问题的回复，不需要额外聊天消息或第二次触发。只有宿主机/原群聊、同一 `decision_id`、非空操作人、`answered/confirm_continue`、`wait-decision` 退出 0 和回调后现场证据全部复验通过才记录 `USER_CONFIRMATION=verified`；Toast 或卡片变色不算。
 - 旧运行兼容提审确认卡使用 `submission_review_decision` callback 和 `decision_id`；新运行正常主线不创建该卡。成功通知卡不含按钮或 callback。故障卡仍使用独立三按钮 callback，三种决定不能互相替代。

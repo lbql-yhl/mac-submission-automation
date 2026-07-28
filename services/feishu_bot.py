@@ -32,6 +32,7 @@ try:
 except ModuleNotFoundError:
     from services.project_paths import SHARED_DIR, VM_IMAGES_DIR
 
+
 try:
     from feishu_gateway import (
         FeishuSendError,
@@ -418,29 +419,33 @@ def parse_submission_data(text: str) -> dict[str, Any] | None:
     if account_index < 0:
         return None
     account_lines = lines[account_index + 1 : bank_index if bank_index > account_index else None]
-    email = first_regex(r"([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})", "\n".join(account_lines))
-    sms_url = ""
-    phone = ""
-    password = ""
-    country = ""
+    account_text = "\n".join(account_lines)
+    email = first_regex(r"邮箱\s*[:：]\s*([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})", account_text) or first_regex(
+        r"([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})", account_text
+    )
+    sms_url = first_regex(r"短信接收链接\s*[:：]\s*(https?://\S+)", account_text)
+    phone = re.sub(r"\D", "", first_regex(r"电话\s*[:：]\s*(\+?\d[\d\s-]{5,}\d)", account_text))
+    password = first_regex(r"初始密码\s*[:：]\s*(.+)", account_text)
+    country = first_regex(r"国家\s*[:：]\s*(.+)", account_text)
     for line in account_lines:
         if not sms_url:
             url_match = re.search(r"(https?://\S+)", line)
             if url_match:
                 sms_url = url_match.group(1)
-        if "@" in line or line.startswith("http") or "应用名" in line or "代理信息" in line:
-            continue
-        if not country:
-            country = line
-            continue
-        if not password:
-            password = line
-            continue
         if not phone:
             phone_match = re.search(r"(\+?\d[\d\s-]{5,}\d)", line)
             if phone_match:
                 phone = re.sub(r"\D", "", phone_match.group(1))
-                break
+        if re.match(r"^(电话|短信接收链接|邮箱)\s*[:：]", line):
+            continue
+        if "@" in line or line.startswith("http") or "应用名" in line or "代理信息" in line:
+            continue
+        line_value = re.sub(r"^(国家|初始密码)\s*[:：]\s*", "", line).strip()
+        if not country:
+            country = line_value
+            continue
+        if not password:
+            password = line_value
     required = (
         proxy_match.group("username"),
         proxy_match.group("password"),
@@ -943,6 +948,39 @@ def card_callback_value(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
     value = normalize_card_value(action.get("value"))
     operator = event.get("operator") if isinstance(event.get("operator"), dict) else {}
     return value, str(operator.get("open_id") or operator.get("user_id") or "")
+
+
+def normalize_ws_card_payload(payload: bytes | str | dict[str, Any]) -> dict[str, Any]:
+    """Normalize a long-connection card callback before SDK model parsing.
+
+    Feishu has delivered ``event.action.value`` both as an object and as a
+    JSON-encoded string.  The SDK's P2 callback model only accepts a dict, so
+    normalize the transport boundary first; HTTP callbacks already use the
+    more permissive :func:`card_callback_value` path.
+    """
+    if isinstance(payload, bytes):
+        try:
+            payload = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(payload, dict):
+        return {}
+    normalized = json.loads(json.dumps(payload, ensure_ascii=False))
+    event = normalized.get("event")
+    if not isinstance(event, dict):
+        return normalized
+    action = event.get("action")
+    if not isinstance(action, dict):
+        return normalized
+    value = action.get("value")
+    if isinstance(value, str):
+        action["value"] = normalize_card_value(value)
+    return normalized
 
 
 def review_submission_snapshot(
@@ -1609,6 +1647,15 @@ def patch_lark_ws_card_dispatch() -> None:
             started = int(round(_time.time() * 1000))
             if message_type not in {ws_client.MessageType.EVENT, ws_client.MessageType.CARD}:
                 return
+            if message_type == ws_client.MessageType.CARD:
+                # Bypass the SDK's strict Dict parser for the one callback
+                # shape that Feishu has historically returned as a string.
+                # The normalized bytes still flow through the registered
+                # callback processor, preserving its response type and
+                # verification behavior.
+                normalized = normalize_ws_card_payload(payload)
+                if normalized:
+                    payload = ws_client.JSON.marshal(normalized).encode(ws_client.UTF_8)
             result = self._event_handler._do_without_validation(payload)
             header = headers.add()
             header.key = ws_client.HEADER_BIZ_RT
