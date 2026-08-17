@@ -19,6 +19,7 @@ __pycache__/
 htmlcov/
 .DS_Store
 tools/bin/cloudflared
+.worktrees/
 
 # Virtual machine images and snapshots
 *.utm/
