@@ -1,10 +1,57 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import io
+import json
+import subprocess
 import sys
+import urllib.error
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.notion_api import NotionAPI
+
+
+def test_get_request_retries_transient_url_errors(monkeypatch) -> None:
+    from scripts import notion_api
+
+    calls = 0
+    waits: list[int] = []
+
+    class Response:
+        def __enter__(self):
+            return io.BytesIO(json.dumps({"ok": True}).encode())
+
+        def __exit__(self, *_args):
+            return False
+
+    def urlopen(_request, timeout):
+        nonlocal calls
+        calls += 1
+        assert timeout == 30
+        if calls < 3:
+            raise urllib.error.URLError("temporary network failure")
+        return Response()
+
+    monkeypatch.setattr(notion_api.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(notion_api.time, "sleep", waits.append)
+
+    api = NotionAPI("test-token", "root-page")
+    assert api._request("GET", "/pages/root-page") == {"ok": True}
+    assert calls == 3
+    assert waits == [2, 5]
+
+
+def test_notion_api_imports_with_system_python() -> None:
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        ["/usr/bin/python3", "-c", "from scripts.notion_api import NotionAPI"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 class FakeNotionAPI(NotionAPI):
@@ -101,6 +148,42 @@ def toggle(block_id: str, text: str) -> dict:
         "has_children": True,
         "toggle": {"rich_text": [{"type": "text", "plain_text": text, "text": {"content": text}}]},
     }
+
+
+def test_set_field_preserves_existing_separator_for_bare_label() -> None:
+    api = FakeNotionAPI()
+    api.created = True
+    api.code = "应用名: RainyDay"
+
+    changed = api.set_field(
+        "Demo-abcd",
+        "账号信息",
+        "应用名",
+        "PackWise",
+        replace_existing=True,
+    )
+
+    assert changed is True
+    assert api.code == "应用名: PackWise"
+    assert api.read_field("Demo-abcd", "账号信息", "应用名") == "PackWise"
+
+
+def test_set_field_remains_compatible_with_complete_label() -> None:
+    api = FakeNotionAPI()
+    api.created = True
+    api.code = "应用名: RainyDay"
+
+    changed = api.set_field(
+        "Demo-abcd",
+        "账号信息",
+        "应用名: ",
+        "PackWise",
+        replace_existing=True,
+    )
+
+    assert changed is True
+    assert api.code == "应用名: PackWise"
+    assert api.read_field("Demo-abcd", "账号信息", "应用名: ") == "PackWise"
 
 
 def main() -> None:

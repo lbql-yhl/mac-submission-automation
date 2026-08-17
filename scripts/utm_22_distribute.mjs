@@ -19,7 +19,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -43,6 +43,17 @@ export function makeToken({ issuerId, keyId, privateKey, now = Math.floor(Date.n
     dsaEncoding: 'ieee-p1363',
   });
   return `${message}.${signature.toString('base64url')}`;
+}
+
+export function apiAuthorization(credentials) {
+  if (!credentials.token) {
+    credentials.token = makeToken({
+      issuerId: credentials.issuerId,
+      keyId: credentials.keyId,
+      privateKey: credentials.privateKey,
+    });
+  }
+  return `Bearer ${credentials.token}`;
 }
 
 export function createBuildUploadBody(appId, version, build) {
@@ -110,6 +121,58 @@ function plist(path) {
   return JSON.parse(run('/usr/bin/plutil', ['-convert', 'json', '-o', '-', path]));
 }
 
+function yamlScalar(value, key) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) throw new Error(`prod.yml is missing ${key}`);
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) return JSON.parse(trimmed);
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1).replaceAll("''", "'");
+  if (trimmed.includes(' #')) return trimmed.slice(0, trimmed.indexOf(' #')).trim();
+  return trimmed;
+}
+
+export function readUploadConfiguration(configPath) {
+  const path = resolve(configPath);
+  if (!existsSync(path)) throw new Error('prod.yml is missing');
+  const info = lstatSync(path);
+  if (info.isSymbolicLink() || !info.isFile()) throw new Error('prod.yml must be a regular non-symlink file');
+  const values = new Map();
+  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    const match = line.match(/^\s{2}(issuer_id|key_id|private_key_path|bundle_id):\s*(.*?)\s*$/);
+    if (match) {
+      if (values.has(match[1])) throw new Error(`prod.yml contains duplicate ${match[1]}`);
+      values.set(match[1], yamlScalar(match[2], match[1]));
+    }
+  }
+  for (const key of ['issuer_id', 'key_id', 'private_key_path', 'bundle_id']) {
+    if (!values.has(key)) throw new Error(`prod.yml is missing ${key}`);
+  }
+
+  const projectRoot = basename(dirname(path)) === 'config' ? dirname(dirname(path)) : dirname(path);
+  const configuredKey = values.get('private_key_path');
+  const privateKeyPath = resolve(isAbsolute(configuredKey) ? configuredKey : join(projectRoot, configuredKey));
+  const keyId = values.get('key_id');
+  if (basename(privateKeyPath) !== `AuthKey_${keyId}.p8`) {
+    throw new Error('P8 filename/key ID mismatch');
+  }
+  if (!isAbsolute(configuredKey)) {
+    const fromRoot = relative(projectRoot, privateKeyPath);
+    if (!fromRoot || fromRoot === '..' || fromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)) {
+      throw new Error('relative P8 path escapes the application project root');
+    }
+  }
+  if (!existsSync(privateKeyPath)) throw new Error('configured P8 file is missing');
+  const keyInfo = lstatSync(privateKeyPath);
+  if (keyInfo.isSymbolicLink() || !keyInfo.isFile() || keyInfo.size < 1) {
+    throw new Error('configured P8 must be a regular non-empty non-symlink file');
+  }
+  return {
+    issuerId: values.get('issuer_id'),
+    keyId,
+    privateKeyPath,
+    bundleId: values.get('bundle_id'),
+  };
+}
+
 function xmlPlist(xml) {
   return JSON.parse(run('/usr/bin/plutil', ['-convert', 'json', '-o', '-', '-'], { input: xml }));
 }
@@ -164,6 +227,66 @@ function oneApplication(archivePath) {
   return names[0];
 }
 
+function archiveCandidate(archive) {
+  const archivePath = resolve(archive);
+  const archiveInfoPath = join(archivePath, 'Info.plist');
+  if (!archivePath.endsWith('.xcarchive') || !existsSync(archiveInfoPath)) return undefined;
+  const appPath = oneApplication(archivePath);
+  const info = plist(join(appPath, 'Info.plist'));
+  const appName = `${info.CFBundleDisplayName || info.CFBundleName || basename(appPath, '.app')}`;
+  const bundleId = `${info.CFBundleIdentifier || ''}`;
+  const version = `${info.CFBundleShortVersionString || ''}`;
+  const build = `${info.CFBundleVersion || ''}`;
+  if (!appName || !bundleId || !version || !build) throw new Error(`archive metadata is incomplete: ${archivePath}`);
+  return { path: archivePath, appName, bundleId, version, build };
+}
+
+export function selectArchiveCandidate(candidates, appName, bundleId) {
+  const matches = (Array.isArray(candidates) ? candidates : []).filter((candidate) => (
+    candidate?.appName === appName && candidate?.bundleId === bundleId
+  ));
+  if (matches.length !== 1) throw new Error(`ARCHIVE_MATCH_COUNT=${matches.length}`);
+  return matches[0];
+}
+
+function discoverArchiveCandidates(archiveRoot) {
+  const root = resolve(archiveRoot);
+  if (!existsSync(root)) throw new Error('Archive root is missing');
+  const rootInfo = lstatSync(root);
+  if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) throw new Error('Archive root must be a directory');
+  const result = spawnSync('/usr/bin/find', [root, '-type', 'd', '-name', '*.xcarchive', '-prune', '-print'], { encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(`Archive discovery failed: ${(result.stderr || result.stdout).trim()}`);
+  return result.stdout.split('\n').filter(Boolean).sort().map(archiveCandidate).filter(Boolean);
+}
+
+export function exactAppId(response, bundleId) {
+  const matches = (response?.data || []).filter((item) => item?.attributes?.bundleId === bundleId && item?.id);
+  if (matches.length !== 1) throw new Error(`APP_MATCH_COUNT=${matches.length}`);
+  return matches[0].id;
+}
+
+export function validateEmbeddedFrameworkPlists(appPath) {
+  const result = spawnSync(
+    '/usr/bin/find',
+    [resolve(appPath), '-type', 'd', '-name', '*.framework', '-print'],
+    { encoding: 'utf8' },
+  );
+  if (result.status !== 0) {
+    throw new Error(`embedded framework discovery failed: ${(result.stderr || result.stdout).trim()}`);
+  }
+
+  const frameworks = result.stdout.split('\n').filter(Boolean).sort();
+  for (const frameworkPath of frameworks) {
+    const infoPath = join(frameworkPath, 'Info.plist');
+    if (!existsSync(infoPath)) throw new Error(`${basename(frameworkPath)} is missing Info.plist`);
+    const info = plist(infoPath);
+    for (const key of ['CFBundleIdentifier', 'CFBundleShortVersionString', 'CFBundleVersion']) {
+      if (!info[key]) throw new Error(`${basename(frameworkPath)} Info.plist is missing ${key}`);
+    }
+  }
+  return frameworks.length;
+}
+
 export function inspectArchive(archive) {
   const archivePath = resolve(archive);
   if (!archivePath.endsWith('.xcarchive') || !existsSync(join(archivePath, 'Info.plist'))) {
@@ -175,6 +298,7 @@ export function inspectArchive(archive) {
   for (const key of ['CFBundleIdentifier', 'CFBundleShortVersionString', 'CFBundleVersion']) {
     if (!info[key]) throw new Error(`app Info.plist is missing ${key}`);
   }
+  validateEmbeddedFrameworkPlists(appPath);
 
   run('/usr/bin/codesign', ['--verify', '--deep', '--strict', '--verbose=2', appPath]);
   const signing = codesignDetails(appPath);
@@ -333,15 +457,10 @@ function apiError(status, body) {
 }
 
 async function apiRequest(method, path, credentials, body) {
-  const token = makeToken({
-    issuerId: credentials.issuerId,
-    keyId: credentials.keyId,
-    privateKey: credentials.privateKey,
-  });
   const response = await fetch(`${API}${path}`, {
     method,
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: apiAuthorization(credentials),
       ...(body ? { 'Content-Type': 'application/json' } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -410,6 +529,33 @@ export function classifyMatchingUploads(items) {
   if (['COMPLETE', 'PROCESSING'].includes(state)) return { action: 'resume', uploadId, state };
   if (state === 'FAILED') return { action: 'failed', uploadId, state };
   return { action: 'ambiguous', count: 1, uploadId, state };
+}
+
+export function attemptRecoveryAction(attempt) {
+  if (!attempt || attempt.state === 'preflight') return { action: 'create' };
+  const uploadId = attempt.buildUploadId;
+  if (uploadId && ['file_committed', 'processing', 'verified'].includes(attempt.state)) {
+    return { action: 'poll_upload', uploadId };
+  }
+  const existingBuildIds = Array.isArray(attempt.existingBuildIds) ? attempt.existingBuildIds : [];
+  if (
+    existingBuildIds.length === 1
+    && ['existing_build_valid', 'existing_build_processing', 'recovered_after_create_result_unknown'].includes(attempt.state)
+  ) {
+    return { action: 'poll_existing', buildId: existingBuildIds[0] };
+  }
+  return { action: 'ambiguous', ...(uploadId ? { uploadId } : {}) };
+}
+
+export function classifyExistingBuilds(items) {
+  if (!Array.isArray(items) || items.length === 0) return { action: 'create' };
+  if (items.length !== 1) return { action: 'ambiguous', count: items.length };
+  const buildId = items[0]?.id;
+  const processingState = items[0]?.attributes?.processingState || 'UNKNOWN';
+  if (!buildId) return { action: 'ambiguous', count: 1 };
+  if (processingState === 'VALID') return { action: 'complete', buildId };
+  if (processingState === 'PROCESSING') return { action: 'wait', buildId };
+  return { action: 'ambiguous', count: 1, buildId, processingState };
 }
 
 function fsyncDirectory(path) {
@@ -548,6 +694,42 @@ async function matchingBuilds(metadata, appId, credentials) {
   ));
 }
 
+async function resolveAppId(bundleId, credentials) {
+  const query = new URLSearchParams({
+    'filter[bundleId]': bundleId,
+    'fields[apps]': 'bundleId,name',
+    limit: '2',
+  });
+  return exactAppId(await apiRequest('GET', `/apps?${query}`, credentials), bundleId);
+}
+
+async function pollExistingBuild(buildId, credentials, waitSeconds) {
+  const deadline = Date.now() + waitSeconds * 1000;
+  const delays = [15000, 30000, 60000, 120000];
+  let pollIndex = 0;
+  let processingState = 'PROCESSING';
+  while (Date.now() < deadline) {
+    const current = await apiRequest(
+      'GET',
+      `/builds/${encodeURIComponent(buildId)}?fields[builds]=processingState,version`,
+      credentials,
+    );
+    processingState = current.data?.attributes?.processingState || 'PROCESSING';
+    console.log(`BUILD_PROCESSING_STATE=${processingState}`);
+    if (processingState === 'VALID') {
+      return { buildId, state: 'COMPLETE', buildProcessingState: 'VALID', alreadyExists: true };
+    }
+    if (['FAILED', 'INVALID'].includes(processingState)) {
+      throw new Error(`existing Apple build processing failed: ${processingState}`);
+    }
+    const delay = delays[Math.min(pollIndex, delays.length - 1)];
+    pollIndex += 1;
+    if (Date.now() + delay >= deadline) break;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, delay));
+  }
+  return { buildId, state: 'PROCESSING', buildProcessingState: processingState, alreadyExists: true };
+}
+
 async function pollBuildUpload(uploadId, credentials, waitSeconds) {
   const deadline = Date.now() + waitSeconds * 1000;
   const delays = [15000, 30000, 60000, 120000];
@@ -586,39 +768,101 @@ export async function uploadIpa(metadata, options) {
     privateKey: createPrivateKey(readFileSync(options.privateKeyPath)),
   };
 
-  const app = await apiRequest('GET', `/apps/${encodeURIComponent(options.appId)}?fields[apps]=bundleId,name`, credentials);
-  if (app.data?.attributes?.bundleId !== metadata.bundleId) {
-    throw new Error('App Store Connect app bundle ID does not match the IPA');
+  const appId = options.appId || await resolveAppId(metadata.bundleId, credentials);
+  if (options.appId) {
+    const app = await apiRequest('GET', `/apps/${encodeURIComponent(appId)}?fields[apps]=bundleId,name`, credentials);
+    if (app.data?.attributes?.bundleId !== metadata.bundleId) {
+      throw new Error('App Store Connect app bundle ID does not match the IPA');
+    }
   }
 
-  const attempt = loadOrCreateAttempt(options.attemptFile, metadata, options.appId);
+  const attempt = loadOrCreateAttempt(options.attemptFile, metadata, appId);
   console.log(`UPLOAD_ATTEMPT_ID=${attempt.attemptId}`);
-  const existingBuilds = await matchingBuilds(metadata, options.appId, credentials);
-  if (existingBuilds.length > 0) {
+  const recovery = attemptRecoveryAction(attempt);
+  if (recovery.action === 'poll_upload') {
+    const completed = await pollBuildUpload(recovery.uploadId, credentials, options.waitSeconds);
     writeAttempt(options.attemptFile, {
       ...attempt,
-      state: existingBuilds.length === 1 ? 'existing_build_no_create' : 'ambiguous_existing_upload',
+      state: completed.state === 'COMPLETE' && completed.buildProcessingState === 'VALID' ? 'verified' : 'processing',
+      buildUploadId: recovery.uploadId,
+      buildId: completed.buildId,
+    });
+    return completed;
+  }
+  if (recovery.action === 'poll_existing') {
+    const completed = await pollExistingBuild(recovery.buildId, credentials, options.waitSeconds);
+    writeAttempt(options.attemptFile, {
+      ...attempt,
+      state: completed.buildProcessingState === 'VALID' ? 'existing_build_valid' : 'existing_build_processing',
+      existingBuildIds: [recovery.buildId],
+    });
+    return completed;
+  }
+  if (recovery.action !== 'create') {
+    throw new Error(`upload attempt cannot be safely resumed from state ${attempt.state}`);
+  }
+
+  const existingBuilds = await matchingBuilds(metadata, appId, credentials);
+  const existing = classifyExistingBuilds(existingBuilds);
+  if (existing.action === 'complete') {
+    writeAttempt(options.attemptFile, {
+      ...attempt,
+      state: 'existing_build_valid',
+      existingBuildIds: [existing.buildId],
+    });
+    return {
+      state: 'COMPLETE',
+      buildId: existing.buildId,
+      buildProcessingState: 'VALID',
+      alreadyExists: true,
+    };
+  }
+  if (existing.action === 'wait') {
+    const completed = await pollExistingBuild(existing.buildId, credentials, options.waitSeconds);
+    writeAttempt(options.attemptFile, {
+      ...attempt,
+      state: completed.buildProcessingState === 'VALID' ? 'existing_build_valid' : 'existing_build_processing',
+      existingBuildIds: [existing.buildId],
+    });
+    return completed;
+  }
+  if (existing.action !== 'create') {
+    writeAttempt(options.attemptFile, {
+      ...attempt,
+      state: 'ambiguous_existing_upload',
       existingBuildIds: existingBuilds.map((item) => item.id),
     });
-    throw new Error('same-version build already exists; refusing to create another upload');
+    throw new Error('same-version build match is ambiguous; refusing to create another upload');
   }
 
   writeAttempt(options.attemptFile, { ...attempt, state: 'creating_build_upload' });
   let upload;
   try {
     upload = await apiRequest('POST', '/buildUploads', credentials,
-      createBuildUploadBody(options.appId, metadata.version, metadata.build));
+      createBuildUploadBody(appId, metadata.version, metadata.build));
   } catch (error) {
     for (const delay of [5000, 10000, 20000]) {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, delay));
-      const recoveredBuilds = await matchingBuilds(metadata, options.appId, credentials);
+      const recoveredBuilds = await matchingBuilds(metadata, appId, credentials);
       if (recoveredBuilds.length > 0) {
+        const recovered = classifyExistingBuilds(recoveredBuilds);
         writeAttempt(options.attemptFile, {
           ...attempt,
           state: 'recovered_after_create_result_unknown',
           existingBuildIds: recoveredBuilds.map((item) => item.id),
         });
-        throw new Error('build appeared after an ambiguous create result; refusing to create another upload');
+        if (recovered.action === 'complete') {
+          return {
+            state: 'COMPLETE',
+            buildId: recovered.buildId,
+            buildProcessingState: 'VALID',
+            alreadyExists: true,
+          };
+        }
+        if (recovered.action === 'wait') {
+          return pollExistingBuild(recovered.buildId, credentials, options.waitSeconds);
+        }
+        throw new Error('build appeared ambiguously after an unknown create result; refusing to create another upload');
       }
     }
     writeAttempt(options.attemptFile, { ...attempt, state: 'create_result_ambiguous' });
@@ -674,13 +918,28 @@ function required(options, names) {
 
 async function main() {
   const { command, options } = argumentsFrom(process.argv.slice(2));
-  if (!['prepare', 'distribute'].includes(command)) {
-    throw new Error('usage: utm_22_distribute.mjs prepare|distribute [options]');
+  if (!['discover', 'prepare', 'distribute', 'upload-config'].includes(command)) {
+    throw new Error('usage: utm_22_distribute.mjs discover|prepare|distribute|upload-config [options]');
   }
+  if (command === 'discover') {
+    required(options, ['archive_root', 'app_name', 'config']);
+    const configuration = readUploadConfiguration(options.config);
+    const candidates = discoverArchiveCandidates(options.archive_root).map((candidate) => ({
+      path: candidate.path,
+      app_name: candidate.appName,
+      bundle_id: candidate.bundleId,
+      version: candidate.version,
+      build: candidate.build,
+    }));
+    console.log(`ARCHIVE_CANDIDATES_JSON=${JSON.stringify(candidates)}`);
+    console.log(`CONFIG_BUNDLE_ID=${configuration.bundleId}`);
+    return;
+  }
+
   required(options, ['archive', 'output']);
   const archiveMetadata = inspectArchive(options.archive);
   let metadata;
-  if (command === 'distribute' && existsSync(resolve(options.output))) {
+  if (['distribute', 'upload-config'].includes(command) && existsSync(resolve(options.output))) {
     required(options, ['attempt_file']);
     metadata = resumePackagedIpa(archiveMetadata, options.output, options.attempt_file);
     console.log('SAME_ATTEMPT_IPA=verified');
@@ -695,7 +954,28 @@ async function main() {
   console.log(`IPA_SIZE=${metadata.ipaSize}`);
   console.log(`IPA_SHA256=${metadata.sha256}`);
 
-  if (command !== 'prepare') {
+  if (command === 'upload-config') {
+    required(options, ['config', 'attempt_file']);
+    const configuration = readUploadConfiguration(options.config);
+    if (configuration.bundleId !== metadata.bundleId) {
+      throw new Error('prod.yml bundle ID does not match the Archive');
+    }
+    const result = await uploadIpa(metadata, {
+      issuerId: configuration.issuerId,
+      keyId: configuration.keyId,
+      privateKeyPath: configuration.privateKeyPath,
+      attemptFile: options.attempt_file,
+      waitSeconds: Number(options.wait_seconds || 1800),
+    });
+    if (result.alreadyExists && result.buildProcessingState === 'VALID') {
+      console.log('BUILD_ALREADY_EXISTS=valid');
+    }
+    if (result.uploadId) console.log(`BUILD_UPLOAD_ID=${result.uploadId}`);
+    if (result.buildId) console.log(`BUILD_ID=${result.buildId}`);
+    console.log(`BUILD_UPLOAD_FINAL_STATE=${result.state}`);
+    console.log(`BUILD_PROCESSING_STATE=${result.buildProcessingState}`);
+    if (result.state !== 'COMPLETE' || result.buildProcessingState !== 'VALID') process.exitCode = 2;
+  } else if (command === 'distribute') {
     required(options, ['app_id', 'issuer_id', 'key_id', 'private_key', 'attempt_file']);
     const result = await uploadIpa(metadata, {
       appId: options.app_id,

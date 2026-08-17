@@ -67,7 +67,7 @@ LEGACY_CALLBACK_PATHS = {"/"}
 
 COMMAND_PREFIXES = ("/提审", "提审")
 HELP_TEXT = """提审机器人命令：
-发送完整固定登记模板 - 仅在宿主机匹配时创建提审运行
+提审启动入口当前已禁用，登记消息和 /提审 开始 不会创建新运行
 /提审 状态 - 查看最近一次运行
 /提审 日志 - 查看最近提示文件路径
 /提审 继续 - 标记为继续处理
@@ -75,38 +75,24 @@ HELP_TEXT = """提审机器人命令：
 /提审 帮助 - 查看命令"""
 DAILY_REPORT_CHAT_ID = "oc_7e0ab0f30306c580726cd38bdcdff31c"
 DECISION_TIMEOUT_SECONDS = 3600
+SUBMISSION_START_ENABLED = False
 SUBMISSION_SKILL_ORDER = (
-    "notion-utm",
-    "notion-utm-1",
-    "utm-clone-macos",
-    "utm-1",
-    "utm-2",
-    "utm-3",
-    "vm-down",
-    "utm-4",
-    "utm-5",
-    "files",
-    "utm-clash",
-    "utm-6",
-    "utm-7",
-    "utm-8",
-    "utm-9",
-    "utm-10",
-    "utm-11",
-    "utm-12",
-    "utm-13",
-    "utm-14",
-    "utm-15",
-    "utm-16",
-    "utm-17",
-    "utm-18",
-    "utm-19",
-    "utm-20",
+    "utm-vm-clone",
+    "utm-notion",
+    "utm-clash-ip",
+    "utm-login",
+    "utm-edit",
+    "utm-key",
+    "utm-apps",
+    "utm-business",
+    "utm-env",
+    "utm-script",
+    "utm-image",
+    "utm-p8",
     "utm-21",
     "utm-22",
     "utm-23",
     "utm-24",
-    "utm-25",
 )
 
 
@@ -502,6 +488,8 @@ def generate_vm_name() -> str:
 
 
 def build_submission_run(config: Config, text: str, chat_id: str, source: str = "feishu") -> tuple[dict[str, Any], str] | None:
+    if not SUBMISSION_START_ENABLED:
+        return None
     data = parse_submission_data(text)
     if not data:
         return None
@@ -596,12 +584,12 @@ def build_codex_prompt(run: dict[str, Any]) -> str:
 执行要求：
 1. 先阅读本项目 README.md、AGENTS.md 和 docs/utm-feishu-bot.md。
 2. 当前运行环境是本机 macOS 上的 UTM macOS VM 项目；不要套用 Windows/VMware 路径或命令。
-3. 虚拟机名称已在飞书创建运行时生成并去重：{vm_name}。后续 Notion 登记、UTM 克隆、UTM-1、UTM-2 和 UTM-3 都必须使用这个名称，不要重新生成。
-4. 登记信息来自飞书消息：使用的宿主机、应用名、代理信息、代码链接、开发者账号国家、邮箱、初始密码、电话和短信链接。银行信息区块可整体省略，ABA Routing Number 与 Account Number 也可留空；`notion-utm` 仍须在匹配 Notion 页保留两条空标签并继续。只有到 `utm-20` 银行资料步骤时两项才必填，且只能从当前匹配 Notion 页实时读取；仍为空时发送 `utm-20-bank-info-missing` 三按钮故障卡，提示人工补充同一页，收到 `manual_continue` 或 `retry_skill` 后保留同一现场并重新执行 `verify-parent` 和两次 `read-field --copy`。不得把卡片回复当作补充证据，也不得从 Feishu/runtime/旧运行/对话/记忆回退银行号码。
-5. 固定技能顺序（31 个）：{skill_order}。按此顺序连续执行到最终 `utm-25`；不得截断、插入其他技能、跳过尚未验证的技能或按“最新”重选 run/VM。其中 `utm-5` 只在宿主机生成并覆盖 {SHARED_DIR / 'socks5.yml'}，必须在 `files` 前完成；`utm-6` 必须在 `utm-clash` 完成后验证代理出口和 guest ~/.zshrc。
+3. 虚拟机名称已在当前运行中生成并去重：{vm_name}。后续 Notion 登记和 `utm-vm-clone` 必须使用同一运行目标，不得按“最新”重选。
+4. `utm-notion` 只执行项目绝对路径脚本；字段解析、应用类型归一化、VM 绑定、飞书单列更新和 Notion 双区块回读全部以脚本 JSON 为准。银行号码可留空；只有到 `utm-business` 银行资料步骤时两项才必填，并且只能从当前匹配 Notion 页实时读取。
+5. 固定技能顺序（16 个）：{skill_order}。四段均可单独运行，每个技能也可人工单独指定执行；指定范围内保持固定顺序，不插入其他技能或按“最新”重选 run/VM。本提示是完整提审请求时执行全部四段；人工明确指定一段或一个技能时只执行指定范围。
 6. 有明确恢复方法且风险可控时，自动从最小恢复点修复/重试并回填运行状态，不发卡片。
 7. 无法自信判断、自动修复失败或涉及需要人工处理的风险时，先按当前技能和共享合同完成三轮“自动诊断 → 实际修复 → 独立复验”；不可逆、不能安全重复写入或外部不可修复状态做三轮独立只读复核。三轮仍无法解决后才调用 notify-fault，并传入 recovery_attempts>=3、recovery_actions、recovery_result、当前 recovery_skill 与 completed_steps，再调用 wait-decision --timeout-seconds 3600 等待卡片动作；stop 立即停止，manual_continue 立即复核现场后继续，retry_skill 立即重跑当前技能并只跳过仍通过完成检查的步骤。
-8. SSH 不通时先回到 utm-2：修复 Remote Login、重新按 MAC/ARP 获取 IP、重试三轮；仍失败则按当前技能的故障边界发卡。停止结果只更新原故障卡，不再发送独立停止通知。
+8. SSH 不通时锁定同一精确 VM，重新按 MAC/ARP 获取 IP，检查 Remote Login/端口并使用固定密码 `1234` 恢复，每轮都独立复验身份；三轮仍失败则按当前技能的故障边界发卡。停止结果只更新原故障卡，不再发送独立停止通知。
 9. 不可恢复、无授权、不可逆风险或超过重试次数时，也必须先满足三轮恢复/只读复核证据门禁；少于三轮或证据缺失时运行时拒绝 notify-fault。故障卡发送后当前执行器原地等待，等待期间不发送提醒卡；首次确认送达满 3600 秒无回复时，只向原 chat_id 发送一次无按钮超时卡片、记录 decision_timeout_stop 并停止整个流程，之后不再重发、不再轮询、不再恢复，迟到回调无效。成功通知卡无按钮、无需回复，不进入超时等待。
 10. 运行状态或阻塞点需要回填到 runtime/feishu-runs.json 对应运行记录。
 11. 不把 Apple ID、验证码、密码、代理完整凭证写入仓库。
@@ -828,6 +816,8 @@ def handle_command(config: Config, text: str, chat_id: str) -> str:
         return HELP_TEXT
 
     if command == "开始":
+        if not SUBMISSION_START_ENABLED:
+            return ""
         maybe_data_run = build_submission_run(config, text, chat_id, source="feishu-command")
         if maybe_data_run:
             run, _message = maybe_data_run
@@ -885,6 +875,8 @@ def handle_incoming_text(config: Config, text: str, chat_id: str, source: str = 
     if chat_id == DAILY_REPORT_CHAT_ID or (config.allowed_chat_id and chat_id != config.allowed_chat_id):
         return ""
     submission_data = parse_submission_data(text)
+    if submission_data and not SUBMISSION_START_ENABLED:
+        return ""
     if submission_data and submission_data["host_machine"] != config.submission_host_machine:
         return ""
     reply = handle_command(config, text, chat_id)
@@ -2363,45 +2355,6 @@ def build_review_confirmation_card(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_review_success_card(
-    run: dict[str, Any], app_review_status: str, completed_at: str
-) -> dict[str, Any]:
-    pending = run.get("pending_decision") or {}
-    approval = run.get("review_submission_approval")
-    if "review_submission_approval" in run:
-        submission = approval if is_approved_review_submission(approval) else {}
-    else:
-        legacy = legacy_review_submission_approval(pending)
-        submission = legacy if is_approved_review_submission(legacy) else {}
-    try:
-        iap_count = int(submission.get("iap_count") or 0)
-    except (TypeError, ValueError):
-        iap_count = 0
-    lines = [
-        f"**应用**：{run.get('app_name', '未知应用')}",
-        f"**版本**：{submission.get('app_version', '未知')}",
-        f"**构建号**：{submission.get('build_number', '未知')}",
-        f"**提交内容**：iOS App + {iap_count} 项内购",
-        f"**提交项目数**：{iap_count + 1}",
-        f"**App Store 状态**：{app_review_status}",
-        f"**完成时间**：{completed_at}",
-        f"**运行**：{run['id']}",
-    ]
-    return {
-        "schema": "2.0",
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "template": "green",
-            "title": {"tag": "plain_text", "content": "提审提交成功"},
-        },
-        "body": {
-            "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}}
-            ]
-        },
-    }
-
-
 def decision_card_for_run(run: dict[str, Any]) -> dict[str, Any]:
     pending = run.get("pending_decision") or {}
     if pending.get("status") == "expired" and pending.get("decision") == "timeout":
@@ -2827,165 +2780,6 @@ def record_review_submit_attempt_cli(args: argparse.Namespace, config: Config) -
     return 0
 
 
-def record_review_success_notification(
-    run_id: str,
-    app_review_status: str,
-    completed_at: str,
-    message_id: str,
-    message_uuid: str,
-) -> dict[str, Any] | None:
-    if not message_id or not message_uuid:
-        raise ValueError("Review success delivery requires message_id and message_uuid")
-
-    def apply_notification(item: dict[str, Any]) -> None:
-        current = item.get("review_success") or {}
-        if not (
-            current.get("status") == "sending"
-            and current.get("app_review_status") == app_review_status
-            and current.get("message_uuid") == message_uuid
-        ):
-            raise RuntimeError("Review success sending attempt changed before completion")
-        item["review_success"] = {
-            "status": "sent",
-            "app_review_status": app_review_status,
-            "completed_at": completed_at,
-            "message_id": message_id,
-            "message_uuid": message_uuid,
-        }
-        item.setdefault("events", []).append(
-            {
-                "at": completed_at,
-                "status": "review_success_notified",
-                "note": "提审提交成功卡已发送",
-            }
-        )
-
-    return mutate_run(run_id, apply_notification)
-
-
-def notify_review_success(args: argparse.Namespace, config: Config) -> int:
-    if not args.run_id:
-        print("notify-review-success requires --run-id", file=sys.stderr)
-        return 2
-    run = find_run(args.run_id)
-    if not run:
-        print("notify-review-success requires an existing run", file=sys.stderr)
-        return 2
-    try:
-        chat_id = stored_original_chat(
-            run, config, str(getattr(args, "chat_id", "") or "")
-        )
-    except RuntimeError:
-        print("notify-review-success refused by run host/original-chat boundary", file=sys.stderr)
-        return 2
-    if args.app_review_status not in {"Waiting for Review", "15 Items Submitted"}:
-        print("notify-review-success requires a verified App Store success status", file=sys.stderr)
-        return 2
-
-    if "review_submission_approval" not in run:
-        pending = run.get("pending_decision") or {}
-        legacy_snapshot = legacy_review_submission_approval(pending)
-        if is_approved_review_submission(legacy_snapshot):
-            def migrate_legacy_approval(item: dict[str, Any]) -> None:
-                if "review_submission_approval" in item:
-                    return
-                current = item.get("pending_decision") or {}
-                current_snapshot = legacy_review_submission_approval(current)
-                if not is_approved_review_submission(current_snapshot):
-                    raise ValueError("Legacy review approval changed before migration")
-                item["review_submission_approval"] = current_snapshot
-
-            try:
-                migrated = mutate_run(run["id"], migrate_legacy_approval)
-            except ValueError:
-                migrated = None
-            if migrated is not None:
-                run = migrated
-
-    approval = run.get("review_submission_approval")
-    if not is_approved_review_submission(approval):
-        print("notify-review-success requires a current approved 14-IAP review snapshot", file=sys.stderr)
-        return 2
-
-    review_success = run.get("review_success") or {}
-    success_state = str(review_success.get("status") or "")
-    if success_state == "sent":
-        if not (
-            review_success.get("app_review_status") == args.app_review_status
-            and str(review_success.get("message_id") or "")
-        ):
-            print("notify-review-success found an incomplete or mismatched sent record", file=sys.stderr)
-            return 2
-        print(run["id"])
-        return 0
-    if success_state == "sending":
-        if not (
-            review_success.get("app_review_status") == args.app_review_status
-            and str(review_success.get("message_uuid") or "")
-            and str(review_success.get("started_at") or "")
-        ):
-            print("notify-review-success found an incomplete or mismatched sending record", file=sys.stderr)
-            return 2
-    elif success_state:
-        print("notify-review-success found an unsupported notification state", file=sys.stderr)
-        return 2
-    else:
-        started_at = utc_now()
-        message_uuid = uuid.uuid4().hex
-
-        def mark_sending(item: dict[str, Any]) -> None:
-            if not is_approved_review_submission(item.get("review_submission_approval")):
-                raise ValueError("Review submission approval changed before sending")
-            if item.get("review_success"):
-                raise RuntimeError("Review success state changed before sending")
-            item["review_success"] = {
-                "status": "sending",
-                "app_review_status": args.app_review_status,
-                "started_at": started_at,
-                "message_id": "",
-                "message_uuid": message_uuid,
-            }
-            item.setdefault("events", []).append(
-                {
-                    "at": started_at,
-                    "status": "review_success_sending",
-                    "note": "提审提交成功卡发送中",
-                }
-            )
-
-        try:
-            updated = mutate_run(run["id"], mark_sending)
-        except (RuntimeError, ValueError):
-            print("notify-review-success state changed before sending", file=sys.stderr)
-            return 2
-        if updated is None:
-            print("notify-review-success could not persist the sending attempt", file=sys.stderr)
-            return 2
-        run = updated
-        review_success = run.get("review_success") or {}
-
-    message_uuid = str(review_success.get("message_uuid") or "")
-    notification_at = str(review_success.get("started_at") or "")
-    response = FeishuClient(config).send_card(
-        chat_id,
-        build_review_success_card(run, args.app_review_status, notification_at),
-        message_uuid=message_uuid,
-    )
-    message_id = message_id_from_response(response)
-    if not message_id:
-        print("notify-review-success sent but message_id is missing", file=sys.stderr)
-        return 2
-    completed_at = utc_now()
-    recorded = record_review_success_notification(
-        run["id"], args.app_review_status, completed_at, message_id, message_uuid
-    )
-    if recorded is None:
-        print("notify-review-success could not persist the sent result", file=sys.stderr)
-        return 2
-    print(run["id"])
-    return 0
-
-
 def stop_run_after_decision_timeout(
     run_id: str, config: Config, timeout_seconds: int
 ) -> dict[str, Any]:
@@ -3320,10 +3114,9 @@ def main() -> int:
             "notify-review",
             "record-auto-review-approval",
             "record-review-submit-attempt",
-            "notify-review-success",
             "wait-decision",
         ),
-        help="serve starts the HTTP bot; ws starts Feishu SDK long-connection callbacks; poll reads Feishu history as a control fallback; notify-fault sends a last-resort fault card; notify-confirmation asks the user API first and falls back to a user-decision card only when needed; notify-review keeps the optional legacy review card; record-auto-review-approval persists the unattended self-check authorization; record-review-submit-attempt persists the single submit click state; notify-review-success sends the one-way success card; wait-decision waits for the selected decision.",
+        help="serve starts the HTTP bot; ws starts Feishu SDK long-connection callbacks; poll reads Feishu history as a control fallback; notify-fault sends a last-resort fault card; notify-confirmation asks the user API first and falls back to a user-decision card only when needed; notify-review keeps the optional legacy review card; record-auto-review-approval persists the unattended self-check authorization; record-review-submit-attempt persists the single submit click state; wait-decision waits for the selected decision.",
     )
     parser.add_argument("--host", default=FeishuHandler.config.host)
     parser.add_argument("--port", type=int, default=FeishuHandler.config.port)
@@ -3353,7 +3146,6 @@ def main() -> int:
     parser.add_argument("--build-number", default="")
     parser.add_argument("--iap-count", type=int, default=0)
     parser.add_argument("--screenshot", action="append", default=[])
-    parser.add_argument("--app-review-status", default="")
     parser.add_argument("--attempt-id", default="")
     parser.add_argument("--decision-id", default="")
     parser.add_argument("--items-ready", type=int, default=0)
@@ -3379,8 +3171,6 @@ def main() -> int:
         return record_auto_review_approval_cli(args, FeishuHandler.config)
     if args.mode == "record-review-submit-attempt":
         return record_review_submit_attempt_cli(args, FeishuHandler.config)
-    if args.mode == "notify-review-success":
-        return notify_review_success(args, FeishuHandler.config)
     if args.mode == "wait-decision":
         return wait_decision(args, FeishuHandler.config)
     if args.mode == "poll":

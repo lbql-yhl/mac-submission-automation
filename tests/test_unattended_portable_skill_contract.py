@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
-import json
 from pathlib import Path
+
+from skill_contract_assertions import assert_shared_contract_reference
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = ROOT / "skills"
 ORDERED = (
-    "notion-utm", "notion-utm-1", "utm-clone-macos", "utm-1", "utm-2", "utm-3",
-    "vm-down", "utm-4", "utm-5", "files", "utm-clash", "utm-6", "utm-7", "utm-8",
-    "utm-9", "utm-10", "utm-11", "utm-12", "utm-13", "utm-14", "utm-15", "utm-16",
-    "utm-17", "utm-18", "utm-19", "utm-20", "utm-21", "utm-22", "utm-23", "utm-24", "utm-25",
+    "utm-vm-clone", "utm-notion", "utm-clash-ip", "utm-login", "utm-edit",
+    "utm-key", "utm-apps", "utm-business",
+    "utm-env", "utm-script", "utm-image", "utm-p8", "utm-21", "utm-22", "utm-23", "utm-24",
 )
+STANDALONE = ()
 GUI_SKILLS = {
-    "utm-1", "utm-3", "utm-clash", "utm-8",
-    "utm-9", "utm-10", "utm-11", "utm-12", "utm-13", "utm-14", "utm-15", "utm-17",
-    "utm-18", "utm-19", "utm-20", "utm-22", "utm-23", "utm-24", "utm-25",
+    "utm-apps",
+    "utm-script", "utm-image", "utm-22", "utm-23", "utm-24",
 }
+SHARED_RECOVERY_SKILLS = {
+    "utm-clash-ip", "utm-login", "utm-edit", "utm-key", "utm-apps", "utm-business",
+    "utm-env", "utm-script", "utm-image", "utm-21",
+    "utm-p8", "utm-22", "utm-23", "utm-24",
+}
+INLINE_FAULT_COMMAND_SKILLS = SHARED_RECOVERY_SKILLS - {"utm-login"}
 
 
 def read_skill(name: str) -> str:
@@ -32,10 +38,13 @@ def main() -> None:
     discovered = tuple(
         sorted(path.parent.name for path in SKILL_ROOT.glob("*/SKILL.md"))
     )
-    assert discovered == tuple(sorted(ORDERED)), discovered
-    assert len(ORDERED) == len(set(ORDERED)) == 31
+    assert discovered == tuple(sorted((*ORDERED, *STANDALONE))), discovered
+    assert len(ORDERED) == len(set(ORDERED)) == 16
+    assert len(STANDALONE) == len(set(STANDALONE)) == 0
+    assert set(ORDERED).isdisjoint(STANDALONE)
 
-    shared = (SKILL_ROOT / "_shared" / "AUTOMATION_CONTRACT.md").read_text(encoding="utf-8")
+    shared_path = SKILL_ROOT / "_shared" / "AUTOMATION_CONTRACT.md"
+    shared = shared_path.read_text(encoding="utf-8")
     require_all(
         shared,
         (
@@ -61,34 +70,94 @@ def main() -> None:
         "shared contract",
     )
 
+    clone = read_skill("utm-vm-clone")
+    require_all(
+        clone,
+        (
+            "/Users/yehailin/Documents/mac提审自动化/scripts/utm_clone_and_initialize.py",
+            "UTM_CLONE_AND_INITIALIZE=verified",
+            "DATABASE_AVAILABLE=1",
+            "VM_SHUTDOWN=verified",
+        ),
+        "utm-vm-clone",
+    )
+
     for name in ORDERED:
         text = read_skill(name)
+        if name == "utm-vm-clone":
+            continue
+        if name == "utm-notion":
+            require_all(
+                text,
+                (
+                    "/Users/yehailin/Documents/mac提审自动化/scripts/utm_notion.py",
+                    '"status": "verified"',
+                    '"handoff": "utm-clash-ip"',
+                ),
+                name,
+            )
+            continue
+        if name == "utm-apps":
+            require_all(
+                text,
+                (
+                    "/Users/yehailin/Documents/mac提审自动化/scripts/utm_apps.py",
+                    "操作者只运行以上唯一宿主入口",
+                    "UTM_APPS=verified",
+                    "成功后交接 `utm-business`",
+                ),
+                name,
+            )
+            continue
+        if name == "utm-business":
+            assert_shared_contract_reference(
+                SKILL_ROOT / name / "SKILL.md", text, shared_path
+            )
+            require_all(
+                text,
+                (
+                    "OP-FULL-ENTRY-REPLAY",
+                    "/Users/yehailin/Documents/mac提审自动化/scripts/utm_business.py",
+                    "UTM_BUSINESS=verified",
+                    "成功后交接 `utm-env`",
+                ),
+                name,
+            )
+            continue
+        assert_shared_contract_reference(
+            SKILL_ROOT / name / "SKILL.md", text, shared_path
+        )
         require_all(
             text,
             (
-                "../_shared/AUTOMATION_CONTRACT.md",
                 "## 本技能自动恢复矩阵",
-                "AUTO_RECOVERY_ATTEMPTS",
-                "AUTO_RECOVERY_ACTIONS",
-                "AUTO_RECOVERY_RESULT",
-                "--recovery-attempts",
-                "--recovery-actions",
-                "--recovery-result",
-                "notify-fault",
-                "wait-decision",
-                "自动恢复穷尽后",
-                "<actual-count-at-least-3>",
-                "OP-NATIVE-PASTE",
-                "OP-BROWSER-URL-NO-SCHEME",
-                "OP-APPLE-PHONE-OTP",
-                "OP-FIXED-PASSWORD-1234",
-                "OP-USER-CONFIRMATION",
-                "少于三轮时运行时拒绝发卡",
+                "三轮",
+                "`--recovery-result unrepairable`",
+                "`stop`",
+                "`manual_continue`",
+                "`retry_skill`",
             ),
             name,
         )
         assert "异常必须先向当前 run 原" not in text, name
-        assert text.count("python3 services/feishu_bot.py notify-fault") == 1, name
+        assert name in SHARED_RECOVERY_SKILLS
+        if name in INLINE_FAULT_COMMAND_SKILLS:
+            require_all(
+                text,
+                (
+                    "notify-fault",
+                    "wait-decision",
+                    "--recovery-attempts",
+                    "--recovery-actions",
+                    "--recovery-result",
+                    "<actual-count-at-least-3>",
+                ),
+                name,
+            )
+            assert text.count("services/feishu_bot.py notify-fault") == 1, name
+        else:
+            assert "具体发送和等待命令只使用共享合同" in text, name
+            assert "notify-fault" not in text, name
         for fault_first in (
             "Immediately send the fault card",
             "任一异常都必须进入统一故障卡流程",
@@ -102,7 +171,6 @@ def main() -> None:
             "停在故障卡人工检查循环",
         ):
             assert fault_first not in text, f"{name}: fault-first wording {fault_first}"
-        assert "/Users/yehailin" not in text, f"{name}: host-specific path"
         if name in GUI_SKILLS:
             require_all(
                 text,
@@ -110,18 +178,18 @@ def main() -> None:
                 name,
             )
 
-    utm_19 = read_skill("utm-19")
+    utm_19 = read_skill("utm-image")
     require_all(
         utm_19,
         (
             "当前数字 App ID",
-            "上传前只读分类",
+            "上传前记录",
             "已有截图数量",
             "剩余容量",
             "SCREENSHOT_PREUPLOAD_CLASSIFICATION=empty|complete",
             "Cancel",
         ),
-        "utm-19",
+        "utm-image",
     )
     assert "partial_upload" not in utm_19
     assert "不核对详情 URL" not in utm_19
@@ -168,19 +236,19 @@ def main() -> None:
     assert "--decision-kind review_submit" not in utm_24
     assert "提审确认卡" not in utm_24
 
-    utm_25 = read_skill("utm-25")
+    utm_p8 = read_skill("utm-p8")
     require_all(
-        utm_25,
+        utm_p8,
         (
-            "复制前清空剪贴板并写入随机哨兵",
-            "哨兵不得残留",
+            "scripts/utm_p8.py",
+            "prod.yml",
             "NOTION_ROLLBACK=verified",
-            "before 文件自动还原",
+            "before",
         ),
-        "utm-25",
+        "utm-p8",
     )
 
-    utm_7 = read_skill("utm-7")
+    utm_7 = read_skill("utm-login")
     require_all(
         utm_7,
         (
@@ -193,9 +261,25 @@ def main() -> None:
             "首次确认后自动关闭 System Settings",
             "第二次确认成功后保留 System Settings 打开",
         ),
-        "utm-7",
+        "utm-login",
     )
-    assert "不启动 UTM Computer Use" in utm_7
+
+    utm_9 = read_skill("utm-key")
+    require_all(
+        utm_9,
+        (
+            "/Users/yehailin/Documents/mac提审自动化/scripts/utm_9.py",
+            "固定密码 SSH",
+            "不使用视觉",
+            "/usr/bin/certtool",
+            "CSR_PRIVATE_KEY=verified",
+            "CSR_DISK=verified",
+        ),
+        "utm-key",
+    )
+    for stale in ("Computer Use", 'open -a "Keychain Access"', "BatchMode=yes"):
+        assert stale not in utm_9, stale
+    assert "Computer Use" in utm_7 and "禁止" in utm_7
 
     for required in (
         ROOT / "scripts" / "install_project_skills.sh",
@@ -203,7 +287,7 @@ def main() -> None:
         ROOT / "scripts" / "notion_utm_prepare.py",
         ROOT / "scripts" / "preflight.py",
         ROOT / "scripts" / "shared_operations.py",
-        ROOT / "scripts" / "utm_16_generate_env.py",
+        ROOT / "scripts" / "utm_env_generate.py",
         ROOT / "scripts" / "utm_21_clone.py",
         ROOT / "scripts" / "utm_22_distribute.mjs",
         ROOT / "services" / "feishu_bot.py",
@@ -213,11 +297,6 @@ def main() -> None:
         ROOT / "services" / "submission_runner.py",
         ROOT / "config" / "workflow.env.example",
         ROOT / "shared-files" / "README.md",
-        ROOT / "shared-files" / "Fire_One_en1.2" / ".env.example",
-        ROOT / "shared-files" / "Fire_One_en1.2" / "package-lock.json",
-        ROOT / "shared-files" / "Fire_One_en1.2" / "package.json",
-        ROOT / "shared-files" / "Fire_One_en1.2" / "src" / "fill-description.ts",
-        ROOT / "shared-files" / "Fire_One_en1.2" / "tsconfig.json",
         ROOT / "shared-files" / "apple-store-bm" / "README.md",
         ROOT / "shared-files" / "apple-store-bm" / "apple_store_tools",
         ROOT / "shared-files" / "apple-store-bm" / "config" / "prod.example.yml",
@@ -228,8 +307,7 @@ def main() -> None:
     forbidden_shared_paths = (
         shared_files / ".env",
         shared_files / "socks5.yml",
-        shared_files / "Fire_One_en1.2" / ".env",
-        shared_files / "Fire_One_en1.2" / "node_modules",
+        shared_files / ("Fire_One_en" + "1.2"),
         shared_files / "apple-store-bm" / "config" / "prod.yml",
         shared_files / "tools" / "flutter",
     )
@@ -239,37 +317,20 @@ def main() -> None:
     assert all(path.stat().st_size < 100 * 1024 * 1024 for path in shared_files.rglob("*") if path.is_file())
     assert (shared_files / "apple-store-bm" / "apple_store_tools").stat().st_mode & 0o100
 
-    fire_package = json.loads(
-        (shared_files / "Fire_One_en1.2" / "package.json").read_text(encoding="utf-8")
-    )
-    assert "test:description" not in fire_package["scripts"], (
-        "--dry-run is not implemented and must not be advertised as a safe test"
-    )
-    fire_tsconfig = json.loads(
-        (shared_files / "Fire_One_en1.2" / "tsconfig.json").read_text(encoding="utf-8")
-    )
-    assert fire_tsconfig["compilerOptions"]["module"] == "NodeNext"
-    fire_source = (
-        shared_files / "Fire_One_en1.2" / "src" / "fill-description.ts"
-    ).read_text(encoding="utf-8")
-    assert "const APP_ID = process.env.APP_ID ?? '';" in fire_source
-    require_all(fire_source, ("APP_ID 必须为纯数字", "Issuer ID 已读取", "Key ID 已读取"), "Fire_One")
-    for forbidden in (
-        "已记录 issuer: ${issuer}",
-        "已记录 key: ${key}",
-        "已记录 p8 文件名: ${p8FileName}",
-        "已强制保存 p8 文件到: ${downloadPath}",
-    ):
-        assert forbidden not in fire_source, f"Fire_One: sensitive log {forbidden}"
+    shared_readme = (shared_files / "README.md").read_text(encoding="utf-8")
+    assert "Fire_One_en1.3" in shared_readme
+    assert ("Fire_One_en" + "1.2") not in shared_readme
     assert not (ROOT / "docs" / "superpowers").exists(), "historical execution contracts must be removed"
     assert not (ROOT / "runtime" / "utm_22_game_center_rebuild.zsh").exists(), "stale executable"
 
-    socks_writer = (ROOT / "skills" / "utm-5" / "scripts" / "write_socks5_yml.py").read_text(encoding="utf-8")
-    require_all(socks_writer, ("required=True", "SHARED_DIR", "RUNS_FILE"), "utm-5 writer")
-    for forbidden in ("--vm-name", "--latest-feishu-history", "load_latest_history_proxy", "--host", "--password"):
-        assert forbidden not in socks_writer, f"utm-5 writer: unsafe fallback {forbidden}"
+    clash_ip = read_skill("utm-clash-ip")
+    require_all(
+        clash_ip,
+        ("代理ip:", "代理端口:", "代理用户名：", "代理用户密码：", "SOCKS5_SHARED_READBACK=exact"),
+        "utm-clash-ip",
+    )
 
-    generator = (ROOT / "scripts" / "utm_16_generate_env.py").read_text(encoding="utf-8")
+    generator = (ROOT / "scripts" / "utm_env_generate.py").read_text(encoding="utf-8")
     assert "/Users/yehailin" not in generator
     assert "SHARED_DIR" in generator
 
@@ -283,7 +344,8 @@ def main() -> None:
             "validate_all_sources",
             "rollback_install",
             "unsafe install root",
-            "PROJECT_SKILLS_INSTALLED=31",
+            "PROJECT_SKILLS_INSTALLED=16",
+            "PROJECT_STANDALONE_SKILLS_INSTALLED=0",
             "PROJECT_SHARED_CONTRACT=linked",
         ),
         "installer",
@@ -309,7 +371,6 @@ def main() -> None:
     for path in (ROOT / "README.md", ROOT / "AGENTS.md"):
         text = path.read_text(encoding="utf-8")
         require_all(text, ("skills/<skill>/SKILL.md", "Codex 记忆"), path.name)
-    assert "/Users/yehailin" not in active_text
     assert "/Volumes/AutoA" not in active_text
     assert "computer-use/1.0." not in active_text
     for stale_fault_first in (

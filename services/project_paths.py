@@ -43,10 +43,4 @@ VM_IMAGES_DIR = configured_path(
 )
 VM_TEMPLATE = configured_path("SUBMISSION_VM_TEMPLATE", VM_IMAGES_DIR / "macOS.utm")
 SHARED_DIR = configured_path("SUBMISSION_SHARED_DIR", Path.home() / "Desktop" / "共享文件")
-SSH_PRIVATE_KEY = configured_path(
-    "SUBMISSION_SSH_PRIVATE_KEY", Path.home() / ".ssh" / "id_ed25519"
-)
-SSH_PUBLIC_KEY = configured_path(
-    "SUBMISSION_SSH_PUBLIC_KEY", Path(f"{SSH_PRIVATE_KEY}.pub")
-)
 PROJECT_SKILLS_DIR = configured_path("PROJECT_SKILLS_DIR", PROJECT_ROOT / "skills")

@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ROOT / "skills"
 sys.path.insert(0, str(ROOT))
 
-from scripts.utm_16_generate_env import write_env  # noqa: E402
+from scripts.utm_env_generate import write_env  # noqa: E402
 
 
 def read(name: str) -> str:
@@ -36,7 +36,7 @@ def sample_env() -> dict[str, str]:
 
 
 def main() -> None:
-    generator_source = (ROOT / "scripts" / "utm_16_generate_env.py").read_text(encoding="utf-8")
+    generator_source = (ROOT / "scripts" / "utm_env_generate.py").read_text(encoding="utf-8")
     for required in ("os.fsync", "os.replace", "ENV_WRITE", "ENV_READBACK"):
         assert required in generator_source, required
 
@@ -48,25 +48,78 @@ def main() -> None:
         assert output_again.stat().st_ino == inode
         assert output_again.read_bytes() == output.read_bytes()
 
-    utm_16 = read("utm-16")
+    utm_env = read("utm-env")
     for required in (
-        "GUEST_ENV_WRITE=atomic_verified",
-        "GUEST_ENV_ROLLBACK=verified",
+        "${SUBMISSION_SHARED_DIR}/Fire_One_en1.3/.env",
+        "ENV_TARGET_DIR=verified",
         "ENV_READBACK=exact",
+        "HOST_ENV=GENERATED_AND_VERIFIED",
+    ):
+        assert required in utm_env, required
+    for forbidden in (
+        "GUEST_ENV_WRITE=atomic_verified",
         "SSH_PRIVATE_KEY=verified",
+        "UTM_ENV=SSH_COPIED",
     ):
-        assert required in utm_16, required
+        assert forbidden not in utm_env, forbidden
 
-    utm_17 = read("utm-17")
     for required in (
-        "read-field --heading '应用信息' --label '研发金币图链接：' --copy",
-        "read-field --heading '应用信息' --label '金币表格: ' --copy",
-        "pbcopy </dev/null",
-        "LINK_CLIPBOARD=cleared",
+        "scripts/utm_env.py",
+        "scripts/utm_env_download_assets.py",
+        "scripts/utm_env_guest_finalize.py",
+        "qv0zc1dq6qy.feishu.cn/base/LNFdbb2cxaauuvsVGuGcebMhnxm",
+        "table=tblcENvSwMO6lhSH&view=vewfxNVEGj",
+        "研发截图",
+        "金币表格文件",
+        "金币商店截图",
+        "代码 URL",
+        "code_commit_sha",
+        "code_download_method",
+        "asset_count=4",
+        "<应用名>.xlsx",
+        "<应用名>.png",
+        "asset_filename_case=exact",
+        "${SUBMISSION_SHARED_DIR}",
+        "/Volumes/My Shared Files/共享文件",
+        "Fire_One_en1.3",
+        "HOST_GUEST_ASSET_SHA256=exact",
+        "GUEST_DOWNLOAD_ASSET_COPY=three_assets_verified_or_identical_existing",
+        "GUEST_CODE_PATH=/Users/<vm_name>/StudioProjects/<应用名>",
+        "GUEST_CODE_COPY=verified_or_identical_existing",
+        "FIRE_ONE_ENV_SOURCE=Fire_One_en1.3/.env",
+        "FIRE_ONE_ENV_SHA256=exact",
+        "FIRE_ONE_ENV_MODE=600",
     ):
-        assert required in utm_17, required
+        assert required in utm_env, required
+    for forbidden in (
+        "研发金币图链接",
+        "read-field --heading '应用信息'",
+        "pbpaste | python3 scripts/shared_operations.py browser-url",
+        "Fire_One_en1.2",
+        "tccutil reset SystemPolicyAppBundles",
+        "/Library/Application Support/com.apple.TCC/TCC.db",
+        "<应用名>.<图片扩展名>",
+        "金币商店截图为 `<应用名><检测到的图片扩展名>`",
+        "Computer Use",
+        "app-management-ensure",
+        "app-management-verify",
+        "Privacy_AppBundles",
+        "TERMINAL_APP_MANAGEMENT=verified",
+        "`$HOME/Downloads/` 下的四项资产",
+    ):
+        assert forbidden not in utm_env, forbidden
 
-    utm_18 = read("utm-18")
+    for relative in ("README.md", "AGENTS.md", "docs/utm-env.md"):
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        assert "/Users/<vm_name>/StudioProjects/<应用名>" in text, relative
+        assert "<应用名>-git" in text, relative
+
+    for name in ("utm-env", "utm-script"):
+        skill = read(name)
+        assert "Fire_One_en1.3" in skill, name
+        assert "Fire_One_en1.2" not in skill, name
+
+    utm_18 = read("utm-script")
     assert "`pkill` 必须返回 `0`" not in utm_18
     assert "幂等，可修复后执行一次新 attempt" not in utm_18
     for required in (
@@ -77,26 +130,26 @@ def main() -> None:
     ):
         assert required in utm_18, required
 
-    utm_19 = read("utm-19")
+    utm_19 = read("utm-image")
     assert "/usr/bin/zipinfo -1" not in utm_19
     assert "partial_upload" not in utm_19
     for required in (
-        "zipfile.ZipFile",
-        "PurePosixPath",
-        "external_attr",
-        "JPEG_MAGIC=verified",
-        "JPEG_SET_RECURSIVE=verified",
+        "scripts/utm_image_source.py",
+        "美女截图 链接",
+        "研发截图",
+        "ZIP/JPEG/PNG",
+        "SCREENSHOT_SOURCE_FIELD=beauty_link|development_attachment",
         "SCREENSHOT_PREUPLOAD_CLASSIFICATION=empty|complete",
     ):
         assert required in utm_19, required
 
-    utm_20 = read("utm-20")
+    utm_20 = read("utm-business")
     for required in (
-        "BANK_ADD_ATTEMPT_ID",
-        "pbcopy </dev/null",
-        "unset code body SMS_URL",
-        "NOTION_BUSINESS_BEFORE=retained_until_verified",
-        "BANK_SUCCESS_STATE=fresh|recovered|processing_resume",
+        "mode-600",
+        "SSH stdin JSON",
+        "NOTION_BUSINESS_SAVED=written|verified_equal",
+        "BANK_ACCOUNT_PROCESSING=verified",
+        "utm-business-bank-info-missing",
     ):
         assert required in utm_20, required
 
@@ -145,16 +198,14 @@ def main() -> None:
     ):
         assert required in utm_24, required
 
-    utm_25 = read("utm-25")
+    utm_p8 = read("utm-p8")
     for required in (
-        "BROWSER_SESSION_RECHECKS=2",
-        "P8_CANDIDATE_COUNT=1",
-        "P8_PAYLOAD=verified",
-        "NOTION_EQUAL_READBACK=verified",
-        "SECURE_TEMP_RETENTION=rollback_failure_only",
-        "LEGACY_APPROVAL_MIGRATION=independently_verified",
+        "scripts/utm_p8.py",
+        "PROD_YML_API_CREDENTIALS=verified",
+        "P8_FILE=verified",
+        "NOTION_REFUND_CALLBACK_P8=verified",
     ):
-        assert required in utm_25, required
+        assert required in utm_p8, required
 
     print("LATE_SKILL_REGRESSIONS=verified")
 

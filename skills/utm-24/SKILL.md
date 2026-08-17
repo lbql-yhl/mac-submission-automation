@@ -7,15 +7,17 @@ description: Use when utm-23 has just finished and the same guest Edge remains o
 
 ## 全局自动恢复与最后故障卡规则
 
-本技能强制继承共享重复操作记忆：原生粘贴调用 `OP-NATIVE-PASTE`，浏览器 URL 调用 `OP-BROWSER-URL-NO-SCHEME`，Apple 电话/验证码调用 `OP-APPLE-PHONE-OTP`，固定 VM 密码调用 `OP-FIXED-PASSWORD-1234`，必须由用户决定的业务节点才调用 `OP-USER-CONFIRMATION`。不得在本技能内发明简化版或冲突步骤。可安全修复的故障必须做满三轮“诊断→实际修复→独立复验”；只有不可逆动作、不能安全重复写入或外部不可修复状态，才改做三轮独立只读复核。少于三轮时运行时拒绝发卡。
+本技能调用共享重复操作记忆中的 `OP-NATIVE-PASTE`、`OP-BROWSER-URL-NO-SCHEME`、`OP-APPLE-PHONE-OTP`、`OP-FIXED-PASSWORD-1234` 和 `OP-USER-CONFIRMATION`。故障按三轮“诊断→实际修复→独立复验”处理。
 
 执行任何命令前，在项目根目录运行 `eval "$(python3 scripts/preflight.py --project-only --emit-shell)"`，取得当前机器的动态路径。必须先完整遵守 [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md)：固定顺序是自动诊断、自动修复、自动复验，只有智能体确实无法修复时才允许发送飞书故障卡。
 
+故障修复后重新执行时必须调用共享 `OP-FULL-ENTRY-REPLAY`：重新运行本技能唯一入口，由入口从第 1 步顺序实时复验；已完成且当前结果仍正确的步骤只跳过副作用，禁止直接从旧断点或旧会话继续。
+
 - 正常成功路径连续自动执行，不发送故障卡，不等待用户确认或普通聊天回复。
 - 可逆误点先回到本技能矩阵列出的最近验证锚点，作废旧坐标，等待至少 3 秒并用最新截图重做当前最小动作；成功后记录 `GUI_RECOVERY=verified` 并继续。
-- SSH、API、文件和页面瞬态错误按共享合同有界恢复；不可逆动作只执行一次，结果不明时只读查询同一 attempt，禁止盲目重做。
+- SSH、API、文件和页面错误按共享合同有界恢复。
 - 只有恢复预算穷尽或只读证明为外部不可修复状态，才记录 `AUTO_RECOVERY_ATTEMPTS`、`AUTO_RECOVERY_ACTIONS`、`AUTO_RECOVERY_RESULT=exhausted|unrepairable` 和最后验证锚点。
-- 自动恢复穷尽后，使用下列最后出口；`--unrepairable` 只允许用于 CAPTCHA、账号锁定、权威数据缺失、权限/所有权冲突或不可逆结果仍不明确，不能绕过可执行的恢复：
+- 自动恢复穷尽后，使用下列最后出口：
 
 ```bash
 python3 services/feishu_bot.py notify-fault \
@@ -37,7 +39,7 @@ python3 services/feishu_bot.py wait-decision \
 
 规则：`--recovery-result unrepairable` 必须同时追加 `--unrepairable`；恢复穷尽的 `exhausted` 分支不得追加该参数。两种分支都必须填写真实的恢复次数和动作，不能把占位符原样执行。
 
-故障卡仍固定保留 `stop`、`manual_continue`、`retry_skill` 三个决定及稳定 UUID/首次送达后一小时超时规则。当前执行器收到继续决定后立即重读同一精确现场；已验证步骤只有在证据仍成立时才跳过。故障卡是最后恢复出口，不是正常确认节点。
+故障卡仍固定保留 `stop`、`manual_continue`、`retry_skill` 三个决定及稳定 UUID/首次送达后一小时超时规则。当前执行器收到继续决定后必须按 `OP-FULL-ENTRY-REPLAY` 重新调用唯一入口，从第 1 步重读同一精确现场；已验证步骤只有在证据仍成立时才跳过副作用。故障卡是最后恢复出口，不是正常确认节点。
 
 ## 本技能自动恢复矩阵
 
@@ -52,15 +54,15 @@ python3 services/feishu_bot.py wait-decision \
 
 `utm-24` 紧接 `utm-23` 立即执行。入口已有 `UTM_23=verified`，因此直接继承 `utm-23` 刚刚确认的当前 `run_id`、原 `chat_id`、应用名、`vm_name`、版本、构建号和仍然打开的 Ready for Review 页面。
 
-无需重新检查 VM、Edge、Build、Game Center、审核草稿或 App Information，也不得重新组稿、重新清理或改变已准备状态。`utm-11` 已保存 `05-small-business.png`，`utm-23` 已保存 `02-iap-drafts.png`、`03-app-information.png`。本技能只采集 `01-media-manager.png` 和 `04-privacy-agreement.png`，随后校验当前 run 的全部五张图与 15 项范围，由运行时写入系统自检授权并立即执行一次提交。App Store Connect 明确成功后，本技能继续在同一 guest Edge 完成加急审核表单，不发送成功通知；原 App Store 成功标签页必须始终保留，只能在同一 guest Edge 进程中新开标签页。
+无需重新检查 VM、Edge、Build、Game Center、审核草稿或 App Information，也不得重新组稿、重新清理或改变已准备状态。`utm-apps` 已保存 `05-small-business.png`，`utm-23` 已保存 `02-iap-drafts.png`、`03-app-information.png`。本技能只采集 `01-media-manager.png` 和 `04-privacy-agreement.png`，随后校验当前 run 的全部五张图与 15 项范围，由运行时写入系统自检授权并立即执行一次提交。App Store Connect 明确成功后，本技能继续在同一 guest Edge 完成加急审核表单，不发送成功通知；原 App Store 成功标签页必须始终保留，只能在同一 guest Edge 进程中新开标签页。
 
-Notion 只通过项目 `scripts/notion_api.py` 读取；不得用宿主 Chrome、Notion 插件、Playwright、CUA、坐标或浏览器剪贴板读取 Notion。`read-field --copy` 只把 API 返回值放入已验证的宿主剪贴板，供同一 guest Edge 打开隐私协议网站。
+Notion 只通过项目 `scripts/notion_api.py` 读取；不得用宿主 Chrome、Notion 插件、CUA、坐标或浏览器剪贴板读取 Notion。`read-field --copy` 只把 API 返回值放入已验证的宿主剪贴板，供同一 guest Edge 打开隐私协议网站。
 
-每次 GUI 操作后等待至少 3 秒并重新读取最新画面，确认目标控件、当前高亮和操作结果后才能继续。正常主线不发送需要回复的卡片；成功通知由 `utm-25` 负责。只有共享合同规定的最后故障出口才向当前 run 的原 `chat_id` 发送三按钮故障卡，所有卡片都严禁发送到 `AI-Infra业务团队`。
+每次 GUI 操作后等待至少 3 秒并重新读取最新画面，确认目标控件、当前高亮和操作结果后才能继续。正常主线不发送需要回复的卡片；当前不发送成功通知。只有共享合同规定的最后故障出口才向当前 run 的原 `chat_id` 发送三按钮故障卡，所有卡片都严禁发送到 `AI-Infra业务团队`。
 
 ## 操作步骤
 
-1. 确认已有 `UTM_23=verified`、`REVIEW_SCREENSHOT_02=verified`、`REVIEW_SCREENSHOT_03=verified` 和 `REVIEW_SCREENSHOT_05=verified`，且从 `utm-23` 到当前步骤没有任务中断或现场切换。直接继承当前 run、应用、VM、版本和构建号，不得改用最新 run、旧 run、记忆或对话中的值。只读确认三个继承文件都位于当前 run 目录、权限 `600`、非空、可读为 PNG，且 SHA-256 与所属技能记录一致。任一不合格时记录 `SCREENSHOT_RECOVERY=handoff_to_owner`：`05` 只交回 `utm-11`，`02/03` 只交回 `utm-23`，由所属技能在同一 run/VM/会话的精确页面恢复并重做其完成检查，然后返回本步骤；`utm-24` 自己绝不采集这三张图。确认原 Ready for Review 标签页仍在同一 guest Edge 中并保留该标签页。
+1. 确认已有 `UTM_23=verified`、`REVIEW_SCREENSHOT_02=verified`、`REVIEW_SCREENSHOT_03=verified` 和 `REVIEW_SCREENSHOT_05=verified`，且从 `utm-23` 到当前步骤没有任务中断或现场切换。直接继承当前 run、应用、VM、版本和构建号，不得改用最新 run、旧 run、记忆或对话中的值。只读确认三个继承文件都位于当前 run 目录、权限 `600`、非空、可读为 PNG，且 SHA-256 与所属技能记录一致。任一不合格时记录 `SCREENSHOT_RECOVERY=handoff_to_owner`：`05` 只交回 `utm-apps`，`02/03` 只交回 `utm-23`，由所属技能在同一 run/VM/会话的精确页面恢复并重做其完成检查，然后返回本步骤；`utm-24` 自己绝不采集这三张图。确认原 Ready for Review 标签页仍在同一 guest Edge 中并保留该标签页。
 
 2. 复用当前 Computer Use 的同一 `node_repl`/`sky` GUI 驱动会话准备截图保存函数；该驱动器不是本项目流程中的额外技能。`run_id` 必须先匹配 `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`：
 
@@ -171,7 +173,7 @@ Notion 只通过项目 `scripts/notion_api.py` 读取；不得用宿主 Chrome�
 
    命令必须原子写入顶层 `review_submit_attempt`，且 run/decision/version/build/15 项身份完全一致；已有 attempt 只能复用相同 ID。`Submit for Review` 暂时为灰色时按 5/10/20/40 秒有界只读等待。按钮变蓝且所有身份仍一致时，先以同一命令把状态推进为 `clicking`，再只点击一次；点击动作返回后无论页面是否已变化，都先推进为 `result_unknown`。若出现标准确认弹窗，必须同时核对弹窗属于 App Store Connect、应用名/版本匹配、范围为当前 App Version 加 14 个 IAP、主按钮精确为提交且只有一个；确认前再次核对同一 attempt 仍是 `result_unknown`，只确认一次。页面响应慢或结果不明时禁止第二次点击。
 
-8. 只接受页面明确显示 `15 Items Submitted` 或当前版本状态变为 `Waiting for Review`，并要求 App/版本/构建仍与 attempt 相同。随后以同一运行时命令依次将状态从 `result_unknown` 推进到 `verified`；不能跳级、回退或换 ID。记录 `SUBMIT_FOR_REVIEW=clicked_once` 和精确 `APP_REVIEW_STATUS=Waiting for Review|15 Items Submitted`；保留这个 App Store 成功标签页，不关闭、不重载、不在其中继续导航。此时记录 `REVIEW_SUCCESS_NOTIFICATION=not_sent`，本技能不得发送绿色成功通知。
+8. 只接受页面明确显示 `15 Items Submitted` 或当前版本状态变为 `Waiting for Review`，并要求 App/版本/构建仍与 attempt 相同。随后以同一运行时命令依次将状态从 `result_unknown` 推进到 `verified`；不能跳级、回退或换 ID。记录 `SUBMIT_FOR_REVIEW=clicked_once` 和精确 `APP_REVIEW_STATUS=Waiting for Review|15 Items Submitted`；保留这个 App Store 成功标签页，不关闭、不重载、不在其中继续导航。本技能不得发送绿色成功通知。
 
 9. App Store 提交 attempt 已为 `verified` 后，先生成稳定 `EXPEDITE_SUBMIT_ATTEMPT_ID`，在 `${PROJECT_ROOT}/runtime/utm-24-attempts/<run-id>/expedite.json` 以 mode 600 原子保存 run/原 chat、App ID/应用名、`REVIEW_SUBMIT_ATTEMPT_ID`、当前 review 成功状态、`state=prepared` 和时间；已有 ledger 必须身份完全一致并复用同一 ID。记录 `EXPEDITE_SUBMIT_ATTEMPT_ID=<stable-id>`。
 
@@ -187,7 +189,7 @@ Notion 只通过项目 `scripts/notion_api.py` 读取；不得用宿主 Chrome�
 
 12. 再次逐项确认 `App Name` 等于当前 run 应用名、`Platform` 等于 `iOS`、页面仍为同一加急表单、`Send` 是唯一可用提交控件，并确认同一 ledger 尚为 `prepared`。全部通过后先把 ledger 原子更新为 `clicking`，只点击一次 `Send`，动作返回后立即更新为 `result_unknown` 并记录 `EXPEDITED_REVIEW_SEND=clicked_once`；等待至少 3 秒并重新读取最新画面。只有页面精确显示 `We’ll expedite review for <当前应用名>.` 且 App/ledger/review attempt 身份仍一致，才更新为 `verified` 并记录 `EXPEDITED_REVIEW_RESULT=verified`。发送后加载、错误、空白、文案不匹配或结果不明时只读检查同一 `EXPEDITE_SUBMIT_ATTEMPT_ID`，不得再次点击；恢复预算穷尽且仍不明确时才形成新的最后故障事件。`manual_continue` 和 `retry_skill` 也只能重新读取同一加急页面和 ledger 并核对精确成功文案，不得盲目再次点击 `Send`。
 
-13. 确认 `APP_REVIEW_STATUS=Waiting for Review|15 Items Submitted`、`REVIEW_SUBMIT_ATTEMPT_STATUS=verified`、`EXPEDITED_REVIEW_APP_NAME=verified`、`EXPEDITED_REVIEW_PLATFORM=iOS`、`EXPEDITED_REVIEW_SEND=clicked_once|skipped_existing_success`、同一 expedite ledger 为 `verified|verified_existing_success`、`EXPEDITED_REVIEW_RESULT=verified`、`REVIEW_SUCCESS_NOTIFICATION=not_sent` 后记录 `API_CREDENTIALS_REGISTRATION=pending` 和 `UTM_24=verified`。保留同一 run、原 `chat_id`、VM、guest Edge 进程/登录会话、App Store 成功标签页和加急成功页，立即交接 `utm-25`；不等待用户确认。API 信息登记属于 `utm-25`，不得提前在本技能读取或写入。
+13. 确认 `APP_REVIEW_STATUS=Waiting for Review|15 Items Submitted`、`REVIEW_SUBMIT_ATTEMPT_STATUS=verified`、`EXPEDITED_REVIEW_APP_NAME=verified`、`EXPEDITED_REVIEW_PLATFORM=iOS`、`EXPEDITED_REVIEW_SEND=clicked_once|skipped_existing_success`、同一 expedite ledger 为 `verified|verified_existing_success`、`EXPEDITED_REVIEW_RESULT=verified` 后记录 `UTM_24=verified`。保留同一 run、原 `chat_id`、VM、guest Edge 进程/登录会话、App Store 成功标签页和加急成功页并结束当前主线；不等待用户确认，不发送成功通知。
 
 ## 完成标准
 
@@ -215,8 +217,6 @@ EXPEDITED_REVIEW_APP_NAME=verified
 EXPEDITED_REVIEW_PLATFORM=iOS
 EXPEDITED_REVIEW_SEND=clicked_once|skipped_existing_success
 EXPEDITED_REVIEW_RESULT=verified
-API_CREDENTIALS_REGISTRATION=pending
-REVIEW_SUCCESS_NOTIFICATION=not_sent
 UTM_24=verified
 ```
 
@@ -233,14 +233,14 @@ UTM_24=verified
 
 ## 常见误判
 
-- `utm-11` 保存 `05`，`utm-23` 保存 `02/03`，`utm-24` 只保存 `01/04`；不得把五张图重新集中到本技能。
+- `utm-apps` 保存 `05`，`utm-23` 保存 `02/03`，`utm-24` 只保存 `01/04`；不得把五张图重新集中到本技能。
 - 五张截图和最终 15 项范围自检通过后必须写入系统自检授权并自动提交一次，不等待任何回复。
 - `record-auto-review-approval` 只写当前 run 的单次授权快照，不发送飞书消息。
 - `manual_continue`/`retry_skill` 只用于异常故障恢复，不能替代提审确认或触发第二次提交。
-- App Store 明确成功后仍要完成加急审核；`utm-24` 只记录 `REVIEW_SUCCESS_NOTIFICATION=not_sent`，绿色成功通知由 `utm-25` 发送。
+- App Store 明确成功后仍要完成加急审核；当前流程不发送绿色成功通知。
 - 加急页已存在精确成功文案时只校验并记录 `skipped_existing_success`；没有成功文案但先前 `Send` 是否点击不明时不能当作 pristine form。
 - `Send` 只能在两个下拉框回显复核完成后点击一次；任何故障决定都不能授权第二次点击。
 
 ## 正常交接
 
-仅当上述提交与加急标记全部成立时记录 `UTM_24=verified` 并立即交接 `utm-25`。只有用户在最后故障出口选择 `stop` 或故障卡等待超时，才保留现场并结束当前 run；`UTM_24=blocked` 只表示自动恢复已穷尽并进入三按钮故障卡等待，不得静默结束执行器。
+仅当上述提交与加急标记全部成立时记录 `UTM_24=verified` 并结束当前主线。`utm-24` 是最终技能，不再调用或交接其他技能。只有用户在最后故障出口选择 `stop` 或故障卡等待超时，才保留现场并结束当前 run；`UTM_24=blocked` 只表示自动恢复已穷尽并进入三按钮故障卡等待，不得静默结束执行器。

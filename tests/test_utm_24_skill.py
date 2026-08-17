@@ -33,8 +33,8 @@ def main() -> None:
         "Waiting for Review", "15 Items Submitted",
         "developer.apple.com/contact/app-store/?topic=expedite",
         "pristine_form", "unknown_prior_send", "只点击一次 `Send`",
-        "EXPEDITED_REVIEW_RESULT=verified", "REVIEW_SUCCESS_NOTIFICATION=not_sent",
-        "UTM_24=verified", "立即交接 `utm-25`",
+        "EXPEDITED_REVIEW_RESULT=verified",
+        "UTM_24=verified", "最终技能", "不再调用或交接其他技能",
     ):
         assert value in skill, value
 

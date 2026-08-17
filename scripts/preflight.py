@@ -19,19 +19,17 @@ from services.project_paths import (  # noqa: E402
     PROJECT_ROOT,
     PROJECT_SKILLS_DIR,
     SHARED_DIR,
-    SSH_PRIVATE_KEY,
-    SSH_PUBLIC_KEY,
     VM_IMAGES_DIR,
     VM_TEMPLATE,
 )
 
 
 ORDERED = (
-    "notion-utm", "notion-utm-1", "utm-clone-macos", "utm-1", "utm-2", "utm-3",
-    "vm-down", "utm-4", "utm-5", "files", "utm-clash", "utm-6", "utm-7", "utm-8",
-    "utm-9", "utm-10", "utm-11", "utm-12", "utm-13", "utm-14", "utm-15", "utm-16",
-    "utm-17", "utm-18", "utm-19", "utm-20", "utm-21", "utm-22", "utm-23", "utm-24", "utm-25",
+    "utm-vm-clone", "utm-notion", "utm-clash-ip", "utm-login", "utm-edit",
+    "utm-key", "utm-apps", "utm-business",
+    "utm-env", "utm-script", "utm-image", "utm-p8", "utm-21", "utm-22", "utm-23", "utm-24",
 )
+STANDALONE: tuple[str, ...] = ()
 
 
 def executable_exists(command: str) -> bool:
@@ -78,8 +76,15 @@ def check(project_only: bool) -> dict[str, object]:
     checks: dict[str, object] = {
         "project_root": PROJECT_ROOT == ROOT and (ROOT / "README.md").is_file(),
         "skills_count": sum((PROJECT_SKILLS_DIR / name / "SKILL.md").is_file() for name in ORDERED),
-        "skill_set_exact": discovered == set(ORDERED),
-        "skill_names_unique": len(ORDERED) == len(set(ORDERED)) == 31,
+        "standalone_skills_count": sum(
+            (PROJECT_SKILLS_DIR / name / "SKILL.md").is_file() for name in STANDALONE
+        ),
+        "skill_set_exact": discovered == set(ORDERED) | set(STANDALONE),
+        "skill_names_unique": (
+            len(ORDERED) == len(set(ORDERED)) == 16
+            and len(STANDALONE) == len(set(STANDALONE)) == 0
+            and set(ORDERED).isdisjoint(STANDALONE)
+        ),
         "shared_contract": (PROJECT_SKILLS_DIR / "_shared" / "AUTOMATION_CONTRACT.md").is_file(),
         "python3": shutil.which("python3") is not None,
         "codex": executable_exists(codex_command),
@@ -91,8 +96,6 @@ def check(project_only: bool) -> dict[str, object]:
                 "vm_images_dir": VM_IMAGES_DIR.is_dir(),
                 "vm_template": VM_TEMPLATE.is_dir(),
                 "shared_dir": SHARED_DIR.is_dir(),
-                "ssh_private_key_parent": SSH_PRIVATE_KEY.parent.is_dir(),
-                "ssh_public_key_parent": SSH_PUBLIC_KEY.parent.is_dir(),
                 "submission_host_machine": bool(os.getenv("SUBMISSION_HOST_MACHINE", "").strip()),
                 "feishu_app_id": bool(os.getenv("FEISHU_APP_ID", "").strip()),
                 "feishu_app_secret": bool(os.getenv("FEISHU_APP_SECRET", "").strip()),
@@ -101,7 +104,6 @@ def check(project_only: bool) -> dict[str, object]:
                 "codeup_username": bool(os.getenv("CODEUP_USERNAME", "").strip()),
                 "codeup_password": bool(os.getenv("CODEUP_PASSWORD", "").strip()),
                 "ssh": shutil.which("ssh") is not None,
-                "ssh_keygen": shutil.which("ssh-keygen") is not None,
                 "git": shutil.which("git") is not None,
                 "node": shutil.which("node") is not None,
                 "npm": shutil.which("npm") is not None,
@@ -110,7 +112,13 @@ def check(project_only: bool) -> dict[str, object]:
             }
         )
     checks["ok"] = all(
-        value == 31 if key == "skills_count" else bool(value)
+        (
+            value == 16
+            if key == "skills_count"
+            else value == 0
+            if key == "standalone_skills_count"
+            else bool(value)
+        )
         for key, value in checks.items()
         if key != "ok"
     )
@@ -133,8 +141,6 @@ def main() -> int:
             "SUBMISSION_VM_IMAGES_DIR": VM_IMAGES_DIR,
             "SUBMISSION_VM_TEMPLATE": VM_TEMPLATE,
             "SUBMISSION_SHARED_DIR": SHARED_DIR,
-            "SUBMISSION_SSH_PRIVATE_KEY": SSH_PRIVATE_KEY,
-            "SUBMISSION_SSH_PUBLIC_KEY": SSH_PUBLIC_KEY,
         }
         for key, value in values.items():
             print(f"export {key}={shlex.quote(str(value))}")

@@ -1,8 +1,8 @@
 # UTM-24：最终取证、自动自检并提交审核
 
-对应技能：`utm-24`。紧接 `utm-23` 立即执行，直接继承当前 run、原 `chat_id`、Ready for Review 页面、`utm-11` 的 `05-small-business.png` 和 `utm-23` 的 `02-iap-drafts.png`、`03-app-information.png`。本技能只采集 `01-media-manager.png`、`04-privacy-agreement.png`。五图、版本/构建、14 个 IAP 和 15 项范围全部通过后，由系统写入完整自动自检授权并自动提交一次；正常主线不发提审确认卡、不等待任何回复。
+对应技能：`utm-24`。紧接 `utm-23` 立即执行，直接继承当前 run、原 `chat_id`、Ready for Review 页面、`utm-apps` 的 `05-small-business.png` 和 `utm-23` 的 `02-iap-drafts.png`、`03-app-information.png`。本技能只采集 `01-media-manager.png`、`04-privacy-agreement.png`。五图、版本/构建、14 个 IAP 和 15 项范围全部通过后，由系统写入完整自动自检授权并自动提交一次；正常主线不发提审确认卡、不等待任何回复。
 
-飞书故障卡功能继续保留，但只在自动诊断、自动修复和自动复验穷尽，或 CAPTCHA、账号锁定、权威数据缺失、所有权冲突、不可逆结果仍不明确等智能体确实不能修复时使用。兼容旧 run 的 review-card/callback 能力由运行时保留，不得成为新 run 的正常节点。绿色成功通知和 API 信息登记仍由 `utm-25` 完成。
+飞书故障卡功能继续保留，但只在自动诊断、自动修复和自动复验穷尽，或 CAPTCHA、账号锁定、权威数据缺失、所有权冲突、不可逆结果仍不明确等智能体确实不能修复时使用。兼容旧 run 的 review-card/callback 能力由运行时保留，不得成为新 run 的正常节点。当前不发送绿色成功通知。
 
 ## Checklist
 
@@ -21,7 +21,7 @@
 - [ ] 点击后结果不明时只读轮询同一 attempt 的页面/状态，禁止第二次点击。只有 `15 Items Submitted` 或 `Waiting for Review` 才记录精确 `APP_REVIEW_STATUS`。
 - [ ] 保留 App Store 成功标签页，在同一 guest Edge 新标签通过剪贴板闭环打开裸地址 `developer.apple.com/contact/app-store/?topic=expedite`。
 - [ ] 加急页先生成并原子保存稳定 `EXPEDITE_SUBMIT_ATTEMPT_ID`，绑定 run/App/`REVIEW_SUBMIT_ATTEMPT_ID` 与当前 review 成功状态。精确显示 `We’ll expedite review for <当前应用名>.` 时将 ledger 标记 `verified_existing_success`；只有完整 pristine form 且 ledger 为 `prepared` 才选择唯一应用和 `iOS`，持久化 `clicking`后只点击一次 `Send`，随即记录 `result_unknown`。partial/ambiguous 或结果不明只读恢复同一 ID，禁止第二次发送。
-- [ ] 精确成功文案出现后记录 `EXPEDITED_REVIEW_RESULT=verified`、`API_CREDENTIALS_REGISTRATION=pending`、`REVIEW_SUCCESS_NOTIFICATION=not_sent`、`UTM_24=verified`，保留同一现场并立即交接 `utm-25`。
+- [ ] 精确成功文案出现后记录 `EXPEDITED_REVIEW_RESULT=verified`、`UTM_24=verified`，保留同一现场并结束主线。
 
 ## 自动恢复与最后故障卡
 
@@ -54,9 +54,7 @@ APP_REVIEW_STATUS=Waiting for Review|15 Items Submitted
 EXPEDITE_SUBMIT_ATTEMPT_ID=<stable-id>
 EXPEDITED_REVIEW_SEND=clicked_once|skipped_existing_success
 EXPEDITED_REVIEW_RESULT=verified
-API_CREDENTIALS_REGISTRATION=pending
-REVIEW_SUCCESS_NOTIFICATION=not_sent
 UTM_24=verified
 ```
 
-`UTM_24=verified` 后立即交接 `utm-25`；本技能不发送成功通知。
+`UTM_24=verified` 后结束当前主线；本技能不发送成功通知。

@@ -10,11 +10,18 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+
+PROJECT_SOURCE_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_SOURCE_ROOT))
+
 from scripts.notion_api import api_from_env
-from services.project_paths import PROJECT_ROOT, SSH_PRIVATE_KEY
+from scripts.ssh_password import password_environment, ssh_args as fixed_password_ssh_args
+from services.project_paths import PROJECT_ROOT
 
 
 RUNS_FILE = PROJECT_ROOT / "runtime" / "feishu-runs.json"
@@ -145,26 +152,16 @@ def main() -> int:
     target = clone_target(args.vm_name, repo_url)
     payload = build_payload(username, password, repo_url, target)
     remote_command = "/bin/zsh -lc " + shlex.quote(REMOTE_CLONE_SCRIPT)
-    command = [
-        "ssh",
-        "-T",
-        "-i",
-        str(SSH_PRIVATE_KEY),
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "IdentitiesOnly=yes",
-        "-o",
-        "ConnectTimeout=5",
-        f"{args.vm_name}@{args.vm_ip}",
-        remote_command,
-    ]
+    command = fixed_password_ssh_args(args.vm_name, args.vm_ip, connect_timeout=5)
+    command.insert(1, "-T")
+    command.append(remote_command)
     result = subprocess.run(
         command,
         input=payload,
         cwd=PROJECT_ROOT,
         timeout=args.timeout_seconds,
         check=False,
+        env=password_environment(),
     )
     del payload
     if result.returncode != 0:

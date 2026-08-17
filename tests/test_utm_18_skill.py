@@ -3,75 +3,60 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL = ROOT / "skills/utm-18/SKILL.md"
-UTM19_SKILL = ROOT / "skills/utm-19/SKILL.md"
+SKILL = ROOT / "skills/utm-script/SKILL.md"
+DOC = ROOT / "docs/utm-script.md"
+UTM19_SKILL = ROOT / "skills/utm-image/SKILL.md"
+COMPLETE_ENTRY = "/Users/yehailin/Documents/mac提审自动化/scripts/utm_18.py"
 
 
 def main() -> None:
-    text = SKILL.read_text(encoding="utf-8")
+    skill = SKILL.read_text(encoding="utf-8")
+    checklist = DOC.read_text(encoding="utf-8")
 
-    required = (
-        "/bin/zsh -lic",
-        "source /dev/stdin",
-        "command -v node",
-        "command -v npm",
-        "node --version",
-        "npm --version",
-        "node --version ||",
-        "npm --version ||",
-        "CDP_ENDPOINT=http://127.0.0.1:9222",
-        "/usr/bin/grep -c '^CDP_ENDPOINT=' .env",
-        "set -o pipefail",
-        "utm-18-fill-description-",
-        '/bin/chmod 600 "$log_path"',
-        'npm run fill:description 2>&1 | /usr/bin/tee "$log_path"',
-        'statuses=("${pipestatus[@]}")',
-        "REMOTE_NPM_EXIT=",
-        "REMOTE_TEE_EXIT=",
-        "RUN_STATE=running",
-        "RUN_STATE=finished",
-        'status_path="${log_path}.status"',
-        "set -o noclobber",
-        "RUN_STATE=prepared",
-        "UTM_18_LOG_PATH=precommitted",
-        "SSH_EXIT=255",
-        "ssh_exit=$?",
-        "printf 'SSH_EXIT=%s\\n'",
-        "wc -c",
-        "shasum -a 256",
-        '/bin/cat "$log_path"',
-        "manual_continue",
-        "每个合法新 attempt 都先产生新的固定 ledger/log/status",
-        "增强版内购创建完成！",
-        "📊 统计信息: 共处理 14 个产品",
-        "SSH_LOGIN_SHELL=verified",
-        "UTM_18_LOG=verified",
-        "REMOTE_NPM_EXIT=0",
-    )
-    for value in required:
-        assert value in text, value
+    for label, text in (("skill", skill), ("doc", checklist)):
+        assert COMPLETE_ENTRY in text, label
+        assert text.count(COMPLETE_ENTRY) == 1, label
+        for required in (
+            "唯一完整入口",
+            "scripts/utm_18_edge.py",
+            "scripts/utm_18_ssh.py",
+            "scripts/utm_18_attempt.py",
+            "APPLE_DEVELOPER_ACCOUNT=verified",
+            "/bin/zsh -lic",
+            "CDP_ENDPOINT=http://127.0.0.1:9222",
+            "npm run fill:description",
+            "UTM_18_ATTEMPT_ID",
+            "UTM_18_LOG_PATH=precommitted",
+            "增强版内购创建完成！",
+            "统计信息: 共处理 N 个产品",
+            "N>=1",
+            "exited_zero",
+            "resident_after_summary",
+            "SSH_EXIT=255",
+            "❌ 创建产品",
+            "error calling the App Store Connect API",
+            "status 500",
+            "UNEXPECTED_ERROR",
+            "FILL_DESCRIPTION=blocked_business_error",
+            "UTM_18=verified",
+            "utm-image",
+        ):
+            assert required in text, f"{label}: {required}"
+        for forbidden in (
+            "open -a Terminal",
+            "open -na Terminal",
+            "Command+N",
+            "sky.click",
+            "SUBMISSION_SSH_PRIVATE_KEY",
+            "BatchMode=yes",
+            "ssh -i",
+            "📊 统计信息: 共处理 14 个产品",
+        ):
+            assert forbidden not in text, f"{label}: {forbidden}"
 
-    forbidden = (
-        "open -a Terminal",
-        "open -na Terminal",
-        "Command+N",
-        "sky.click",
-        "GUEST_TERMINAL=ready",
-    )
-    for value in forbidden:
-        assert value not in text, value
-
-    checklist = (ROOT / "docs" / "utm-18.md").read_text(encoding="utf-8")
-    for value in (
-        "/bin/zsh -lic",
-        "完整实时回传",
-        "每个合法新 attempt 都必须先有新 ledger/log/status",
-        "REMOTE_NPM_EXIT=",
-        "REMOTE_TEE_EXIT=",
-        "SSH_EXIT=255",
-        "manual_continue",
-    ):
-        assert value in checklist, value
+    assert "python3 \"/Users/yehailin/Documents/mac提审自动化/scripts/utm_18_edge.py\"" not in skill
+    assert "python3 \"/Users/yehailin/Documents/mac提审自动化/scripts/utm_18_ssh.py\"" not in skill
+    assert "正常成功路径不暂停、不询问用户" in skill
 
     synchronized = {
         "README.md": ROOT / "README.md",
@@ -80,14 +65,15 @@ def main() -> None:
     }
     for label, path in synchronized.items():
         content = path.read_text(encoding="utf-8")
-        assert "zsh -lic" in content, label
-        assert "tee" in content, label
-        assert "唯一日志" in content, label
+        assert COMPLETE_ENTRY in content, label
+        assert "唯一完整入口" in content, label
+        assert "resident_after_summary" in content, label
+        assert "FILL_DESCRIPTION=blocked_business_error" in content, label
 
     utm19 = UTM19_SKILL.read_text(encoding="utf-8")
-    utm19_doc = (ROOT / "docs" / "utm-19.md").read_text(encoding="utf-8")
+    utm19_doc = (ROOT / "docs" / "utm-image.md").read_text(encoding="utf-8")
     for stale in (
-        "保留 `utm-18` 的 guest Terminal",
+        "保留 `utm-script` 的 guest Terminal",
         "保留 guest Terminal",
         "不操作保留的 guest Terminal",
     ):

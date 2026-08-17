@@ -449,24 +449,13 @@ def main() -> None:
 
     root = Path(__file__).resolve().parents[1]
     browser_url_commands = {
-        "utm-10": (
-            "developer.apple.com/app-store/small-business-program/",
-            "developer.apple.com/account/",
-        ),
-        "utm-12": ("developer.apple.com/account/",),
-        "utm-17": ("pbpaste | python3 scripts/shared_operations.py browser-url",),
-        "utm-18": ("developer.apple.com/account/",),
-        "utm-19": (
-            "pbpaste | python3 scripts/shared_operations.py browser-url",
-            "appstoreconnect.apple.com/apps",
-        ),
+        "utm-script": ("developer.apple.com/account/",),
         "utm-23": ("appstoreconnect.apple.com",),
         "utm-24": (
             "appstoreconnect.apple.com/apps",
             "pbpaste | python3 scripts/shared_operations.py browser-url",
             "developer.apple.com/contact/app-store/?topic=expedite",
         ),
-        "utm-25": ("appstoreconnect.apple.com/access/integrations/api",),
     }
     for skill_name, sources in browser_url_commands.items():
         skill = (root / "skills" / skill_name / "SKILL.md").read_text(encoding="utf-8")
@@ -484,6 +473,23 @@ def main() -> None:
         "打开或切换到 `developer.apple.com/account/`",
     ):
         assert simplified_step not in combined_browser_skills, simplified_step
+
+    utm_image = (root / "skills" / "utm-image" / "SKILL.md").read_text(encoding="utf-8")
+    assert "本技能取得飞书截图来源时不使用剪贴板或浏览器 URL 操作" in utm_image
+    assert "scripts/utm_image_source.py" in utm_image
+
+    for skill_name, script_name in {
+        "utm-apps": "utm_apps.py",
+    }.items():
+        skill = (root / "skills" / skill_name / "SKILL.md").read_text(encoding="utf-8")
+        assert "OP-APPLE-WEB-SCRIPT" in skill, skill_name
+        assert f"/Users/yehailin/Documents/mac提审自动化/scripts/{script_name}" in skill
+        assert "同一 PID" in skill
+
+    for contract_file in ("AGENTS.md", "README.md"):
+        contract = (root / contract_file).read_text(encoding="utf-8")
+        assert "OP-APPLE-WEB-SCRIPT 是唯一例外" in contract, contract_file
+        assert "精确 HTTPS URL 命令" in contract, contract_file
 
     print("SHARED_OPERATIONS_AND_CONFIRMATION=verified")
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json
@@ -41,18 +43,26 @@ class NotionAPI:
                 "Content-Type": "application/json",
             },
         )
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                return json.load(response)
-        except urllib.error.HTTPError as error:
+        retry_delays = (0, 2, 5, 10) if method == "GET" else (0,)
+        for attempt, delay in enumerate(retry_delays):
+            if delay:
+                time.sleep(delay)
             try:
-                body = json.load(error)
-            except Exception:
-                body = {}
-            raise RuntimeError(
-                f"Notion API HTTP {error.code}: {body.get('code', 'unknown')} - "
-                f"{body.get('message', 'request failed')}"
-            ) from None
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    return json.load(response)
+            except urllib.error.HTTPError as error:
+                try:
+                    body = json.load(error)
+                except Exception:
+                    body = {}
+                raise RuntimeError(
+                    f"Notion API HTTP {error.code}: {body.get('code', 'unknown')} - "
+                    f"{body.get('message', 'request failed')}"
+                ) from None
+            except urllib.error.URLError:
+                if attempt + 1 == len(retry_delays):
+                    raise
+        raise RuntimeError("Notion API retry loop exhausted")
 
     def _children(self, block_id: str) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
@@ -225,6 +235,84 @@ class NotionAPI:
         self._write_section_by_id(page_id, "账号信息", account_text)
         return page_id
 
+    def create_registration_copy(self, title: str) -> tuple[str, bool]:
+        """Create only the template copy, leaving every copied block intact."""
+        existing = self._child_page(self.root_page_id, title, missing_ok=True)
+        if existing is not None:
+            return str(existing["id"]), False
+
+        template = self._child_page(self.root_page_id, self.template_title)
+        assert template is not None
+        page = self._request(
+            "POST",
+            "/pages",
+            {
+                "parent": {"type": "page_id", "page_id": self.root_page_id},
+                "properties": {
+                    "title": {
+                        "type": "title",
+                        "title": [{"type": "text", "text": {"content": title}}],
+                    }
+                },
+                "template": {
+                    "type": "template_id",
+                    "template_id": template["id"],
+                    "timezone": "Asia/Shanghai",
+                },
+            },
+        )
+        page_id = str(page["id"])
+        self._wait_for_code(page_id, "账号信息")
+        self._wait_for_code(page_id, "应用信息")
+        return page_id, True
+
+    def write_registration_sections(
+        self,
+        title: str,
+        sections: dict[str, str],
+    ) -> dict[str, bool]:
+        """Replace copied labeled sections as one rollback-protected operation."""
+        page = self._registration_page(title)
+        page_id = str(page["id"])
+        before: dict[str, str] = {}
+        for heading in sections:
+            block = self._wait_for_code(page_id, heading)
+            before[heading] = self._code_text(block)
+
+        changed: dict[str, bool] = {}
+        try:
+            for heading, text in sections.items():
+                changed[heading] = self._write_section_by_id(
+                    page_id,
+                    heading,
+                    text,
+                    replace_existing=True,
+                )
+            for heading, text in sections.items():
+                block = self._code_after_heading(page_id, heading)
+                if block is None or self._code_text(block) != text:
+                    raise RuntimeError(
+                        f"Notion independent readback failed for section {heading!r}"
+                    )
+            return changed
+        except Exception as original_error:
+            rollback_errors: list[str] = []
+            for heading, text in reversed(list(before.items())):
+                try:
+                    self._write_section_by_id(
+                        page_id,
+                        heading,
+                        text,
+                        replace_existing=True,
+                    )
+                except Exception as rollback_error:
+                    rollback_errors.append(f"{heading}: {rollback_error}")
+            if rollback_errors:
+                raise RuntimeError(
+                    "Notion registration rollback failed: " + "; ".join(rollback_errors)
+                ) from original_error
+            raise
+
     def read_section(self, title: str, heading: str) -> str:
         page = self._registration_page(title)
         block = self._code_after_heading(page["id"], heading)
@@ -267,12 +355,25 @@ class NotionAPI:
             raise RuntimeError(f"Notion save verification failed for toggle {toggle!r}")
         return True
 
+    @staticmethod
+    def _split_field(line: str, label: str) -> tuple[str, str]:
+        prefix = label
+        value = line[len(label):]
+        if not label.rstrip().endswith((":", "：")):
+            for separator in (": ", "： ", ":", "："):
+                if value.startswith(separator):
+                    prefix += separator
+                    value = value[len(separator):]
+                    break
+        return prefix, value
+
     def read_field(self, title: str, heading: str, label: str) -> str:
         lines = self.read_section(title, heading).splitlines()
         matches = [line for line in lines if line.startswith(label)]
         if len(matches) != 1:
             raise RuntimeError(f"Expected exactly one field {label!r}; found {len(matches)}")
-        return matches[0][len(label):]
+        _prefix, value = self._split_field(matches[0], label)
+        return value
 
     def set_field(
         self,
@@ -291,16 +392,20 @@ class NotionAPI:
         if len(indexes) != 1:
             raise RuntimeError(f"Expected exactly one field {label!r}; found {len(indexes)}")
         index = indexes[0]
-        current = lines[index][len(label):]
+        prefix, current = self._split_field(lines[index], label)
         if current == value:
             return False
         if current and not replace_existing:
             raise RuntimeError(f"Refusing to replace non-empty Notion field {label!r}")
-        lines[index] = label + value
+        lines[index] = prefix + value
         return self.write_section(title, heading, "\n".join(lines), replace_existing=True)
 
 
-def load_dotenv(path: Path) -> None:
+def load_dotenv(
+    path: Path,
+    *,
+    override_keys: frozenset[str] = frozenset(),
+) -> None:
     if not path.exists():
         return
     for raw_line in path.read_text().splitlines():
@@ -308,7 +413,12 @@ def load_dotenv(path: Path) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key in override_keys:
+            os.environ[key] = value
+        else:
+            os.environ.setdefault(key, value)
 
 
 def api_from_env() -> NotionAPI:

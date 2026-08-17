@@ -3,42 +3,40 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL = ROOT / "skills/utm-11/SKILL.md"
 
 
 def main() -> None:
-    text = SKILL.read_text(encoding="utf-8")
-    operation = text.split("## Workflow", 1)[1].split("## Completion", 1)[0]
+    skill = (ROOT / "skills/utm-apps/SKILL.md").read_text(encoding="utf-8")
+    docs = (ROOT / "docs/utm-apps.md").read_text(encoding="utf-8")
+    workflow = (ROOT / "scripts/utm_11_one.mjs").read_text(encoding="utf-8")
 
-    success = operation.index("We've received your App Store Small Business Program enrollment")
-    capture = operation.index('saveReviewScreenshot("05-small-business.png")', success)
-    assert success < capture
+    for document in (skill, docs):
+        for value in (
+            "/Users/yehailin/Documents/mac提审自动化/scripts/utm_apps.py",
+            "/Users/<vm_name>/Downloads/AppleAccountScriptsBackup/utm_11_one.mjs",
+            "UTM_11=verified",
+            "NOTION_MEMBERSHIP_FIELDS=updated",
+            "UTM_APPS=verified",
+        ):
+            assert value in document, value
+        for removed_rule in (
+            "SSH stdin",
+            "one-shot",
+            "禁止上传",
+            "覆盖 guest",
+            "SowSheet-igec",
+            "UUID/MAC",
+        ):
+            assert removed_rule not in document, removed_rule
 
-    for value in (
-        "Paid Applications Agreement",
-        "PAID_APPS_AGREEMENT=accepted",
-        "automatically complete any known 2FA",
-        "current `run_id`",
-        "both success messages are already visible",
-        "do not reopen or resubmit the enrollment form",
-        'path.resolve(projectRoot, "runtime", "review-screenshots")',
-        "reviewRoot.startsWith(screenshotBase + path.sep)",
-        "sky.get_app_state",
-        "com.utmapp.UTM",
-        'execFileAsync("/usr/bin/sips"',
-        "0o600",
-        "REVIEW_SCREENSHOT_05=verified",
-        "automatically click `Submit` once",
+    for script_step in (
+        "https://developer.apple.com/app-store/small-business-program/",
+        "Enroll now",
+        'input[type="radio"]',
+        'input[type="submit"]#submit',
+        "05-small-business.png",
     ):
-        assert value in text, value
-
-    for name in (
-        "01-media-manager.png",
-        "02-iap-drafts.png",
-        "03-app-information.png",
-        "04-privacy-agreement.png",
-    ):
-        assert f'saveReviewScreenshot("{name}")' not in operation, name
+        assert script_step in workflow, script_step
 
 
 if __name__ == "__main__":

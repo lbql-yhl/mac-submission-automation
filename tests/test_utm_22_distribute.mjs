@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, verify } from 'node:crypto';
 import {
   lstatSync,
@@ -13,9 +14,16 @@ import {
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+import * as distribute from '../scripts/utm_22_distribute.mjs';
 
 import {
+  apiAuthorization,
   buildStatus,
+  attemptRecoveryAction,
+  classifyExistingBuilds,
+  exactAppId,
   matchingBuildsQuery,
   classifyMatchingUploads,
   commitBuildUploadFileBody,
@@ -24,11 +32,185 @@ import {
   makeToken,
   operationChunk,
   readDecodedProfile,
+  readUploadConfiguration,
   resumePackagedIpa,
+  selectArchiveCandidate,
   selectSwiftSupportLibrary,
   swiftLibraries,
   writeAttempt,
 } from '../scripts/utm_22_distribute.mjs';
+
+test('reads the upload configuration without reading project source files', () => {
+  const root = mkdtempSync(join(tmpdir(), 'utm22-config-test-'));
+  const configDirectory = join(root, 'config');
+  mkdirSync(configDirectory);
+  const privateKey = join(configDirectory, 'AuthKey_KEY123.p8');
+  writeFileSync(privateKey, 'private-key-placeholder');
+  const config = join(configDirectory, 'prod.yml');
+  writeFileSync(config, `apple_store:
+  issuer_id: issuer-value
+  key_id: KEY123
+  private_key_path: ./config/AuthKey_KEY123.p8
+app_info:
+  bundle_id: io.pitchpan.example
+`);
+
+  const parsed = readUploadConfiguration(config);
+
+  assert.equal(parsed.issuerId, 'issuer-value');
+  assert.equal(parsed.keyId, 'KEY123');
+  assert.equal(parsed.privateKeyPath, privateKey);
+  assert.equal(parsed.bundleId, 'io.pitchpan.example');
+});
+
+test('rejects a P8 file whose filename does not match the configured key ID', () => {
+  const root = mkdtempSync(join(tmpdir(), 'utm22-config-mismatch-test-'));
+  const configDirectory = join(root, 'config');
+  mkdirSync(configDirectory);
+  writeFileSync(join(configDirectory, 'AuthKey_OTHER.p8'), 'private-key-placeholder');
+  const config = join(configDirectory, 'prod.yml');
+  writeFileSync(config, `apple_store:
+  issuer_id: issuer-value
+  key_id: KEY123
+  private_key_path: ./config/AuthKey_OTHER.p8
+app_info:
+  bundle_id: io.pitchpan.example
+`);
+
+  assert.throws(() => readUploadConfiguration(config), /P8 filename\/key ID mismatch/);
+});
+
+test('selects exactly one archive and never uses newest as a fallback', () => {
+  const one = {
+    path: '/Archives/PitchPan.xcarchive',
+    appName: 'PitchPan',
+    bundleId: 'io.pitchpan.example',
+    version: '1.0.0',
+    build: '1',
+  };
+  assert.deepEqual(selectArchiveCandidate([one], 'PitchPan', 'io.pitchpan.example'), one);
+  assert.throws(
+    () => selectArchiveCandidate([one, { ...one, path: '/Archives/PitchPan-2.xcarchive' }], 'PitchPan', 'io.pitchpan.example'),
+    /ARCHIVE_MATCH_COUNT=2/,
+  );
+});
+
+test('discovers an archive whose top-level plist contains CreationDate', () => {
+  const root = mkdtempSync(join(tmpdir(), 'utm22-archive-date-test-'));
+  const archiveRoot = join(root, 'Archives');
+  const archive = join(archiveRoot, 'SawSet.xcarchive');
+  const app = join(archive, 'Products', 'Applications', 'SawSet.app');
+  mkdirSync(app, { recursive: true });
+  writeFileSync(join(archive, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Name</key><string>SawSet</string>
+  <key>CreationDate</key><date>2026-08-05T03:34:00Z</date>
+</dict></plist>`);
+  writeFileSync(join(app, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleDisplayName</key><string>SawSet</string>
+  <key>CFBundleIdentifier</key><string>com.example.sawset</string>
+  <key>CFBundleShortVersionString</key><string>1.0.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+</dict></plist>`);
+
+  const project = join(root, 'apple-store-bm');
+  const configDirectory = join(project, 'config');
+  mkdirSync(configDirectory, { recursive: true });
+  writeFileSync(join(configDirectory, 'AuthKey_KEY123.p8'), 'private-key-placeholder');
+  const config = join(configDirectory, 'prod.yml');
+  writeFileSync(config, `apple_store:
+  issuer_id: issuer-value
+  key_id: KEY123
+  private_key_path: ./config/AuthKey_KEY123.p8
+app_info:
+  bundle_id: com.example.sawset
+`);
+
+  const script = fileURLToPath(new URL('../scripts/utm_22_distribute.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [
+    script,
+    'discover',
+    '--archive-root', archiveRoot,
+    '--app-name', 'SawSet',
+    '--config', config,
+  ], { encoding: 'utf8' });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /ARCHIVE_CANDIDATES_JSON=/);
+  assert.match(result.stdout, /"app_name":"SawSet"/);
+});
+
+test('requires one App Store Connect app with the archive bundle ID', () => {
+  assert.equal(exactAppId({
+    data: [{ id: '123', attributes: { bundleId: 'io.pitchpan.example' } }],
+  }, 'io.pitchpan.example'), '123');
+  assert.throws(() => exactAppId({ data: [] }, 'io.pitchpan.example'), /APP_MATCH_COUNT=0/);
+});
+
+test('resumes only the persisted build upload after the file was committed', () => {
+  assert.deepEqual(attemptRecoveryAction({
+    state: 'file_committed',
+    buildUploadId: 'upload-1',
+    buildUploadFileId: 'file-1',
+  }), { action: 'poll_upload', uploadId: 'upload-1' });
+  assert.deepEqual(attemptRecoveryAction({
+    state: 'processing',
+    buildUploadId: 'upload-2',
+  }), { action: 'poll_upload', uploadId: 'upload-2' });
+  assert.deepEqual(attemptRecoveryAction({ state: 'preflight' }), { action: 'create' });
+  assert.deepEqual(attemptRecoveryAction({
+    state: 'file_reserved',
+    buildUploadId: 'upload-3',
+  }), { action: 'ambiguous', uploadId: 'upload-3' });
+  assert.deepEqual(attemptRecoveryAction({
+    state: 'existing_build_valid',
+    existingBuildIds: ['build-1'],
+  }), { action: 'poll_existing', buildId: 'build-1' });
+  assert.deepEqual(attemptRecoveryAction({
+    state: 'existing_build_processing',
+    existingBuildIds: ['build-2'],
+  }), { action: 'poll_existing', buildId: 'build-2' });
+  assert.deepEqual(attemptRecoveryAction({
+    state: 'ambiguous_existing_upload',
+    existingBuildIds: ['build-1', 'build-2'],
+  }), { action: 'ambiguous' });
+});
+
+test('treats one valid existing build as success and never creates again', () => {
+  assert.deepEqual(classifyExistingBuilds([]), { action: 'create' });
+  assert.deepEqual(classifyExistingBuilds([
+    { id: 'build-1', attributes: { processingState: 'VALID' } },
+  ]), { action: 'complete', buildId: 'build-1' });
+  assert.deepEqual(classifyExistingBuilds([
+    { id: 'build-2', attributes: { processingState: 'PROCESSING' } },
+  ]), { action: 'wait', buildId: 'build-2' });
+  assert.deepEqual(classifyExistingBuilds([
+    { id: 'build-1', attributes: { processingState: 'VALID' } },
+    { id: 'build-2', attributes: { processingState: 'PROCESSING' } },
+  ]), { action: 'ambiguous', count: 2 });
+});
+
+test('rejects an embedded framework missing its marketing version before upload', () => {
+  assert.equal(typeof distribute.validateEmbeddedFrameworkPlists, 'function');
+
+  const app = join(mkdtempSync(join(tmpdir(), 'utm22-framework-plist-test-')), 'Runner.app');
+  const framework = join(app, 'Frameworks', 'FBSDKCoreKit.framework');
+  mkdirSync(framework, { recursive: true });
+  writeFileSync(join(framework, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  <plist version="1.0"><dict>
+    <key>CFBundleIdentifier</key><string>com.example.fbcorekit</string>
+    <key>CFBundleVersion</key><string>1</string>
+  </dict></plist>`);
+
+  assert.throws(
+    () => distribute.validateEmbeddedFrameworkPlists(app),
+    /FBSDKCoreKit\.framework.*CFBundleShortVersionString/,
+  );
+});
 
 test('queries existing builds through the supported builds collection', () => {
   assert.equal(
@@ -171,6 +353,17 @@ test('creates a verifiable App Store Connect ES256 token', () => {
     verify('sha256', Buffer.from(`${header}.${payload}`), { key: publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(signature, 'base64url')),
     true,
   );
+});
+
+test('reuses one JWT for every request in the same upload attempt', () => {
+  const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const credentials = { issuerId: 'issuer', keyId: 'KEY123', privateKey };
+
+  const first = apiAuthorization(credentials);
+  const second = apiAuthorization(credentials);
+
+  assert.equal(first, second);
+  assert.match(first, /^Bearer [^.]+\.[^.]+\.[^.]+$/);
 });
 
 test('reads required profile fields without converting certificate data to JSON', () => {

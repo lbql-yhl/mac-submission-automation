@@ -30,7 +30,7 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any, Deque, Dict, Iterator, List, Optional, Tuple
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 
@@ -73,6 +73,10 @@ def load_pyobjc_dependencies() -> Tuple[Any, Any]:
 
 
 AX, NSRunningApplication = load_pyobjc_dependencies()
+try:
+    import Quartz as QUARTZ
+except ModuleNotFoundError:
+    QUARTZ = None
 
 
 SYSTEM_SETTINGS_BUNDLE_ID = "com.apple.systempreferences"
@@ -84,12 +88,18 @@ APPLE_SIGN_IN_FIELD_TEXT = "Email or Phone Number"
 LOGIN_PASSWORD_FIELD_TEXT = "Password"
 LOGIN_CONTINUE_TEXT = "Continue"
 MAC_PASSWORD_PROMPT_TEXT = "Enter Mac Password"
+APPLE_ACCOUNT_CHANGES_PROMPT_TEXT = "Apple Account wants to make changes."
+MAC_PASSWORD_PROMPT_TEXTS = (
+    MAC_PASSWORD_PROMPT_TEXT,
+    APPLE_ACCOUNT_CHANGES_PROMPT_TEXT,
+)
 IPHONE_PASSCODE_PROMPT_TEXT = "Enter the passcode you use to unlock the iPhone"
 DONT_KNOW_PASSCODE_TEXTS = (
     "Don't know passcode?",
     "Don’t know passcode?",
 )
 ENTER_PASSCODE_LATER_TEXT = "Enter Passcode Later"
+TRY_AGAIN_LATER_TEXT = "Try Again Later"
 DONT_MERGE_TEXTS = (
     "Don't Merge",
     "Don’t Merge",
@@ -110,12 +120,26 @@ SMS_CONTEXT_KEYWORDS = (
     "验证码",
 )
 CHANGE_PASSWORD_TEXT = "Change Password"
+PERSONAL_INFORMATION_TEXT = "Personal Information"
+NESTED_BACK_IDENTIFIER = "go back"
+CHANGE_PASSWORD_TEXTS = (
+    CHANGE_PASSWORD_TEXT,
+    "Change Password...",
+    "Change Password…",
+)
+SIGN_OUT_OTHER_DEVICES_TEXT = "Sign out other devices using your Apple Account?"
+DONT_SIGN_OUT_TEXTS = ("Don't Sign Out", "Don’t Sign Out")
 NEW_PASSWORD_FIELD_TEXTS = ("New Password", "New password")
 VERIFY_PASSWORD_FIELD_TEXTS = (
+    "Verify",
     "Verify Password",
     "Confirm Password",
     "Re-enter Password",
     "Re-enter password",
+)
+PASSWORD_FIELD_TEXTS = (
+    *NEW_PASSWORD_FIELD_TEXTS,
+    *VERIFY_PASSWORD_FIELD_TEXTS,
 )
 TEXT_FIELD_ROLES = {"AXTextField", "AXSecureTextField"}
 
@@ -127,6 +151,9 @@ WORKFLOW_RENDER_INTERVAL_SECONDS = 0.5
 WORKFLOW_RENDER_ATTEMPTS = int(
     OPERATION_TIMEOUT_SECONDS / WORKFLOW_RENDER_INTERVAL_SECONDS
 )
+MINIMUM_GUI_SETTLE_SECONDS = 3.0
+POST_SUBMIT_STABLE_READS_REQUIRED = 3
+POST_SUBMIT_STABLE_INTERVAL_SECONDS = 5.0
 MAC_PASSWORD_WAIT_ATTEMPTS = WORKFLOW_RENDER_ATTEMPTS
 MAC_PASSWORD_WAIT_INTERVAL_SECONDS = 0.5
 SMS_FETCH_INTERVAL_SECONDS = 2
@@ -174,7 +201,6 @@ SMS_TEXT_FIELDS = (
     "sms",
 )
 SMS_TIME_FIELDS = (
-    "date_sent",
     "created_at",
     "createdAt",
     "received_at",
@@ -211,25 +237,10 @@ def _fetch_sms_url(url: str) -> str:
 
 
 def fetch_sms_page_text(sms_url: str) -> str:
-    """读取多种短信页面格式；已知 JS 页面优先读取其数据接口。"""
+    """读取短信页面或 API 正文。"""
     parsed = urlparse(sms_url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ValueError("短信页面 URL 必须是 http(s) URL")
-
-    host = parsed.hostname or ""
-    query = parse_qs(parsed.query)
-    if host == "lixsms.com" or host.endswith(".lixsms.com"):
-        lookup_code = (query.get("code") or [""])[0].strip()
-        if lookup_code:
-            api_url = urlunparse(
-                (parsed.scheme, parsed.netloc, "/message", "", urlencode({"code": lookup_code}), "")
-            )
-            try:
-                api_text = _fetch_sms_url(api_url)
-                if api_text.strip().startswith(("{", "[")):
-                    return api_text
-            except Exception:
-                pass
     return _fetch_sms_url(sms_url)
 
 
@@ -463,6 +474,7 @@ def describe_element(element: Any) -> Dict[str, Any]:
             copy_attribute(element, AX.kAXIdentifierAttribute)
         ),
         "help": normalize_text(copy_attribute(element, AX.kAXHelpAttribute)),
+        "url": normalize_text(copy_attribute(element, AX.kAXURLAttribute)),
         "enabled": copy_attribute(element, AX.kAXEnabledAttribute),
         "selected": copy_attribute(element, AX.kAXSelectedAttribute),
         "selected_settable": is_attribute_settable(
@@ -554,6 +566,15 @@ def tree_contains_text_casefold(roots: List[Any], target: str) -> bool:
     return False
 
 
+def is_signed_in_apple_account_page(roots: List[Any], expected_email: str) -> bool:
+    """Accept the account root or its Personal Information birthday page."""
+    if tree_contains_text_casefold(roots, expected_email):
+        return True
+    return tree_contains_text_casefold(
+        roots, "Personal Information"
+    ) and tree_contains_text_casefold(roots, "Birthday")
+
+
 def find_navigable_ancestor(
     element: Any,
     max_parent_depth: int = MAX_PARENT_DEPTH,
@@ -591,7 +612,26 @@ def find_navigable_ancestor(
 
 
 def launch_system_settings() -> None:
-    """通过 Bundle ID 启动系统设置。"""
+    """关闭旧实例后通过 Bundle ID 重新打开系统设置。"""
+    applications = list(
+        NSRunningApplication.runningApplicationsWithBundleIdentifier_(
+            SYSTEM_SETTINGS_BUNDLE_ID
+        )
+    )
+    for application in applications:
+        application.terminate()
+    deadline = time.monotonic() + 5.0
+    while (
+        NSRunningApplication.runningApplicationsWithBundleIdentifier_(
+            SYSTEM_SETTINGS_BUNDLE_ID
+        )
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.1)
+    if NSRunningApplication.runningApplicationsWithBundleIdentifier_(
+        SYSTEM_SETTINGS_BUNDLE_ID
+    ):
+        raise RuntimeError("旧的系统设置实例未能关闭")
     subprocess.run(
         ["open", "-b", SYSTEM_SETTINGS_BUNDLE_ID],
         check=True,
@@ -686,7 +726,7 @@ def current_search_roots(
     if (
         auto_handle_mac_password
         and not _MAC_PASSWORD_AUTO_HANDLER_ACTIVE
-        and tree_contains_text(roots, MAC_PASSWORD_PROMPT_TEXT)
+        and any(tree_contains_text(roots, text) for text in MAC_PASSWORD_PROMPT_TEXTS)
     ):
         _MAC_PASSWORD_AUTO_HANDLER_ACTIVE = True
         try:
@@ -860,6 +900,40 @@ def find_enabled_pressable_text_candidate(
             method=method,
         )
     return None
+
+
+def find_enabled_pressable_text_candidates(
+    roots: List[Any],
+    targets: Tuple[str, ...],
+) -> List[NavigationCandidate]:
+    """返回所有唯一、可用的按钮动作，不按“第一个”猜测。"""
+    candidates: List[NavigationCandidate] = []
+    for element, tree_depth in iter_accessibility_tree(roots):
+        matched_info = describe_element(element)
+        if not any(element_matches_text(matched_info, target) for target in targets):
+            continue
+        navigable = find_navigable_ancestor(element)
+        if navigable is None:
+            continue
+        action_element, parent_distance, action_info, method = navigable
+        if method != "AXPress" or action_info["enabled"] is False:
+            continue
+        candidate = NavigationCandidate(
+            matched_element=element,
+            tree_depth=tree_depth,
+            matched_info=matched_info,
+            action_element=action_element,
+            parent_distance=parent_distance,
+            action_info=action_info,
+            method=method,
+        )
+        if any(
+            existing.action_element == candidate.action_element
+            for existing in candidates
+        ):
+            continue
+        candidates.append(candidate)
+    return candidates
 
 
 def digits_only(value: Any) -> str:
@@ -1054,6 +1128,7 @@ def _try_click_security_prompt_once(
 def invoke_iphone_passcode_prompt(pid: int) -> Optional[int]:
     """两个 iPhone 安全按钮任意一个出现就点击，不要求固定页面顺序。"""
     enter_later_targets = (ENTER_PASSCODE_LATER_TEXT,)
+    try_again_later_targets = (TRY_AGAIN_LATER_TEXT,)
     saw_iphone_page = False
     for attempt in range(WORKFLOW_RENDER_ATTEMPTS):
         roots = current_search_roots(
@@ -1067,6 +1142,7 @@ def invoke_iphone_passcode_prompt(pid: int) -> Optional[int]:
 
         # 两个按钮同时检查；第二层按钮优先，避免被背景页的 AX 节点遮挡。
         candidates = (
+            (try_again_later_targets, "Try Again Later"),
             (enter_later_targets, "Enter Passcode Later"),
             (DONT_KNOW_PASSCODE_TEXTS, "Don't know passcode?"),
         )
@@ -1258,11 +1334,9 @@ def complete_verification_code_workflow(
             auto_handle_mac_password=False,
             auto_handle_security_prompts=False,
         )
-        if tree_contains_text_casefold(
-            direct_roots, expected_email
-        ):
+        if is_signed_in_apple_account_page(direct_roots, expected_email):
             print("已检测到 Apple Account 邮箱，跳过剩余登录步骤。", flush=True)
-            return invoke_post_login_prompts(pid, expected_email)
+            return 0
         current_search_roots(pid)
         if attempt < WORKFLOW_RENDER_ATTEMPTS - 1:
             time.sleep(WORKFLOW_RENDER_INTERVAL_SECONDS)
@@ -1271,14 +1345,14 @@ def complete_verification_code_workflow(
         auto_handle_mac_password=False,
         auto_handle_security_prompts=False,
     )
-    if not tree_contains_text_casefold(final_roots, expected_email):
+    if not is_signed_in_apple_account_page(final_roots, expected_email):
         print(
             "验证码已提交，但在超时时间内未检测到 Apple Account 邮箱；"
             "流程未完成（超时：{}秒）。".format(OPERATION_TIMEOUT_SECONDS),
             file=sys.stderr,
         )
         return 5
-    return invoke_post_login_prompts(pid, expected_email)
+    return 0
 
 
 def find_login_field(
@@ -1359,11 +1433,9 @@ def run_apple_account_login_workflow(
         auto_handle_mac_password=False,
         auto_handle_security_prompts=False,
     )
-    if tree_contains_text_casefold(
-        initial_roots, expected_email
-    ):
+    if is_signed_in_apple_account_page(initial_roots, expected_email):
         print("已检测到 Apple Account 邮箱，跳过登录输入步骤。", flush=True)
-        return invoke_post_login_prompts(pid, expected_email)
+        return 0
 
     candidate = find_sidebar_candidate(
         current_search_roots(pid),
@@ -1389,9 +1461,9 @@ def run_apple_account_login_workflow(
             auto_handle_mac_password=False,
             auto_handle_security_prompts=False,
         )
-        if tree_contains_text_casefold(roots, expected_email):
+        if is_signed_in_apple_account_page(roots, expected_email):
             print("已检测到 Apple Account 邮箱，跳过登录输入步骤。", flush=True)
-            return invoke_post_login_prompts(pid, expected_email)
+            return 0
         email_field = find_login_field(roots, APPLE_SIGN_IN_FIELD_TEXT)
         if email_field is not None:
             break
@@ -1567,31 +1639,82 @@ def run_apple_account_change_password_workflow(
     pid: int,
     new_password_variable: str,
 ) -> int:
-    """打开 Sign-In & Security，填写新密码并提交。"""
-    account_candidate = find_sidebar_candidate(
-        current_search_roots(pid),
-        APPLE_ACCOUNT_TEXT,
-    ) or find_sidebar_candidate(current_search_roots(pid), SIGN_IN_TEXT)
-    if account_candidate is None:
-        print("没有找到 Apple Account / Sign in 入口。", file=sys.stderr)
-        return 2
-    if account_candidate.action_info["enabled"] is False:
-        print("Apple Account 入口当前处于禁用状态。", file=sys.stderr)
-        return 3
-    error = activate(account_candidate)
-    if error != AX.kAXErrorSuccess:
-        print("打开 Apple Account 失败，AXError={}".format(error), file=sys.stderr)
-        return 4
-
-    security_candidate: Optional[NavigationCandidate] = None
-    for attempt in range(WORKFLOW_RENDER_ATTEMPTS):
-        security_candidate = find_pressable_text_candidate(
-            current_search_roots(pid), LOGIN_AND_SECURITY_TEXT
+    """保留纯 AX 导航入口，导航后使用同一严格表单处理器。"""
+    initial_roots = current_search_roots(pid)
+    existing_new_field = _unique_field_by_labels(
+        initial_roots, NEW_PASSWORD_FIELD_TEXTS
+    )
+    existing_verify_field = _unique_field_by_labels(
+        initial_roots, VERIFY_PASSWORD_FIELD_TEXTS
+    )
+    if (
+        existing_new_field is not None
+        and existing_verify_field is not None
+        and existing_new_field != existing_verify_field
+    ):
+        print("PASSWORD_CHANGE_FORM=resume_existing")
+        return run_apple_account_change_password_form(
+            pid, new_password_variable
         )
-        if security_candidate is not None:
-            break
-        if attempt < WORKFLOW_RENDER_ATTEMPTS - 1:
-            time.sleep(WORKFLOW_RENDER_INTERVAL_SECONDS)
+
+    roots = current_search_roots(pid)
+    security_candidate = find_pressable_text_candidate(
+        roots, LOGIN_AND_SECURITY_TEXT
+    )
+    if security_candidate is None and tree_contains_text(
+        roots, PERSONAL_INFORMATION_TEXT
+    ):
+        back_buttons = []
+        for element, _ in iter_accessibility_tree(roots):
+            if copy_attribute(element, AX.kAXRoleAttribute) != "AXButton":
+                continue
+            if copy_attribute(element, AX.kAXIdentifierAttribute) != NESTED_BACK_IDENTIFIER:
+                continue
+            if AX.kAXPressAction not in copy_actions(element):
+                continue
+            enabled = copy_attribute(element, AX.kAXEnabledAttribute)
+            if enabled is not False:
+                back_buttons.append(element)
+        if len(back_buttons) != 1:
+            print("Apple Account 嵌套页面返回按钮不唯一。", file=sys.stderr)
+            return 5
+        error = AX.AXUIElementPerformAction(back_buttons[0], AX.kAXPressAction)
+        if error != AX.kAXErrorSuccess:
+            print("Apple Account 嵌套页面返回失败。", file=sys.stderr)
+            return 4
+        time.sleep(MINIMUM_GUI_SETTLE_SECONDS)
+        roots = current_search_roots(pid)
+        security_candidate = find_pressable_text_candidate(
+            roots, LOGIN_AND_SECURITY_TEXT
+        )
+        if security_candidate is None:
+            print("Apple Account 根页回读失败。", file=sys.stderr)
+            return 5
+        print("PASSWORD_CHANGE_ROOT_RECOVERY=verified")
+
+    if security_candidate is None:
+        account_candidate = find_sidebar_candidate(
+            roots, APPLE_ACCOUNT_TEXT
+        ) or find_sidebar_candidate(roots, SIGN_IN_TEXT)
+        if account_candidate is None:
+            print("没有找到 Apple Account / Sign in 入口。", file=sys.stderr)
+            return 2
+        if account_candidate.action_info["enabled"] is False:
+            print("Apple Account 入口当前处于禁用状态。", file=sys.stderr)
+            return 3
+        error = activate(account_candidate)
+        if error != AX.kAXErrorSuccess:
+            print("Apple Account 嵌套页面返回失败。", file=sys.stderr)
+            return 4
+        time.sleep(MINIMUM_GUI_SETTLE_SECONDS)
+        for attempt in range(WORKFLOW_RENDER_ATTEMPTS):
+            security_candidate = find_pressable_text_candidate(
+                current_search_roots(pid), LOGIN_AND_SECURITY_TEXT
+            )
+            if security_candidate is not None:
+                break
+            if attempt < WORKFLOW_RENDER_ATTEMPTS - 1:
+                time.sleep(WORKFLOW_RENDER_INTERVAL_SECONDS)
     if security_candidate is None:
         print("未找到 Sign-In & Security。请先确认 Apple Account 已登录。", file=sys.stderr)
         return 5
@@ -1599,14 +1722,19 @@ def run_apple_account_change_password_workflow(
     if error != AX.kAXErrorSuccess:
         print("打开 Sign-In & Security 失败，AXError={}".format(error), file=sys.stderr)
         return 4
+    time.sleep(MINIMUM_GUI_SETTLE_SECONDS)
 
     change_candidate: Optional[NavigationCandidate] = None
     for attempt in range(WORKFLOW_RENDER_ATTEMPTS):
-        change_candidate = find_pressable_text_candidate(
-            current_search_roots(pid), CHANGE_PASSWORD_TEXT
+        change_candidates = find_enabled_pressable_text_candidates(
+                current_search_roots(pid), CHANGE_PASSWORD_TEXTS
         )
-        if change_candidate is not None:
+        if len(change_candidates) == 1:
+            change_candidate = change_candidates[0]
             break
+        if len(change_candidates) > 1:
+            print("Change Password 按钮不唯一。", file=sys.stderr)
+            return 5
         if attempt < WORKFLOW_RENDER_ATTEMPTS - 1:
             time.sleep(WORKFLOW_RENDER_INTERVAL_SECONDS)
     if change_candidate is None:
@@ -1616,6 +1744,220 @@ def run_apple_account_change_password_workflow(
     if error != AX.kAXErrorSuccess:
         print("打开 Change Password 失败，AXError={}".format(error), file=sys.stderr)
         return 4
+    time.sleep(MINIMUM_GUI_SETTLE_SECONDS)
+
+    return run_apple_account_change_password_form(pid, new_password_variable)
+
+
+def _unique_field_by_labels(
+    roots: List[Any],
+    labels: Tuple[str, ...],
+) -> Optional[Any]:
+    """只在标签组唯一命中一个可用密码框时返回。"""
+    candidates: List[Any] = []
+    for element, _ in iter_accessibility_tree(roots):
+        info = describe_element(element)
+        if info["role"] not in TEXT_FIELD_ROLES or info["enabled"] is False:
+            continue
+        nearest_labels = _nearest_password_field_labels(element)
+        if not any(element_contains_text(info, label) for label in labels) and not any(
+            label in nearest_labels for label in labels
+        ):
+            continue
+        if any(existing == element for existing in candidates):
+            continue
+        candidates.append(element)
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _nearest_password_field_labels(element: Any) -> set[str]:
+    """Read the nearest two ancestor groups for unlabeled secure-field siblings."""
+    current = element
+    for _distance in range(2):
+        current = copy_attribute(current, AX.kAXParentAttribute)
+        if current is None:
+            break
+        found = {
+            label
+            for label in PASSWORD_FIELD_TEXTS
+            if tree_contains_text([current], label)
+        }
+        if found:
+            return found
+    return set()
+
+
+def _ancestor_chain(element: Any) -> List[Any]:
+    """返回元素到窗口的有界父链。"""
+    chain: List[Any] = []
+    current = element
+    for _ in range(MAX_PARENT_DEPTH * 2):
+        if current is None:
+            break
+        chain.append(current)
+        current = copy_attribute(current, AX.kAXParentAttribute)
+    return chain
+
+
+def _candidate_form_roots(new_field: Any, verify_field: Any) -> List[Any]:
+    """从两密码框的最小公共父区域向外只读搜索。"""
+    new_chain = _ancestor_chain(new_field)
+    verify_chain = _ancestor_chain(verify_field)
+    return [
+        candidate
+        for candidate in new_chain
+        if any(candidate == other for other in verify_chain)
+    ]
+
+
+def _find_unique_password_submit(
+    new_field: Any,
+    verify_field: Any,
+) -> Optional[NavigationCandidate]:
+    """在两密码框的公共表单区域内查找唯一最终按钮。"""
+    labels = ("Change", "Continue")
+    for root in _candidate_form_roots(new_field, verify_field):
+        candidates = find_enabled_pressable_text_candidates([root], labels)
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            return None
+    return None
+
+
+def _password_field_matches(element: Any, expected: str) -> bool:
+    """在内存中验证明文或等长安全掩码，绝不输出字段值。"""
+    value = copy_attribute(element, AX.kAXValueAttribute)
+    if value is None:
+        return False
+    rendered = str(value)
+    if rendered == expected:
+        return True
+    mask_characters = {"•", "●", "*", "·"}
+    return len(rendered) == len(expected) and bool(rendered) and set(rendered) <= mask_characters
+
+
+def password_field_length(element: Any) -> Optional[int]:
+    """Read only a secure field's character count."""
+    value = copy_attribute(element, AX.kAXValueAttribute)
+    if isinstance(value, str):
+        return len(value)
+    count_attribute = getattr(AX, "kAXNumberOfCharactersAttribute", None)
+    if count_attribute:
+        count = copy_attribute(element, count_attribute)
+        if isinstance(count, int):
+            return count
+    return None
+
+
+def set_password_change_field(pid: int, element: Any, value: str) -> Tuple[int, str]:
+    """AX-set the prefix, then deliver the final character as a real edit event."""
+    if not value:
+        return AX.kAXErrorCannotComplete, "empty-value"
+    if QUARTZ is None:
+        return AX.kAXErrorCannotComplete, "quartz-unavailable"
+    last_reason = "not-attempted"
+    for _attempt in range(3):
+        error = set_login_field(element, value[:-1])
+        if error != AX.kAXErrorSuccess:
+            last_reason = f"ax-prefix-error-{error}"
+            continue
+        time.sleep(MINIMUM_GUI_SETTLE_SECONDS)
+        focused = copy_attribute(element, AX.kAXFocusedAttribute)
+        prefix_length = password_field_length(element)
+        if focused not in (True, 1):
+            last_reason = "field-not-focused"
+            continue
+        if prefix_length != len(value) - 1:
+            last_reason = f"prefix-length-{prefix_length}-expected-{len(value) - 1}"
+            continue
+        try:
+            application = AX.AXUIElementCreateApplication(pid)
+            if copy_attribute(application, AX.kAXFrontmostAttribute) not in (True, 1):
+                frontmost_error = AX.AXUIElementSetAttributeValue(
+                    application, AX.kAXFrontmostAttribute, True
+                )
+                if frontmost_error != AX.kAXErrorSuccess:
+                    last_reason = f"frontmost-error-{frontmost_error}"
+                    continue
+                time.sleep(MINIMUM_GUI_SETTLE_SECONDS)
+            if copy_attribute(application, AX.kAXFrontmostAttribute) not in (True, 1):
+                last_reason = "system-settings-not-frontmost"
+                continue
+            focus_error = AX.AXUIElementSetAttributeValue(
+                element, AX.kAXFocusedAttribute, True
+            )
+            if focus_error != AX.kAXErrorSuccess:
+                last_reason = f"refocus-error-{focus_error}"
+                continue
+            time.sleep(MINIMUM_GUI_SETTLE_SECONDS)
+            if copy_attribute(element, AX.kAXFocusedAttribute) not in (True, 1):
+                last_reason = "refocus-readback-failed"
+                continue
+            key_down = QUARTZ.CGEventCreateKeyboardEvent(None, 0, True)
+            key_up = QUARTZ.CGEventCreateKeyboardEvent(None, 0, False)
+            QUARTZ.CGEventKeyboardSetUnicodeString(key_down, 1, value[-1])
+            QUARTZ.CGEventKeyboardSetUnicodeString(key_up, 1, value[-1])
+            QUARTZ.CGEventPost(QUARTZ.kCGHIDEventTap, key_down)
+            QUARTZ.CGEventPost(QUARTZ.kCGHIDEventTap, key_up)
+        except Exception as error:
+            return AX.kAXErrorCannotComplete, f"quartz-event-{type(error).__name__}"
+        time.sleep(MINIMUM_GUI_SETTLE_SECONDS)
+        full_length = password_field_length(element)
+        if full_length == len(value):
+            return AX.kAXErrorSuccess, "verified"
+        last_reason = f"full-length-{full_length}-expected-{len(value)}"
+    return AX.kAXErrorCannotComplete, last_reason
+
+
+def handle_sign_out_other_devices_prompt(pid: int) -> Optional[int]:
+    """Keep the account signed in on its other devices after the change."""
+    roots = current_search_roots(pid)
+    if not (
+        tree_contains_text(roots, SIGN_OUT_OTHER_DEVICES_TEXT)
+        or (
+            tree_contains_text(roots, "Sign out other devices")
+            and tree_contains_text(roots, APPLE_ACCOUNT_TEXT)
+        )
+    ):
+        return None
+    candidate = None
+    for label in DONT_SIGN_OUT_TEXTS:
+        candidate = find_enabled_pressable_text_candidate(roots, label)
+        if candidate is not None:
+            break
+    if candidate is None:
+        return 5
+    error = activate(candidate)
+    if error != AX.kAXErrorSuccess:
+        return 4
+    time.sleep(MINIMUM_GUI_SETTLE_SECONDS)
+    if tree_contains_text(current_search_roots(pid), "Sign out other devices"):
+        return 5
+    print("PASSWORD_CHANGE_OTHER_DEVICES=kept_signed_in")
+    return 0
+
+
+def close_system_settings_after_password_change() -> bool:
+    """Close System Settings and independently prove the process is gone."""
+    from apple_account_post_login import force_close_system_settings
+
+    if not force_close_system_settings():
+        return False
+    time.sleep(MINIMUM_GUI_SETTLE_SECONDS)
+    if NSRunningApplication.runningApplicationsWithBundleIdentifier_(
+        SYSTEM_SETTINGS_BUNDLE_ID
+    ):
+        return False
+    print("SYSTEM_SETTINGS_CLOSED=verified")
+    return True
+
+
+def run_apple_account_change_password_form(
+    pid: int,
+    new_password_variable: str,
+) -> int:
+    """处理视觉路由已打开的授权弹窗/密码表单，且最终只提交一次。"""
 
     new_password = os.environ.get(new_password_variable, "")
     if not new_password:
@@ -1628,9 +1970,9 @@ def run_apple_account_change_password_workflow(
     verify_field: Optional[Any] = None
     for attempt in range(WORKFLOW_RENDER_ATTEMPTS):
         roots = current_search_roots(pid)
-        new_field = find_field_by_labels(roots, NEW_PASSWORD_FIELD_TEXTS)
-        verify_field = find_field_by_labels(roots, VERIFY_PASSWORD_FIELD_TEXTS)
-        if new_field is not None and verify_field is not None:
+        new_field = _unique_field_by_labels(roots, NEW_PASSWORD_FIELD_TEXTS)
+        verify_field = _unique_field_by_labels(roots, VERIFY_PASSWORD_FIELD_TEXTS)
+        if new_field is not None and verify_field is not None and new_field != verify_field:
             break
         if attempt < WORKFLOW_RENDER_ATTEMPTS - 1:
             time.sleep(WORKFLOW_RENDER_INTERVAL_SECONDS)
@@ -1638,32 +1980,128 @@ def run_apple_account_change_password_workflow(
         print("未找到新密码或确认密码输入框。", file=sys.stderr)
         return 5
 
-    first_error = set_login_field(new_field, new_password)
-    second_error = set_login_field(verify_field, new_password)
-    new_password = ""
-    if first_error != AX.kAXErrorSuccess or second_error != AX.kAXErrorSuccess:
-        print("写入新密码字段失败。", file=sys.stderr)
+    first_error, first_reason = set_password_change_field(pid, new_field, new_password)
+    if first_error != AX.kAXErrorSuccess:
+        print(f"写入新密码字段失败：{first_reason}。", file=sys.stderr)
         return 4
-
-    submit_candidate = find_pressable_text_candidate(
-        current_search_roots(pid), CHANGE_PASSWORD_TEXT
-    )
-    if submit_candidate is None:
-        for label in ("Continue", "Done", "Save"):
-            submit_candidate = find_pressable_text_candidate(
-                current_search_roots(pid), label
-            )
-            if submit_candidate is not None:
-                break
-    if submit_candidate is None:
-        print("未找到提交改密的按钮。", file=sys.stderr)
+    time.sleep(MINIMUM_GUI_SETTLE_SECONDS)
+    roots = current_search_roots(pid)
+    new_field = _unique_field_by_labels(roots, NEW_PASSWORD_FIELD_TEXTS)
+    verify_field = _unique_field_by_labels(roots, VERIFY_PASSWORD_FIELD_TEXTS)
+    if (
+        new_field is None
+        or verify_field is None
+        or not _password_field_matches(new_field, new_password)
+    ):
+        print("新密码字段回读不匹配。", file=sys.stderr)
         return 5
+
+    second_error, second_reason = set_password_change_field(pid, verify_field, new_password)
+    if second_error != AX.kAXErrorSuccess:
+        print(f"写入确认密码字段失败：{second_reason}。", file=sys.stderr)
+        return 4
+    time.sleep(MINIMUM_GUI_SETTLE_SECONDS)
+    roots = current_search_roots(pid)
+    new_field = _unique_field_by_labels(roots, NEW_PASSWORD_FIELD_TEXTS)
+    verify_field = _unique_field_by_labels(roots, VERIFY_PASSWORD_FIELD_TEXTS)
+    fields_verified = bool(
+        new_field is not None
+        and verify_field is not None
+        and new_field != verify_field
+        and _password_field_matches(new_field, new_password)
+        and _password_field_matches(verify_field, new_password)
+    )
+    new_password = ""
+    if not fields_verified or new_field is None or verify_field is None:
+        print("两个新密码字段回读不匹配。", file=sys.stderr)
+        return 5
+    print("PASSWORD_CHANGE_FIELDS=verified")
+
+    submit_candidate = _find_unique_password_submit(new_field, verify_field)
+    if submit_candidate is None:
+        print("未找到唯一可用的最终改密按钮。", file=sys.stderr)
+        return 5
+    print("PASSWORD_CHANGE_BUTTON=enabled")
     error = activate(submit_candidate)
     if error != AX.kAXErrorSuccess:
         print("提交改密失败，AXError={}".format(error), file=sys.stderr)
         return 4
-    print("已提交 Apple Account 改密码；如出现 Mac 密码、验证码或安全提示，请继续完成验证。")
-    return 0
+    print("PASSWORD_CHANGE_SUBMISSION=clicked_once")
+    return verify_password_change_result(
+        pid,
+        fields_verified=fields_verified,
+        submission_clicked=True,
+    )
+
+
+def verify_password_change_result(
+    pid: int,
+    *,
+    fields_verified: bool = False,
+    submission_clicked: bool = False,
+) -> int:
+    """Require complete submit evidence before accepting the closed sheet."""
+    if not fields_verified or not submission_clicked:
+        print("缺少字段回读或唯一提交动作证据。", file=sys.stderr)
+        return 5
+    time.sleep(MINIMUM_GUI_SETTLE_SECONDS)
+    stable_reads = 0
+    for attempt in range(POST_SUBMIT_STABLE_READS_REQUIRED * 3):
+        if attempt:
+            time.sleep(POST_SUBMIT_STABLE_INTERVAL_SECONDS)
+        roots = current_search_roots(
+            pid,
+            auto_handle_mac_password=False,
+            auto_handle_security_prompts=False,
+        )
+        if any(tree_contains_text(roots, text) for text in MAC_PASSWORD_PROMPT_TEXTS):
+            mac_password_result = invoke_mac_password_prompt(pid)
+            if mac_password_result != 0:
+                print("提交后的 Mac 密码授权处理失败。", file=sys.stderr)
+                return 5 if mac_password_result is None else mac_password_result
+            print("PASSWORD_CHANGE_POST_SUBMIT_MAC_AUTH=verified")
+            stable_reads = 0
+            continue
+        security_result = invoke_security_prompt_autohandler(pid)
+        if security_result is not None:
+            if security_result != 0:
+                print("提交后的 Apple 安全提示处理失败。", file=sys.stderr)
+                return security_result
+            print("PASSWORD_CHANGE_POST_SUBMIT_SECURITY_PROMPT=verified")
+            stable_reads = 0
+            continue
+        sign_out_result = handle_sign_out_other_devices_prompt(pid)
+        if sign_out_result not in (None, 0):
+            print("处理其他设备登录状态提示失败。", file=sys.stderr)
+            return sign_out_result
+        if sign_out_result == 0:
+            stable_reads = 0
+            continue
+        roots = current_search_roots(
+            pid,
+            auto_handle_mac_password=False,
+            auto_handle_security_prompts=False,
+        )
+        new_field = _unique_field_by_labels(roots, NEW_PASSWORD_FIELD_TEXTS)
+        verify_field = _unique_field_by_labels(roots, VERIFY_PASSWORD_FIELD_TEXTS)
+        if new_field is None and verify_field is None and (
+            tree_contains_text(roots, LOGIN_AND_SECURITY_TEXT)
+            or tree_contains_text(roots, APPLE_ACCOUNT_TEXT)
+        ):
+            stable_reads += 1
+            if stable_reads >= POST_SUBMIT_STABLE_READS_REQUIRED:
+                if not close_system_settings_after_password_change():
+                    print("改密完成后无法关闭 System Settings。", file=sys.stderr)
+                    return 5
+                print("PASSWORD_CHANGE_RESULT=verified")
+                return 0
+            continue
+        stable_reads = 0
+    print(
+        "提交后密码表单未在限定时间内关闭，结果未验证。",
+        file=sys.stderr,
+    )
+    return 5
 
 
 def print_workflow_step(
@@ -1788,6 +2226,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="打开 Sign-In & Security，填写新密码并提交",
     )
     parser.add_argument(
+        "--change-password-form-only",
+        action="store_true",
+        help="视觉路由已打开 Change Password 后，只处理授权弹窗与密码表单",
+    )
+    parser.add_argument(
         "--new-password-var",
         default="APPLE_ACCOUNT_NEW_PASSWORD",
         help="新密码环境变量名，默认 APPLE_ACCOUNT_NEW_PASSWORD；密码值不放入 argv",
@@ -1832,7 +2275,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     launch_system_settings()
-    time.sleep(2)
+    time.sleep(MINIMUM_GUI_SETTLE_SECONDS)
 
     # 权限可能在启动 System Settings 后才被系统撤销/拒绝；再次检查，
     # 避免 AX 树返回 kAXErrorAPIDisabled 后无意义地轮询到超时。
@@ -1869,6 +2312,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.change_password:
         return run_apple_account_change_password_workflow(
+            pid,
+            args.new_password_var,
+        )
+
+    if args.change_password_form_only:
+        return run_apple_account_change_password_form(
             pid,
             args.new_password_var,
         )

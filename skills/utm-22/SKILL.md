@@ -7,15 +7,17 @@ description: Use after utm-21 when the same UTM guest is ready for Xcode archive
 
 ## 全局自动恢复与最后故障卡规则
 
-本技能强制继承共享重复操作记忆：原生粘贴调用 `OP-NATIVE-PASTE`，浏览器 URL 调用 `OP-BROWSER-URL-NO-SCHEME`，Apple 电话/验证码调用 `OP-APPLE-PHONE-OTP`，固定 VM 密码调用 `OP-FIXED-PASSWORD-1234`，必须由用户决定的业务节点才调用 `OP-USER-CONFIRMATION`。不得在本技能内发明简化版或冲突步骤。可安全修复的故障必须做满三轮“诊断→实际修复→独立复验”；只有不可逆动作、不能安全重复写入或外部不可修复状态，才改做三轮独立只读复核。少于三轮时运行时拒绝发卡。
+本技能调用共享重复操作记忆中的 `OP-NATIVE-PASTE`、`OP-BROWSER-URL-NO-SCHEME`、`OP-APPLE-PHONE-OTP`、`OP-FIXED-PASSWORD-1234` 和 `OP-USER-CONFIRMATION`。故障按三轮“诊断→实际修复→独立复验”处理。
 
-执行任何命令前，在项目根目录运行 `eval "$(python3 scripts/preflight.py --project-only --emit-shell)"`，取得当前机器的动态路径。必须先完整遵守 [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md)：固定顺序是自动诊断、自动修复、自动复验，只有智能体确实无法修复时才允许发送飞书故障卡。
+执行任何命令前，运行 `eval "$(python3 /Users/yehailin/Documents/mac提审自动化/scripts/preflight.py --project-only --emit-shell)"`，取得当前机器的动态路径。必须先完整遵守 [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md)：固定顺序是自动诊断、自动修复、自动复验，只有智能体确实无法修复时才允许发送飞书故障卡。
+
+故障修复后重新执行时必须调用共享 `OP-FULL-ENTRY-REPLAY`：重新运行本技能唯一入口，由入口从第 1 步顺序实时复验；已完成且当前结果仍正确的步骤只跳过副作用，禁止直接从旧断点或旧会话继续。
 
 - 正常成功路径连续自动执行，不发送故障卡，不等待用户确认或普通聊天回复。
 - 可逆误点先回到本技能矩阵列出的最近验证锚点，作废旧坐标，等待至少 3 秒并用最新截图重做当前最小动作；成功后记录 `GUI_RECOVERY=verified` 并继续。
-- SSH、API、文件和页面瞬态错误按共享合同有界恢复；不可逆动作只执行一次，结果不明时只读查询同一 attempt，禁止盲目重做。
+- SSH、API、文件和页面错误按共享合同有界恢复。
 - 只有恢复预算穷尽或只读证明为外部不可修复状态，才记录 `AUTO_RECOVERY_ATTEMPTS`、`AUTO_RECOVERY_ACTIONS`、`AUTO_RECOVERY_RESULT=exhausted|unrepairable` 和最后验证锚点。
-- 自动恢复穷尽后，使用下列最后出口；`--unrepairable` 只允许用于 CAPTCHA、账号锁定、权威数据缺失、权限/所有权冲突或不可逆结果仍不明确，不能绕过可执行的恢复：
+- 自动恢复穷尽后，使用下列最后出口：
 
 ```bash
 python3 services/feishu_bot.py notify-fault \
@@ -37,7 +39,7 @@ python3 services/feishu_bot.py wait-decision \
 
 规则：`--recovery-result unrepairable` 必须同时追加 `--unrepairable`；恢复穷尽的 `exhausted` 分支不得追加该参数。两种分支都必须填写真实的恢复次数和动作，不能把占位符原样执行。
 
-故障卡仍固定保留 `stop`、`manual_continue`、`retry_skill` 三个决定及稳定 UUID/首次送达后一小时超时规则。当前执行器收到继续决定后立即重读同一精确现场；已验证步骤只有在证据仍成立时才跳过。故障卡是最后恢复出口，不是正常确认节点。
+故障卡仍固定保留 `stop`、`manual_continue`、`retry_skill` 三个决定及稳定 UUID/首次送达后一小时超时规则。当前执行器收到继续决定后必须按 `OP-FULL-ENTRY-REPLAY` 重新调用唯一入口，从第 1 步重读同一精确现场；已验证步骤只有在证据仍成立时才跳过副作用。故障卡是最后恢复出口，不是正常确认节点。
 
 ## 本技能自动恢复矩阵
 
@@ -55,16 +57,44 @@ python3 services/feishu_bot.py wait-decision \
 固定上传脚本：
 
 ```text
-${PROJECT_ROOT}/scripts/utm_22_distribute.mjs
+/Users/yehailin/Documents/mac提审自动化/scripts/utm_22_upload.py
 ```
+
+`/Users/yehailin/Documents/mac提审自动化/scripts/utm_22_distribute.mjs` 是上面入口部署到 guest 后调用的内部核心，不是人工入口。入口只读取精确目标绑定、`.xcarchive`、`prod.yml`、P8 和本次 upload attempt；不读取项目源码。
+
+## 唯一上传入口
+
+主线模式严格按当前项目流程顺序执行，在 `utm-21` 已交接且 Xcode GUI 已生成并验证本轮 Archive 后，由当前 run 继承应用、VM、宿主机归属和 attempt 身份：
+
+```zsh
+/Users/yehailin/Documents/mac提审自动化/scripts/utm_22_upload.py --run-id '<run-id>'
+```
+
+人工模式是该脚本的独立使用方式，不是飞书提审主线，也不改变 16 个技能的固定顺序。人工必须显式给出完整目标，应用名允许包含连字符，最后一个连字符后的四个小写字母是 VM 名：
+
+```zsh
+/Users/yehailin/Documents/mac提审自动化/scripts/utm_22_upload.py --target '<应用名>-<VM名>'
+```
+
+人工恢复现场若同一应用/Bundle ID 有多个 Archive，必须先独立确认 Organizer、Archive 内实际版本/构建号和完整绝对路径，再传入精确选择器：
+
+```zsh
+/Users/yehailin/Documents/mac提审自动化/scripts/utm_22_upload.py \
+  --target '<应用名>-<VM名>' \
+  --archive-path '<精确 xcarchive 绝对路径>'
+```
+
+`--archive-path` 仅限 `--target`，且必须逐字符匹配 discovery 返回的完整路径；零匹配记录 `ARCHIVE_MATCH_COUNT=0`。省略时仍要求应用名/Bundle ID 只匹配一个 Archive，绝不隐式选择最新项。
+
+两个选择器互斥。脚本在一个命令中完成目标/Archive/签名/Profile/Bundle ID 校验、IPA 封装、App Store Connect App 唯一匹配、同版本 Build 防重、上传及 `COMPLETE / VALID` 轮询。它不启动、重启、恢复或切换 VM，不点击 Xcode Archive，不提交审核，不发布，也不执行 Git 操作。
 
 Xcode GUI 操作复用当前 Computer Use 的 `node_repl`/`sky` 驱动器；它只是 GUI 操作工具，不是本项目流程中的额外技能。
 
 ## SSH 全自动约束
 
-- 直接继承 `utm-21` 的同一精确 VM/IP、`<vm_name>`、workspace 和 `SSH_KEY_AUTH=verified`；所有宿主 SSH/SCP 调用统一使用 `-o BatchMode=yes -o ConnectTimeout=5`，不重复配置 SSH。
-- SSH 检查失败时自动按同一 VM 的精确 MAC 刷新 IP、检查 Remote Login/端口，并用固定 `1234` 恢复 `${SUBMISSION_SSH_PUBLIC_KEY}`；不得向用户索取密码、SSH Key 或 IP。
-- 恢复后重新验证用户/home/workspace；仍失败时记录 `SSH_AUTO_RECOVERY=blocked`，先按 `utm-22-ssh-auto-recovery` 记录故障阶段并执行本技能自动恢复矩阵；恢复穷尽后才发送最后故障卡并等待当前执行器处理决定；不选择其他 VM、workspace 或 Archive。
+- 只继承同一精确 VM/IP 与 `<vm_name>` 身份。所有 SSH/SCP 统一调用项目固定密码封装，固定密码 `1234`；不安装、生成、恢复或依赖 SSH Key，也不向用户索取密码、SSH Key 或 IP。
+- SSH key 认证失败不是人工处理节点，入口直接使用密码 SSH。连接返回 `255` 时只探测同一 attempt 和同一远端进程：进程仍在则等待；attempt 已存在则按 ledger 恢复；两者都不存在且证明不可逆动作未开始才允许同参数重进。最多三轮，绝不创建第二个上传。
+- 恢复后重新验证用户/home；仍失败时记录 `SSH_AUTO_RECOVERY=blocked`，先按 `utm-22-ssh-auto-recovery` 执行本技能自动恢复矩阵；恢复穷尽后才发送最后故障卡；不选择其他 VM、workspace 或 Archive。
 
 ## 全程规则
 
@@ -77,7 +107,7 @@ Xcode GUI 操作复用当前 Computer Use 的 `node_repl`/`sky` 驱动器；它�
 
 ### 一、继承 guest 并确认 Xcode
 
-1. 要求前序已明确记录 `UTM_21=verified`，直接继承其 `vm_name`、VM IP、SSH 用户/home 和 `REPO_PATH`。用一次 `BatchMode=yes` 只读 SSH 同时确认身份并验证工作区唯一存在：
+1. 要求前序已明确记录 `UTM_21=verified`，直接继承其 `vm_name`、VM IP、SSH 用户/home 和 `REPO_PATH`。用 `/Users/yehailin/Documents/mac提审自动化/scripts/ssh_password.py` 提供的固定密码 SSH 封装做一次只读身份检查，并验证工作区唯一存在：
 
    ```text
    /Users/<vm_name>/StudioProjects/<repo_name>/ios/Runner.xcworkspace
@@ -85,14 +115,7 @@ Xcode GUI 操作复用当前 Computer Use 的 `node_repl`/`sky` 驱动器；它�
 
    正常路径不得重新扫描 started VM、MAC 或 ARP。只有继承 IP 已不可达时，才允许按该 `<vm_name>.utm` 的精确配置 MAC 刷新一次 IP，再重复同一 SSH 身份/workspace 检查；禁止选择其他或“最新”VM。
 2. 通过正在运行的 Xcode PID 读取实际 `.app` bundle 路径、bundle identifier、`CFBundleShortVersionString` 和 `CFBundleVersion`；不能只检查 `/Applications/Xcode.app` 后就假定它是实际运行版本。若有多个 Xcode 进程，先只读关联窗口标题、前台 PID 和打开的 `Runner.xcworkspace` 路径，只接受唯一持有当前 workspace 的进程；仍不唯一时用第 3 步的精确 bundle/path 重新执行 `open` 并重读，不关闭其他 Xcode、不猜版本。这个可逆恢复完整执行三轮且每轮独立归属核对；三轮仍无法唯一归属才记录恢复证据并进入最后故障卡。
-3. 通过 SSH 打开工作区：
-
-   ```zsh
-   ssh -o BatchMode=yes -o ConnectTimeout=5 <vm_name>@<vm-ip> \
-     "open -a '<已验证的 Xcode.app 绝对路径>' '/Users/<vm_name>/StudioProjects/<repo_name>/ios/Runner.xcworkspace'"
-   ```
-
-   `open -a` 使用的路径必须与上一步读取版本的 Xcode bundle 完全相同，禁止退回应用名让系统另选一个 Xcode。
+3. 通过同一固定密码 SSH 封装执行远端参数 `open -a '<已验证的 Xcode.app 绝对路径>' '/Users/<vm_name>/StudioProjects/<repo_name>/ios/Runner.xcworkspace'`。`open -a` 使用的路径必须与上一步读取版本的 Xcode bundle 完全相同，禁止退回应用名让系统另选一个 Xcode。
 
 4. 等待至少 3 秒并确认 Xcode 显示 `Runner` 和 `Pods`，窗口标题/Recent 路径都指向当前 `Runner.xcworkspace`。出现 Downloads 权限弹窗时，确认弹窗进程、标题和当前 Xcode 一致后点击唯一 `Allow`，再等待至少 3 秒确认弹窗消失；误开菜单或错误弹窗时先按 `Escape`/`Cancel` 回到 workspace，作废旧坐标、重读最新截图并记录 `XCODE_GUI_RECOVERY=verified`。未知 TCC 或安全弹窗先独立只读识别三轮；只有三轮均证明系统明确要求无法自动取得的外部授权时才进入最后故障卡。
 
@@ -145,6 +168,7 @@ Xcode GUI 操作复用当前 Computer Use 的 `node_repl`/`sky` 驱动器；它�
 
 3. 只有 `ARCHIVE_DISTRIBUTION=verified` 才能继续。脚本必须确认：
    - Archive 只有一个顶层 `.app`；
+   - 递归检查 App 内每个 `.framework/Info.plist`，且每个 Framework 都必须同时具有非空 `CFBundleIdentifier`、`CFBundleShortVersionString` 和 `CFBundleVersion`；任一缺失必须在任何 Apple 创建请求前本地拒绝，不得“先上传等 90057”；
    - `codesign --verify --deep --strict` 成功，证书为 Apple Distribution；
    - `embedded.mobileprovision` 有效且为 App Store 类型；
    - `get-task-allow=false`、`beta-reports-active=true`；
@@ -154,6 +178,7 @@ Xcode GUI 操作复用当前 Computer Use 的 `node_repl`/`sky` 驱动器；它�
 ### 五、用既有命令/API 上传
 
 1. 从当前任务已验证上下文取得数字 App ID；从 guest 现有 `prod.yml` 只读取得 issuer ID、key ID 和 `.p8` 路径。不得打印完整配置、私钥或 JWT。
+   `private_key_path` 若为相对路径，必须先只读确认其语义：以包含 `prod.yml` 的应用项目根（而不是 `prod.yml` 所在的 `config/` 子目录）解析，并要求解析后的常规非空文件名严格为 `AuthKey_<同一 key ID>.p8`。解析失败时不得猜测其他 P8 或目录；按同一配置和路径做三轮独立只读复核后才进入故障边界。
 2. 在任何 Apple 创建请求前，固定当前 run + App ID + Archive manifest + 版本 + 构建号对应的 attempt 文件。路径必须是当前用户 Downloads 下的非符号链接普通文件或尚不存在；脚本使用随机同目录临时文件、创建时 mode 600、文件与目录 `fsync` 后原子替换，并在每次状态写入后独立回读 JSON 身份/内容/权限。已有旧权限会先收紧到 600 并复验，符号链接或非普通文件直接拒绝。成功记录 `UPLOAD_ATTEMPT_MODE=600`。首次使用从未存在的新 IPA 路径执行 `distribute`；恢复执行必须复用同一 attempt 文件和同一 IPA，脚本会核对 Archive 身份、IPA SHA-256 和 attempt 元数据，绝不接受另一个 IPA：
 
    ```zsh
@@ -168,6 +193,7 @@ Xcode GUI 操作复用当前 Computer Use 的 `node_repl`/`sky` 驱动器；它�
    ```
 
 3. 脚本必须先用 `/v1/apps/<id>` 验证 API App 的 Bundle ID，再用支持集合读取的 `/v1/builds` 对同一 App、版本和构建号做只读查询：仅零条才允许创建；任何已有 Build（包括多条）都记录到 attempt 并拒绝新建。不得把仅支持单条 GET 的 `/v1/buildUploads/<id>` 当作集合查询。创建前已写入 `UPLOAD_ATTEMPT_ID`，POST 返回后立即写入 `BUILD_UPLOAD_ID`；POST 结果不明时按 5/10/20 秒只读重查 `/v1/builds`，发现 Build 则记录 `recovered_after_create_result_unknown`，否则记录 `create_result_ambiguous`，两种结果都禁止再次 POST。只有新建分支才以 `com.apple.ipa` 创建 `buildUploadFiles`，严格按 Apple 返回的 offset、length、method 和 headers 上传分片，最后只提交最小 `uploaded=true`。
+   同一 upload attempt 复用一个 JWT；App、Build、Build Upload 与轮询请求都使用当前 guest 进程内存里的同一短期 token，不逐请求重新签发，也不把 JWT 写入 attempt、日志或输出。若 Apple 返回 `NOT_AUTHORIZED`，保持 attempt 不变并对同一 App/Build GET 做三轮只读鉴权复核；只有 attempt 仍为 `preflight` 且三轮均恢复成功时，才复用同一 IPA/attempt 继续。
 4. 记录 IPA SHA-256，并对同一 `BUILD_UPLOAD_ID` 做 15/30/60/120 秒有界只读轮询，持续读取关联 Build。只有以下五项同时满足才完成：
 
    ```text
@@ -202,11 +228,22 @@ You must add the com.apple.developer.game-center key in Xcode.
 
 5. 只把这个新 Archive 交给上方相同的 `prepare` / `distribute` 路径，并因构建号已加一而生成新的稳定 `UPLOAD_ATTEMPT_ID`。若 Xcode 无法生成包含 Game Center 的 App Store Profile，自动刷新同一 App Store Profile、重新选择同一 Team 并完整做三轮安全修复，每轮都独立回读；三轮后仍缺少 entitlement 才记录为外部权限状态并进入最后故障卡，不改用 Development、Ad Hoc 或 Enterprise Profile。
 
+## 已固化错误与安全恢复
+
+- SSH key 失败或未安装 key：不修 key，始终切到固定密码 `1234` 的统一封装；`SSH_EXIT=255` 只恢复同一 attempt，最多三轮。
+- `private_key_path` 为相对路径：以 `apple-store-bm` 项目根解析，不以 `config/` 子目录重复拼接；P8 文件名必须精确为 `AuthKey_<Key ID>.p8`，且为非符号链接普通非空文件。
+- 同一应用/Bundle ID 匹配零个或多个 Archive：记录 `ARCHIVE_MATCH_COUNT` 并停止；绝不按“最新”或修改时间猜测。人工 `--target` 现场只有已独立验证的精确绝对路径可通过 `--archive-path` 把候选缩小为一个。
+- `.xcarchive/Info.plist` 合法包含 `CreationDate` 日期对象，`plutil -lint` 可通过但整份 `plutil -convert json` 会报 `invalid object in plist for destination format`。Archive 发现阶段只验证该顶层文件存在，不把它整体转成 JSON；应用名、Bundle ID、版本和构建号只从唯一 `.app/Info.plist` 读取。命中该旧 helper 错误时，先证明顶层 plist lint 成功且 `.app/Info.plist` 可解析，再更新固定 distributor helper 并重跑同一入口；因为失败发生在 upload attempt 和任何 Apple 创建请求之前，不得改 Archive 或另建 Archive。
+- App Store Connect 对同一 Bundle ID 匹配零个或多个 App：记录 `APP_MATCH_COUNT` 并停止；绝不尝试其他 App ID。
+- attempt 为 `file_committed`、`processing` 或 `verified` 且已有 `BUILD_UPLOAD_ID`：只轮询该 ID；不得再查询后创建第二个上传。`file_reserved`、create 结果未知或 ledger 身份冲突属于不可安全重放状态，停止并保留现场。
+- 同版本/构建唯一 `VALID` Build：记录 `BUILD_ALREADY_EXISTS=valid` 并成功结束；唯一 `PROCESSING` Build 只读轮询；多个 Build 停止。
+- Archive 签名、证书、Profile、Team、Bundle ID、Framework Info.plist、SwiftSupport 或权限校验失败：在 Apple 创建请求前停止。本入口不读取或修改项目源码，因此不会自动改源码、旧 Archive 或构建号。
+
 ## 完成检查
 
 ```text
 UTM_21=verified
-SSH_KEY_AUTH=verified
+SSH_PASSWORD_AUTH=verified
 XCODE_WORKSPACE=verified
 XCODE_SIGNING=verified
 XCODE_GUI_BUILD=yes
@@ -244,4 +281,5 @@ UTM_22=verified
 - API Key 缺失、无权访问目标 App、App ID 与 Bundle ID 不匹配：先重新读取同一 `prod.yml`、同一 App API 和文件权限并复验；仍为权威缺失/权限冲突才以 `utm-22-api-context` 进入最后故障卡，不尝试其他账号或 App。
 - Build Upload 为 `PROCESSING` 时按 15/30/60/120 秒窗口继续有界只读轮询；超时仍未进入终态则保留当前 `UPLOAD_ATTEMPT_ID`/`BUILD_UPLOAD_ID`，完成同版本查询后才以 `utm-22-build-upload-processing` 进入最后故障卡。不得新建第二个上传，也不得切换到 Xcode GUI 或 Transporter 重传同一版本/构建号。
 - `FAILED` / `INVALID` 时保留 Apple 返回的非敏感错误，先自动分类唯一可修复分支；只有 Game Center 精确错误可进入本技能规定的构建号 +1 恢复，其余确实不可自动修复时才以 `utm-22-build-upload-failed` 进入最后故障卡。`90426` 表示缺少 `SwiftSupport`；`90433` 表示 Swift dylib 不是正确的 Apple 原始签名，不得复制 App 内已重签的 dylib兜底。
+- Apple `90057` 表示某个 App/Framework bundle 缺少必需 Info.plist 键。上传前必须由 `validateEmbeddedFrameworkPlists` 遍历所有内嵌 Framework；如仍收到 `90057`，保留失败 attempt，修复生成该 Framework 的工程声明源，再通过 Xcode GUI 创建全新 Archive，禁止修改、重签或重用旧 Archive。
 - 不点击 `Add for Review`，不提交审核，不发布。

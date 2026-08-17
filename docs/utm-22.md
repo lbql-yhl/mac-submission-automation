@@ -7,15 +7,41 @@ Xcode GUI：打开 workspace → 签名/Profile → Product > Archive
 命令/API：Archive 只读校验 → IPA 封装 → buildUploads → uploaded=true → COMPLETE / VALID
 ```
 
-Archive 成功后不点击 Xcode 的 `Distribute App`，也不改用 Transporter；上传只走 `scripts/utm_22_distribute.mjs`。
+Archive 成功后不点击 Xcode 的 `Distribute App`，也不改用 Transporter；上传对外只走 `/Users/yehailin/Documents/mac提审自动化/scripts/utm_22_upload.py`，内部复用 `/Users/yehailin/Documents/mac提审自动化/scripts/utm_22_distribute.mjs`。
 
-SSH 直接继承 `utm-21` 已验证的同一 VM/IP/用户、工作区和宿主公钥，所有 SSH/SCP 调用固定使用 `BatchMode=yes`。连接失效时只对同一精确 VM 自动刷新 IP、修复 Remote Login 和恢复宿主公钥，不向用户索取密码、SSH Key、IP，也不等待 SSH 人工处理。
+SSH 直接继承 `utm-21` 已验证的同一 VM/IP/用户，统一使用固定密码 `1234`，明确禁用 SSH key 依赖。连接失效时只恢复同一精确 VM 和同一 upload attempt，不向用户索取密码、SSH Key 或 IP。
+
+## 一条命令入口
+
+项目主线从当前 run 继承应用和 VM；此入口只在固定技能顺序到达 `utm-22` 时使用：
+
+```zsh
+/Users/yehailin/Documents/mac提审自动化/scripts/utm_22_upload.py --run-id '<run-id>'
+```
+
+人工独立上传不是项目流程入口，必须显式指定完整 `<应用名>-<VM名>`：
+
+```zsh
+/Users/yehailin/Documents/mac提审自动化/scripts/utm_22_upload.py --target '<应用名>-<VM名>'
+```
+
+人工恢复现场若同一应用/Bundle ID 有多个 Archive，必须先独立确认 Organizer、Archive 内实际版本/构建号和完整绝对路径，再使用精确选择器：
+
+```zsh
+/Users/yehailin/Documents/mac提审自动化/scripts/utm_22_upload.py \
+  --target '<应用名>-<VM名>' \
+  --archive-path '<精确 xcarchive 绝对路径>'
+```
+
+`--archive-path` 仅限 `--target`，并且必须逐字符匹配 discovery 返回的完整路径。零匹配输出 `ARCHIVE_MATCH_COUNT=0`；省略时多个应用/Bundle ID 候选仍直接停止，不隐式选最新项。
+
+两个参数互斥。一个命令完成目标和 Archive 唯一检查、IPA 打包、签名/Profile/Bundle ID 检查、App 唯一匹配、上传防重和 `COMPLETE / VALID` 轮询。它不读取项目源码，不启动、重启、恢复或切换 VM，不点击 Archive，不提交审核，不发布，也不执行 Git 操作。
 
 ## 操作步骤
 
-1. 确认 `UTM_21=verified`，直接继承其 `vm_name`、VM IP、SSH 用户/home 和 `REPO_PATH`；用一次带 `-o BatchMode=yes -o ConnectTimeout=5` 的只读 SSH 同时验证身份与唯一工作区 `/Users/<vm_name>/StudioProjects/<repo_name>/ios/Runner.xcworkspace`。正常路径不扫描 VM/MAC/ARP；连接失效时按上面的 SSH 全自动约束恢复。
+1. 确认 `UTM_21=verified`，直接继承其 `vm_name`、VM IP、SSH 用户/home 和 `REPO_PATH`；用 `/Users/yehailin/Documents/mac提审自动化/scripts/ssh_password.py` 的固定密码封装做一次只读 SSH，验证身份与唯一工作区 `/Users/<vm_name>/StudioProjects/<repo_name>/ios/Runner.xcworkspace`。正常路径不扫描 VM/MAC/ARP；连接失效时按上面的 SSH 全自动约束恢复。
 2. 从实际运行的 Xcode 进程读取 `.app` bundle 路径和版本/build；不能只看 `/Applications/Xcode.app`。
-3. 通过 BatchMode guest SSH 执行 `open -a '<已验证的 Xcode.app 绝对路径>' '<workspace>'`；应用路径必须与上一步读取版本的 bundle 完全相同，禁止只写应用名让系统另选 Xcode。等待 Xcode 稳定显示 `Runner` 和 `Pods`；Downloads 权限弹窗确认归属后点击 `Allow`。
+3. 通过同一固定密码 guest SSH 封装执行 `open -a '<已验证的 Xcode.app 绝对路径>' '<workspace>'`；应用路径必须与上一步读取版本的 bundle 完全相同，禁止只写应用名让系统另选 Xcode。等待 Xcode 稳定显示 `Runner` 和 `Pods`；Downloads 权限弹窗确认归属后点击 `Allow`。
 4. 点击 `Runner` → `Signing & Capabilities`，确认目标为 `Any iOS Device (arm64)`。版本/构建号必须四层一致：`pubspec.yaml` 的 `version:`、Flutter 生成配置中的 `FLUTTER_BUILD_NAME/NUMBER`、Runner target 的 `MARKETING_VERSION/CURRENT_PROJECT_VERSION`、Xcode 界面当前值。把非敏感值与各来源文件 SHA-256 写入 ledger，独立回读后记录 `VERSION_BUILD_SOURCE=verified`；不一致时不得猜值或只改 Xcode 显示值。
 5. `Provisioning Profile=None` 时点击 `None`，只在 `Download Profile...` 自身蓝色高亮后确认；如需账号，使用当前匹配 `<应用名>-<vm_name>` 的账号登录。
 6. 选择当前应用和 bundle ID 唯一匹配的 App Store Profile，确认 `Team`、`Signing Certificate=Apple Distribution` 属于同一当前 Team，且无红黄警告；不得照抄任何旧运行的应用、人员、证书或 Team 值。
@@ -24,7 +50,7 @@ SSH 直接继承 `utm-21` 已验证的同一 VM/IP/用户、工作区和宿主�
 9. 将宿主固定脚本复制到 guest，并验证两端 SHA-256 一致：
 
     ```text
-    ${PROJECT_ROOT}/scripts/utm_22_distribute.mjs
+    /Users/yehailin/Documents/mac提审自动化/scripts/utm_22_distribute.mjs
     ```
 
 10. 用从未存在的新 IPA 路径执行 `prepare`：
@@ -35,7 +61,7 @@ SSH 直接继承 `utm-21` 已验证的同一 VM/IP/用户、工作区和宿主�
       --output '/Users/<vm_name>/Downloads/<应用名>-prepare-<时间戳>.ipa'
     ```
 
-11. 只有 `ARCHIVE_DISTRIBUTION=verified` 才继续。要求 Apple Distribution 签名、App Store Profile、Team、Bundle ID、版本/构建、entitlements、`Payload` 和需要时的 `SwiftSupport/iphoneos` 全部通过。
+11. 只有 `ARCHIVE_DISTRIBUTION=verified` 才继续。要求 Apple Distribution 签名、App Store Profile、Team、Bundle ID、版本/构建、entitlements、`Payload` 和需要时的 `SwiftSupport/iphoneos` 全部通过。脚本还必须在任何 Apple 创建请求前递归扫描所有内嵌 `.framework/Info.plist`，要求非空 `CFBundleIdentifier`、`CFBundleShortVersionString` 和 `CFBundleVersion`；任一缺失必须本地拒绝，避免 Apple `90057`。
 12. 从当前任务取得数字 App ID，从现有 `prod.yml` 只读取得 issuer ID、key ID 和 `.p8` 路径；不得输出密钥、完整配置或 JWT。
 13. 用另一个新 IPA 路径执行 `distribute`：
 
@@ -49,7 +75,17 @@ SSH 直接继承 `utm-21` 已验证的同一 VM/IP/用户、工作区和宿主�
       --private-key '<绝对 AuthKey_*.p8 路径>'
     ```
 
-14. 在任何 Apple 创建请求前，先为当前 run + App ID + Archive manifest + 版本 + 构建号持久化稳定 `UPLOAD_ATTEMPT_ID`。attempt 路径必须显式传入脚本并位于当前用户 Downloads，只能是不存在或非符号链接普通文件；脚本用随机同目录临时文件、创建时 mode 600、文件/目录 `fsync` 和原子替换，每次写后独立回读身份/内容/权限，记录 `UPLOAD_ATTEMPT_MODE=600`。脚本以 `/v1/builds`（而不是不支持集合读取的 `buildUploads`）只读查询同一 App、版本和构建号；任何已有 Build 或多个候选均拒绝新建。只有零匹配时才创建 `buildUploads` / `buildUploadFiles`，并一旦获得就持久化 `BUILD_UPLOAD_ID`。POST 结果未知时按 5/10/20 秒只读重查 `/v1/builds`，记录 `recovered_after_create_result_unknown` 或 `create_result_ambiguous`，禁止重发；随后按 15/30/60/120 秒轮询同一 Build Upload。最终必须为 `COMPLETE`，关联 Build 必须为 `VALID`。
+14. 在任何 Apple 创建请求前，先为当前 run + App ID + Archive manifest + 版本 + 构建号持久化稳定 `UPLOAD_ATTEMPT_ID`。attempt 路径必须显式传入脚本并位于当前用户 Downloads，只能是不存在或非符号链接普通文件；脚本用随机同目录临时文件、创建时 mode 600、文件/目录 `fsync` 和原子替换，每次写后独立回读身份/内容/权限，记录 `UPLOAD_ATTEMPT_MODE=600`。脚本以 `/v1/builds`（而不是不支持集合读取的 `buildUploads`）只读查询同一 App、版本和构建号；任何已有 Build 或多个候选均拒绝新建。只有零匹配时才创建 `buildUploads` / `buildUploadFiles`，并一旦获得就持久化 `BUILD_UPLOAD_ID`。POST 结果未知时按 5/10/20 秒只读重查 `/v1/builds`，记录 `recovered_after_create_result_unknown` 或 `create_result_ambiguous`，禁止重发；随后按 15/30/60/120 秒轮询同一 Build Upload。最终必须为 `COMPLETE`，关联 Build 必须为 `VALID`。同一 upload attempt 复用一个 JWT，所有 API 请求使用该 guest 进程内存里的同一短期 token，不把 JWT 写入文件、日志或输出。`NOT_AUTHORIZED` 且 attempt 仍为 `preflight` 时，先对同一 App/Build GET 做三轮只读复核，三轮恢复成功后才复用同一 IPA/attempt 继续。
+
+## 脚本自动恢复范围
+
+- SSH key 不可用时直接使用固定密码 `1234`；`SSH_EXIT=255` 只检查同一进程和同一 attempt，最多三轮，绝不重复创建上传。
+- `prod.yml` 的相对 `private_key_path` 按 `apple-store-bm` 根目录解析；P8 必须精确匹配 `AuthKey_<Key ID>.p8`，且是普通、非空、非符号链接文件。
+- Archive 或 App 匹配为零/多个时停止，不按“最新”、第一条或修改时间猜测。人工 `--target` 现场只有已独立验证的精确绝对路径可通过 `--archive-path` 缩小候选。
+- `.xcarchive/Info.plist` 的合法 `CreationDate` 是日期对象：允许 `plutil -lint` 成功但整份 JSON 转换失败。发现 Archive 时只验证顶层 plist 存在；应用名、Bundle ID、版本和构建号只从唯一 `.app/Info.plist` 读取，禁止为了绕过 `invalid object in plist for destination format` 修改 Archive。旧 helper 在 upload attempt 创建前命中该错误时，独立验证顶层 lint 和 App plist 后更新固定 helper，再复用同一入口。
+- attempt 已到 `file_committed`、`processing` 或 `verified` 时只轮询原 `BUILD_UPLOAD_ID`；`file_reserved`、未知 create 结果或 ledger 冲突不安全，保留现场并停止。
+- 同版本/构建已有唯一 `VALID` Build 时输出 `BUILD_ALREADY_EXISTS=valid`，不再上传；唯一 `PROCESSING` 只读轮询；多个候选停止。
+- 证书、Profile、签名、Bundle ID、Framework Info.plist、SwiftSupport、P8 或 API 权限异常会明确停止。本入口不读取项目源码，因此不自动修改源码或旧 Archive。
 
 ## Game Center 恢复
 
@@ -64,7 +100,7 @@ SSH 直接继承 `utm-21` 已验证的同一 VM/IP/用户、工作区和宿主�
 
 ```text
 UTM_21=verified
-SSH_KEY_AUTH=verified
+SSH_PASSWORD_AUTH=verified
 XCODE_WORKSPACE=verified
 XCODE_SIGNING=verified
 XCODE_GUI_BUILD=yes
@@ -101,4 +137,5 @@ UTM_22=verified
 - Xcode 签名页有红黄警告或 Archive 失败时，先读取准确诊断、修复可确定的 Profile/证书/权限问题并重新复验；未通过前不进入 API 上传。
 - `PROCESSING` 不等于失败；不得重复创建上传或改用 Xcode/Transporter上传同一版本/构建号。
 - `FAILED` / `INVALID` 保留非敏感错误并诊断。`90426` 检查 `SwiftSupport`；`90433` 检查 Swift dylib 的 Apple 原始签名和 UUID。只有技能矩阵的安全修复已穷尽，或同一不可逆 attempt 最终仍不明确，才携带恢复证据发送最后故障卡。
+- `90057` 优先定位错误中的精确 bundle，修复其工程声明源后必须使用 Xcode GUI 生成全新 Archive；不修改、重签或重用失败 Archive。`validateEmbeddedFrameworkPlists` 是上传前的固定防线。
 - 完成只表示构建已上传并处理有效；不得点击 `Add for Review`、提交审核或发布。

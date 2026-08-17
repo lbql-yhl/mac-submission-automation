@@ -18,17 +18,14 @@ def sources_for(skill_name: str) -> str:
 
 
 def main() -> None:
-    utm_8 = sources_for("utm-8")
-    assert "自动点击一次最终 `Change`/`Continue`" in utm_8
-    assert "重填验证通过后再次自动点击一次最终 `Change`/`Continue`" in utm_8
+    utm_8 = sources_for("utm-edit")
+    assert "再自动点击一次并记录 `PASSWORD_CHANGE_SUBMISSION=clicked_once`" in utm_8
+    assert "该动作最多执行一次" in utm_8
 
-    utm_14 = sources_for("utm-14")
-    assert "自动点击一次" in utm_14
-    assert "不等待用户确认" in utm_14
-
-    utm_20 = sources_for("utm-20")
-    assert "自动勾选条款并只点击一次 `Add`" in utm_20
-    assert "2FA 出现后自动继续短信验证" in utm_20
+    utm_business = sources_for("utm-business")
+    assert "one-shot `Submit`" in utm_business
+    assert "`bank_add` attempt 后只点击一次 `Add`" in utm_business
+    assert "不得等待用户确认" in utm_business
 
     utm_24 = sources_for("utm-24")
     assert "record-auto-review-approval" in utm_24
@@ -39,12 +36,11 @@ def main() -> None:
     assert "notify-review-success" not in (SKILL_ROOT / "utm-24" / "SKILL.md").read_text(encoding="utf-8")
     assert "只点击一次 `Send`" in utm_24
 
-    utm_25 = sources_for("utm-25")
-    assert "notify-review-success" in utm_25
-    assert "不得点击 `Submit for Review`" in utm_25
-    assert "不得点击加急页 `Send`" in utm_25
+    utm_p8 = sources_for("utm-p8")
+    assert "notify-review-success" not in utm_p8
+    assert "只读固定文件" in utm_p8
 
-    combined = "\n".join((utm_8, utm_14, utm_20, utm_24, utm_25))
+    combined = "\n".join((utm_8, utm_business, utm_24, utm_p8))
     for stale in (
         "最终 `Change` 由用户确认并点击",
         "用户完成该点击",

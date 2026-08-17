@@ -1,76 +1,42 @@
 #!/usr/bin/env python3
-import importlib.util
-import tempfile
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def load_writer():
-    path = ROOT / "skills" / "utm-5" / "scripts" / "write_socks5_yml.py"
-    spec = importlib.util.spec_from_file_location("write_socks5_yml", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module, path.read_text(encoding="utf-8")
-
-
 def main() -> None:
-    writer, source = load_writer()
-    valid = {
-        "host": "192.0.2.10",
-        "port": "6368",
-        "username": "user",
-        "password": "pass:word",
-    }
-    writer.validate_proxy(valid)
-    for key, value in (
-        ("host", " 192.0.2.10"),
-        ("host", "example.com"),
-        ("port", "06368"),
-        ("username", "user\nname"),
-        ("password", " "),
-    ):
-        broken = dict(valid)
-        broken[key] = value
-        try:
-            writer.validate_proxy(broken)
-        except (ValueError, SystemExit):
-            pass
-        else:
-            raise AssertionError(f"unsafe proxy value accepted: {key}")
-
-    assert "请替换" not in writer.render(valid)
-    assert "os.fsync" in source
-    assert "SOCKS5_WRITE=unchanged" in source
-    assert "SOCKS5_WRITE=changed" in source
-    assert "SOCKS5_READBACK=exact" in source
-    assert "RUN_VM_NAME_INVALID" in source
-
-    with tempfile.TemporaryDirectory() as directory:
-        target = Path(directory) / "socks5.yml"
-        assert writer.atomic_write(target, "one") == "changed"
-        first_inode = target.stat().st_ino
-        assert writer.atomic_write(target, "one") == "unchanged"
-        assert target.stat().st_ino == first_inode
-        assert target.read_text(encoding="utf-8") == "one"
-        assert target.stat().st_mode & 0o777 == 0o600
-
-    utm_2 = (ROOT / "skills" / "utm-2" / "SKILL.md").read_text(encoding="utf-8")
-    assert "seq 2 30" not in utm_2
+    clash_ip = (ROOT / "skills" / "utm-clash-ip" / "SKILL.md").read_text(encoding="utf-8")
     for required in (
-        "IP_CANDIDATE_INTERSECTION_COUNT=1",
-        "REMOTE_LOGIN=verified",
-        "TEMPLATE_GUEST_IDENTIFIERS=not_required_by_policy",
-        "GUEST_IDENTITY_DIFF=verified",
+        "代理ip:", "代理端口:", "代理用户名：", "代理用户密码：",
+        "SOCKS5_SHARED_READBACK=exact", "SOCKS5_GUEST_READBACK=exact",
+        "PROXY_EGRESS=verified", "password_environment()", "scp_args(",
     ):
-        assert required in utm_2, required
+        assert required in clash_ip, required
+    for forbidden in ("SUBMISSION_SSH_PRIVATE_KEY", '"-o", "BatchMode=yes"'):
+        assert forbidden not in clash_ip, forbidden
 
-    notion = (ROOT / "skills" / "notion-utm" / "SKILL.md").read_text(encoding="utf-8")
-    assert "application_after" in notion
-    assert "APPLICATION_INFO=blank" in notion
-    assert "if value.strip()" in notion
+    combined = (ROOT / "skills" / "utm-vm-clone" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "--vm-name" not in combined
+    for required in (
+        "UTM_CLONE_MACOS=verified",
+        "DEMO_HOME=absent",
+        "VM_SHUTDOWN=verified",
+        "DATABASE_AVAILABLE=1",
+        "UTM_CLONE_AND_INITIALIZE=verified",
+    ):
+        assert required in combined, required
+
+    ssh_password = (ROOT / "scripts/ssh_password.py").read_text(encoding="utf-8")
+    assert "IdentityFile" not in ssh_password
+    assert "BatchMode=yes" not in ssh_password
+
+    notion = (ROOT / "skills" / "utm-notion" / "SKILL.md").read_text(encoding="utf-8")
+    assert "/Users/yehailin/Documents/mac提审自动化/scripts/utm_notion.py" in notion
+    assert "空值保留模板标签" in notion
+    assert '"status": "verified"' in notion
 
     print("EARLY_RUNTIME_SAFETY=verified")
 

@@ -417,9 +417,9 @@ def main() -> None:
         "pending_decision": {
             "kind": "fault",
             "status": "waiting",
-            "stage": "utm-20:bank",
+            "stage": "utm-business:bank",
             "fault": "bank state unclear",
-            "recovery_skill": "utm-20",
+            "recovery_skill": "utm-business",
             "requested_at": "2026-07-20T08:00:00+00:00",
             "first_notified_at": "2026-07-20T08:00:00+00:00",
             "message_uuid": "fault-card-timeout-message",

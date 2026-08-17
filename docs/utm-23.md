@@ -1,6 +1,6 @@
 # UTM-23：准备审核草稿并移交 UTM-24
 
-对应技能：`utm-23`。接着 `utm-22`，只复用同一台 UTM guest 中既有 Microsoft Edge，并先按有序状态账本执行只读恢复分类。若现场已满足完整终态，只保存并验证当前 run 的 `02-iap-drafts.png`、`03-app-information.png` 后直接移交；部分准备从第一个未完成且可安全恢复的步骤自动续跑，状态不明确时先重读、回到最近验证锚点并复验。只有恢复穷尽或不可逆结果仍无法判定时才发送最后三按钮故障卡。完整路径完成构建附加、合规、14 项内购与 App Version 唯一草稿，并以 before/after 证据清理 App Information 两个目标。复核唯一草稿、两张当前-run截图和当前现场后，以 `SUBMIT_FOR_REVIEW=not_clicked`、`UTM_23=verified` 结束并立即移交 `utm-24`。
+对应技能：`utm-23`。接着 `utm-22`，只复用同一台 UTM guest 中既有 Microsoft Edge。每次调用都从第 1 步开始，按有序状态账本逐步重新复验。若现场已满足完整终态，只保存并验证当前 run 的 `02-iap-drafts.png`、`03-app-information.png` 后直接移交；部分准备只在前置已完成步骤的实时证据仍成立时跳过副作用，再从第一个未完成且可安全恢复的步骤继续。状态不明确时先重读并复验，不从旧断点直接跳转。只有恢复穷尽或不可逆结果仍无法判定时才发送最后三按钮故障卡。完整路径完成构建附加、合规、14 项内购与 App Version 唯一草稿，并以 before/after 证据清理 App Information 两个目标。复核唯一草稿、两张当前-run截图和当前现场后，以 `SUBMIT_FOR_REVIEW=not_clicked`、`UTM_23=verified` 结束并立即移交 `utm-24`。
 
 ## Checklist
 
@@ -24,7 +24,7 @@
 - [ ] 已聚焦主内容空白处，并逐页向下移动；每次移动后等待至少 3 秒并重读页面。
 - [ ] 已完整逐页检查当前应用版本页并记录 `ADD_BUILD_FIRST_CHECK=visible|missing`；加载中、错误页或应用/版本不匹配未被误判为按钮缺失。
 - [ ] 若首次找不到 `Add Build`，在 `utm-22 COMPLETE+VALID` 前提下按 15/30/60/120 秒有界只读刷新同一页面，并查询同一稳定 upload attempt、App ID、版本和构建号的 Build 可见性；每轮都确认没有切换应用、版本或浏览器。任何情况下都不得再次上传、Archive、构建或封装。
-- [ ] 有界检查后出现唯一精确构建则自动继续；仍不可见时记录 `ADD_BUILD_VISIBILITY_POLL=exhausted`、最后 Build API 状态和页面证据，再以 `utm-23-add-build-missing` 发送最后故障卡。`manual_continue`/`retry_skill` 只能再次只读核对同一 Build，不得创建上传。
+- [ ] 有界检查后出现唯一精确构建则自动继续；仍不可见时记录 `ADD_BUILD_VISIBILITY_POLL=exhausted`、最后 Build API 状态和页面证据，再以 `utm-23-add-build-missing` 发送最后故障卡。`manual_continue`/`retry_skill` 必须重新调用唯一入口并从第 1 步复验，对账到该故障点时只能只读核对同一 Build，不得创建上传。
 - [ ] 找到时，页面底部 `Build` 区域内蓝色 `Add Build` 已清晰可见。点击前在账本生成稳定 `ADD_BUILD_ATTEMPT_ID`，绑定 App/版本/构建与按钮前截图 hash，独立回读 `prepared`后再持久化 `opening_dialog`并只点击一次；后续状态不明只恢复同一 ID。
 - [ ] `Add Build` 弹窗和构建列表稳定显示；候选版本/构建号与 `utm-22` 一致且只匹配一项。
 - [ ] 唯一候选已勾选，`Done` 已启用并且只点击一次。
@@ -168,7 +168,7 @@ UTM_23=blocked
 - 登录/2FA 的已知恢复路径调用 `OP-APPLE-PHONE-OTP`；CAPTCHA、账号锁定或未知安全挑战经三轮独立只读复核后属于外部 `unrepairable`，才进入最后故障卡。
 - 顶部 `Apps`、应用名、App ID、版本或页头不明确时，每轮都回到已验证导航锚点并安全重新定位，完整执行三轮且每轮独立回读；三轮仍不唯一才发最后故障卡。
 - 页面加载、网络或证书瞬态错误按 5/10/20 秒只读等待，动作可证明未执行时才允许一次恢复导航；不得把这些状态当成 `Add Build` 缺失。
-- 部分准备按状态账本自动续跑；只有无法确定哪个不可逆动作已发生时才发最后故障卡。`manual_continue`/`retry_skill` 重新只读分类，不重做已验证步骤。
+- 部分准备必须由唯一入口从第 1 步按状态账本重新复验；只有无法确定哪个不可逆动作已发生时才发最后故障卡。`manual_continue`/`retry_skill` 也重新调用唯一入口，只对仍有实时证据的已验证步骤跳过副作用。
 - `Add Build` 不可见只允许有界页面/API查询；禁止任何再次上传、重新 Archive/构建、重新封装或改传其他 IPA。
 - 故障卡命令只有在退出码为 0、返回当前 `run_id`，且匹配 run 的 `pending_decision.first_notified_at`、`last_notified_at`、`last_message_id` 更新后才算发送成功。未确认送达时保留同一 pending 决定并自动修复/重试同一 run/chat 的卡片服务，不开始 3600 秒用户回复计时、不谎报成功、不结束流程。回调后由当前执行器立即操作，不需要第二次人工触发；所有恢复路径继续禁止第二次上传。
 - 点击后弹窗未打开、候选不明确或出现错误时先 `Escape`/`Cancel` 回到版本页锚点，证明未附加后才重新定位一次；结果不明时只读恢复。

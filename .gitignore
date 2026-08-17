@@ -11,6 +11,7 @@
 
 # Runtime and generated files
 runtime/
+.codex_diag/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -19,6 +20,20 @@ htmlcov/
 .DS_Store
 tools/bin/cloudflared
 
+# Virtual machine images and snapshots
+*.utm/
+*.vmwarevm/
+*.qcow2
+*.vmdk
+*.vdi
+*.vhd
+*.vhdx
+*.raw
+*.iso
+*.ova
+*.ovf
+*.vmsn
+
 # Desktop shared-directory runtime data and reproducible dependencies
 shared-files/**/.env
 shared-files/**/node_modules/
@@ -26,4 +41,3 @@ shared-files/**/dist/
 shared-files/**/playwright-report/
 shared-files/socks5.yml
 shared-files/apple-store-bm/config/prod.yml
-shared-files/tools/flutter/

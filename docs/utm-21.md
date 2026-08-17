@@ -1,14 +1,14 @@
-# UTM-21：拉取 Flutter 代码、替换标识并安装依赖
+# UTM-21：拉取代码、替换标识并交接 Xcode workspace
 
 对应技能：`utm-21`。
 
-SSH 直接继承 `utm-20` 已验证的同一 VM/IP/用户和宿主公钥，所有宿主 SSH 调用固定使用 `BatchMode=yes`。连接失效时只对同一精确 VM 自动刷新 IP、修复 Remote Login 和恢复 `${SUBMISSION_SSH_PUBLIC_KEY}`，不得向用户索取密码、SSH Key、IP 或等待 SSH 人工处理。仓库读取和克隆统一由 `scripts/utm_21_clone.py` 完成：代码链接由 Notion API 在脚本内读取，Codeup 凭据只从本机 `.env` 进入内存并通过 SSH stdin 使用，不出现在 URL、argv、日志或仓库配置中。
+SSH 直接继承 `utm-p8` 已验证的同一 VM/IP/用户和固定密码身份。连接失效时只对同一精确 VM 自动刷新 IP、修复 Remote Login 并用固定 `1234` 恢复，不得向用户索取密码、SSH Key、IP 或等待 SSH 人工处理。仓库读取和克隆统一由 `scripts/utm_21_clone.py` 完成：代码链接由 Notion API 在脚本内读取，Codeup 凭据只从本机 `.env` 进入内存并通过 SSH stdin 使用，不出现在 URL、argv、日志或仓库配置中。
 
 ## 前置检查
 
-- [ ] `utm-20` 已完成，沿用当前 `app_name`、`vm_name`、原 `chat_id` 和同一 UTM guest。
+- [ ] `utm-p8` 已完成，沿用当前 `app_name`、`vm_name`、原 `chat_id` 和同一 UTM guest。
 - [ ] 在项目根目录先运行 `python3 scripts/notion_api.py verify-parent --title '<宿主机名称>'`，再通过 `read-field --copy` 从唯一 `<app_name>-<vm_name>` 页面实时读取 `代码链接：`、`APP_ID：`、`正式包名: `；不读取 `runtime/feishu-runs.json`，不用旧 run、`.env` 或对话缓存。
-- [ ] 复用 `utm-20` 继承的 VM IP，只做一次带 `-o BatchMode=yes -o ConnectTimeout=5` 的 SSH 用户/home 检查；连接失效时按上面的 SSH 全自动约束恢复。
+- [ ] 复用 `utm-p8` 继承的 VM IP，只做一次固定密码 SSH 用户/home 检查；连接失效时按上面的 SSH 全自动约束恢复。
 - [ ] 所有步骤自动继续；最终检查通过后记录 `UTM_21=verified`，由 `utm-22` 接手。
 
 ## 操作 Checklist
@@ -36,42 +36,23 @@ SSH 直接继承 `utm-20` 已验证的同一 VM/IP/用户和宿主公钥，所�
 - [ ] 新 SSH 连接确认四个旧值按大小写不敏感搜索均无残留，新值增量与旧值原命中数一致。
 - [ ] 不得出现新增、删除、重命名、复制或未跟踪路径；`git diff --check` 必须通过。
 
-### Flutter 依赖
+### 既有 Xcode workspace
 
-- [ ] 普通非交互 SSH 可能不加载 `~/.zshrc`，统一使用 `/bin/zsh -lic`；临时变量不得命名为 zsh 特殊变量 `path` 或 `status`。
-- [ ] 仅启动一次：
-
-  ```zsh
-  /bin/zsh -lic 'cd /Users/<vm_name>/StudioProjects/<repo_name> && env -u PUB_HOSTED_URL -u FLUTTER_STORAGE_BASE_URL flutter pub get'
-  ```
-
-- [ ] 只为本次命令临时取消 Pub/Flutter 镜像环境变量，不修改 `~/.zshrc`，避免 `pubspec.lock` 被改写为 `pub.flutter-io.cn`。
-- [ ] 首次运行可能长时间拉取 Flutter SDK tags；持续轮询同一会话，不得再启动第二个 `flutter pub get`，不得删除 Flutter lockfile。
-- [ ] 向对话输出原始终端内容和 SSH 退出码；成功需同时满足 `Got dependencies!`、退出码 0、`.dart_tool/package_config.json` 存在、无残留 pub 进程、锁文件无镜像 URL、`git diff --check` 通过。
-- [ ] `packages have newer versions incompatible...` 与 `flutter pub outdated` 是提示，不是失败；合法锁文件版本更新可保留并报告。
-
-### CocoaPods
-
-- [ ] 确认进入精确目录后只执行一次：
-
-  ```zsh
-  /bin/zsh -lic 'cd /Users/<vm_name>/StudioProjects/<repo_name>/ios && printf "PWD=%s\n" "$PWD" && command -v pod && pod install'
-  ```
-
-- [ ] 向对话输出原始终端内容和 SSH 退出码；成功需同时满足 PWD 正确、pod 路径非空、出现 `Pod installation complete!`、退出码 0、`ios/Pods` 与 `ios/Podfile.lock` 存在、无残留 CocoaPods 进程、`git diff --check` 通过。
-- [ ] iOS platform 自动选择与 custom base configuration 是警告，不自动改 Podfile 或 Xcode 配置；`Podfile.lock` 中 CocoaPods 版本变化可保留并报告。
+- [ ] 新 SSH 连接只读验证 `/Users/<vm_name>/StudioProjects/<repo_name>/ios/Runner.xcworkspace` 是当前用户所有的既有非符号链接目录，真实路径仍位于本轮 `REPO_PATH/ios` 下，且唯一 `contents.xcworkspacedata` 是非空普通非符号链接文件。
+- [ ] 不生成、修复、复制或改选其他 workspace；缺失或不安全时三轮只读复核同一目标，仍不符合才进入最后故障边界。
+- [ ] 记录 `RUNNER_WORKSPACE_SOURCE=existing_verified` 和 `DEPENDENCY_INSTALL_COMMANDS=not_run`。本技能不执行安装、更新、缓存、生成或锁文件命令，也不修改 shell PATH。
 
 ### 最终检查与 UTM-22 交接
 
 - [ ] 新 SSH 连接确认分支仍为 `main`/`origin/main`，四个旧值无残留，目录树哈希一致。
-- [ ] 允许修改的跟踪文件仅为替换文件并集、`pubspec.lock`、`ios/Podfile.lock`；无任何非预期路径状态。
-- [ ] 输出克隆、替换、Flutter、CocoaPods 和警告摘要；全部验证通过后记录 `UTM_21=verified` 并结束，不启动任何 IDE，不等待用户确认。
+- [ ] 允许修改的跟踪文件仅为 replacement ledger 记录的替换文件并集；无任何非预期路径状态。
+- [ ] 输出克隆、替换、Git 状态和 workspace 摘要；全部验证通过后记录 `UTM_21=verified` 并结束，不启动任何 IDE，不等待用户确认。
 - [ ] 把已验证的 VM IP、SSH 用户/home 和 `REPO_PATH` 直接移交 `utm-22`；下一步只做一次身份/workspace 存活检查后确认 Xcode。
 
 ## 完成标准
 
 ```text
-UTM_20=verified
+UTM_19=verified
 NOTION_PAGE=api_unique_matched
 CODE_LINK=live_notion_api_verified
 BUNDLE_ID=live_notion_api_verified
@@ -84,19 +65,15 @@ PLACEHOLDER_STATE=needs_replacement|already_replaced
 CASE_INSENSITIVE_REPLACEMENTS=verified
 REPLACEMENT_LEDGER=verified
 PACKAGE_DIRECTORY_TREE=unchanged
-PUB_GET_EXIT=0
-PUB_GET_OUTPUT=Got dependencies!
-PUBSPEC_MIRROR_RESIDUAL=0
-POD_INSTALL_EXIT=0
-POD_INSTALL_OUTPUT=Pod installation complete!
+RUNNER_WORKSPACE_SOURCE=existing_verified
+DEPENDENCY_INSTALL_COMMANDS=not_run
 GIT_DIFF_CHECK=passed
-SSH_KEY_AUTH=verified
+SSH_PASSWORD_AUTH=verified
 UTM_21=verified
 ```
 
 ## 风险点
 
 - 不读取旧运行记录，不重新选择分支，不提交、不推送、不发布、不提审、不修改 Notion。
-- 不删除已有目标仓库，不修改目录包路径，不自动修复 Flutter/CocoaPods 警告。
-- 长命令只轮询同一会话；出现 Flutter startup lock 时先查进程，不删除锁文件。
-- 任一数据不能唯一匹配、命令非零、成功文本缺失、残留旧值、镜像 URL、目录树变化或非预期 Git 状态时保留现场并发故障卡；当前执行器立即处理三选一结果。只有本次决定处理完成后仍检测到故障，才视为新的故障事件并只发送一张新卡。
+- 不删除已有目标仓库，不修改目录包路径，不生成或修复 workspace，不运行任何依赖安装命令。
+- 任一数据不能唯一匹配、workspace 缺失或不安全、残留旧值、目录树变化或非预期 Git 状态时先执行三轮恢复/只读复核；恢复穷尽后才发最后故障卡。

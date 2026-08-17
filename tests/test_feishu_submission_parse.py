@@ -119,9 +119,15 @@ Account Number：000000000000
             assert not feishu_bot.RUNS_FILE.exists()
             assert not feishu_bot.PROMPTS_DIR.exists()
 
-            with mock.patch.object(
-                feishu_bot.subprocess,
-                "Popen",
+            assert feishu_bot.handle_incoming_text(
+                config, text.split("银行信息：", 1)[0], "oc_allowed", source="test"
+            ) == ""
+            assert not feishu_bot.RUNS_FILE.exists()
+            assert not feishu_bot.PROMPTS_DIR.exists()
+            assert not feishu_bot.CODEX_APP_SESSIONS_DIR.exists()
+
+            with mock.patch.object(feishu_bot, "SUBMISSION_START_ENABLED", True), mock.patch.object(
+                feishu_bot.subprocess, "Popen",
                 side_effect=AssertionError("Feishu intake must not start a background runner"),
             ):
                 assert (
@@ -149,15 +155,15 @@ Account Number：000000000000
             agents = (root / "AGENTS.md").read_text(encoding="utf-8")
             current_line = next(
                 line for line in agents.splitlines()
-                if line.startswith("- Current important skills in order:")
+                if line.startswith("- Current skills in exact order:")
             )
             current_order = tuple(re.findall(r"`([^`]+)`", current_line))
-            assert len(current_order) == 31
+            assert len(current_order) == 16
             assert feishu_bot.SUBMISSION_SKILL_ORDER == current_order
-            assert f"固定技能顺序（31 个）：{' -> '.join(current_order)}。" in prompt
+            assert f"固定技能顺序（16 个）：{' -> '.join(current_order)}。" in prompt
             for required in (
                 "银行信息区块可整体省略",
-                "utm-20-bank-info-missing",
+                "utm-business-bank-info-missing",
                 "重新执行 `verify-parent` 和两次 `read-field --copy`",
                 "Feishu/runtime/旧运行/对话/记忆",
             ):

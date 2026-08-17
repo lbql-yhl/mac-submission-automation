@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+from skill_contract_assertions import assert_shared_contract_reference
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ROOT / "skills"
-FAULT_SKILLS = (
-    "notion-utm", "notion-utm-1", "utm-clone-macos", "utm-1", "utm-2",
-    "utm-3", "vm-down", "utm-4", "utm-5", "files", "utm-clash", "utm-6",
-    "utm-7", "utm-8", "utm-9", "utm-10", "utm-11", "utm-12", "utm-13",
-    "utm-14", "utm-15", "utm-16", "utm-17", "utm-18", "utm-19", "utm-20",
-    "utm-21", "utm-22", "utm-23", "utm-24", "utm-25",
+SHARED_RECOVERY_SKILLS = (
+    "utm-clash-ip",
+    "utm-login", "utm-edit", "utm-key", "utm-apps",
+    "utm-business", "utm-env", "utm-script", "utm-image",
+    "utm-p8", "utm-21", "utm-22", "utm-23", "utm-24",
+)
+INLINE_FAULT_COMMAND_SKILLS = tuple(
+    name for name in SHARED_RECOVERY_SKILLS if name not in {"utm-login", "utm-apps"}
 )
 
 
 def main() -> None:
-    shared = (SKILLS / "_shared/AUTOMATION_CONTRACT.md").read_text(encoding="utf-8")
+    shared_path = SKILLS / "_shared/AUTOMATION_CONTRACT.md"
+    shared = shared_path.read_text(encoding="utf-8")
     for required in (
         "自动诊断 → 自动修复 → 自动复验 → 最后才发故障卡",
         "每个步骤的五段式执行",
@@ -38,31 +43,36 @@ def main() -> None:
     ):
         assert required in shared, required
 
-    for name in FAULT_SKILLS:
-        text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
+    for name in SHARED_RECOVERY_SKILLS:
+        skill_file = SKILLS / name / "SKILL.md"
+        text = skill_file.read_text(encoding="utf-8")
+        assert_shared_contract_reference(skill_file, text, shared_path)
         for required in (
-            "../_shared/AUTOMATION_CONTRACT.md",
-            "## 全局自动恢复与最后故障卡规则",
             "## 本技能自动恢复矩阵",
-            "自动诊断、自动修复、自动复验",
-            "只有智能体确实无法修复时",
-            "--recovery-attempts",
-            "--recovery-actions",
-            "--recovery-result '<exhausted|unrepairable>'",
-            "--unrepairable",
-            "<actual-count-at-least-3>",
-            "可安全修复的故障必须做满三轮“诊断→实际修复→独立复验”",
-            "OP-BROWSER-URL-NO-SCHEME",
-            "OP-USER-CONFIRMATION",
-            "--decision-kind fault",
-            "--timeout-seconds 3600",
+            "三轮",
+            "`--recovery-result unrepairable`",
             "`stop`",
             "`manual_continue`",
             "`retry_skill`",
-            f"--recovery-skill '{name}'",
         ):
             assert required in text, f"{name}: {required}"
-        assert text.count("services/feishu_bot.py notify-fault") == 1, name
+        if name in INLINE_FAULT_COMMAND_SKILLS:
+            for required in (
+                "notify-fault",
+                "wait-decision",
+                "--recovery-attempts",
+                "--recovery-actions",
+                "--recovery-result '<exhausted|unrepairable>'",
+                "<actual-count-at-least-3>",
+                "--decision-kind fault",
+                "--timeout-seconds 3600",
+                f"--recovery-skill '{name}'",
+            ):
+                assert required in text, f"{name}: {required}"
+            assert text.count("services/feishu_bot.py notify-fault") == 1, name
+        elif name == "utm-login":
+            assert "具体发送和等待命令只使用共享合同" in text, name
+            assert "notify-fault" not in text, name
         assert "notify-stop" not in text, name
 
     active_docs = "\n".join(

@@ -1,0 +1,4 @@
+interface:
+  display_name: "UTM VM Clone"
+  short_description: "克隆并完整初始化一台全新的 UTM macOS 虚拟机"
+  default_prompt: "使用 $utm-vm-clone 克隆并完整初始化一台新的 UTM macOS 虚拟机。"
