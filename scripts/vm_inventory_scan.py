@@ -22,12 +22,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from services.feishu_gateway import FeishuSendError, read_env_file, send_text_message  # noqa: E402
+from services.host_config import required_setting  # noqa: E402
 from services.project_paths import PROJECT_ROOT, VM_IMAGES_DIR  # noqa: E402
 from scripts.utm_clone_macos import read_identity  # noqa: E402
 from scripts.vm_inventory import InventoryError, register_existing, scan_inventory  # noqa: E402
 
 
-DAILY_REPORT_CHAT_ID = "oc_7e0ab0f30306c580726cd38bdcdff31c"
 DEFAULT_DATABASE = PROJECT_ROOT / "runtime" / "vm-inventory.sqlite3"
 VM_NAME_RE = re.compile(r"^[a-z]{4}$")
 
@@ -133,9 +133,12 @@ def _send_report(report: str, digest: str, approval_sha256: str | None) -> None:
     app_secret = _setting("FEISHU_APP_SECRET", env_file)
     if not app_id or not app_secret:
         raise RuntimeError("FEISHU_APP_ID/FEISHU_APP_SECRET are required for delivery")
-    # The fixed destination is the project's daily-report-only group.  Never
-    # accept a command-line chat id, which could bypass the red-line guard.
-    send_text_message(app_id, app_secret, DAILY_REPORT_CHAT_ID, report)
+    daily_report_chat_id = required_setting(
+        "FEISHU_DAILY_REPORT_CHAT_ID",
+        env_path=PROJECT_ROOT / ".env",
+    )
+    # Never accept a command-line chat id, which could bypass the red-line guard.
+    send_text_message(app_id, app_secret, daily_report_chat_id, report)
 
 
 def main(argv: list[str] | None = None) -> int:

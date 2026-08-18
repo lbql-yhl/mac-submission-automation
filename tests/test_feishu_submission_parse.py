@@ -24,12 +24,17 @@ def main() -> None:
     assert "故障卡、成功卡" in daily_docs
     assert "不使用 Git 状态或提交历史" in daily_docs
 
-    config = replace(feishu_bot.load_config(), allowed_chat_id="oc_allowed")
+    report_only_chat = "-".join(("daily", "report", "chat"))
+    config = replace(
+        feishu_bot.load_config(),
+        allowed_chat_id="oc_allowed",
+        daily_report_chat_id=report_only_chat,
+    )
     assert (
         feishu_bot.handle_incoming_text(
             config,
             "@GaleOpsBrain 状态",
-            feishu_bot.DAILY_REPORT_CHAT_ID,
+            config.daily_report_chat_id,
             source="test",
         )
         == ""

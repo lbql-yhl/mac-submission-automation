@@ -73,7 +73,6 @@ HELP_TEXT = """提审机器人命令：
 /提审 继续 - 标记为继续处理
 /提审 停止 - 标记为已停止
 /提审 帮助 - 查看命令"""
-DAILY_REPORT_CHAT_ID = "oc_7e0ab0f30306c580726cd38bdcdff31c"
 DECISION_TIMEOUT_SECONDS = 3600
 SUBMISSION_START_ENABLED = False
 SUBMISSION_SKILL_ORDER = (
@@ -103,6 +102,7 @@ class Config:
     verification_token: str
     encrypt_key: str
     allowed_chat_id: str
+    daily_report_chat_id: str
     runner_command: str
     submission_host_machine: str
     host: str
@@ -146,6 +146,7 @@ def load_config() -> Config:
         verification_token=os.getenv("FEISHU_VERIFICATION_TOKEN", ""),
         encrypt_key=os.getenv("FEISHU_ENCRYPT_KEY", ""),
         allowed_chat_id=os.getenv("FEISHU_ALLOWED_CHAT_ID", ""),
+        daily_report_chat_id=os.getenv("FEISHU_DAILY_REPORT_CHAT_ID", "").strip(),
         runner_command=os.getenv("SUBMISSION_RUNNER_COMMAND", ""),
         submission_host_machine=os.getenv("SUBMISSION_HOST_MACHINE", "").strip(),
         host=os.getenv("FEISHU_BOT_HOST", "0.0.0.0"),
@@ -872,7 +873,9 @@ def handle_command(config: Config, text: str, chat_id: str) -> str:
 
 
 def handle_incoming_text(config: Config, text: str, chat_id: str, source: str = "feishu") -> str:
-    if chat_id == DAILY_REPORT_CHAT_ID or (config.allowed_chat_id and chat_id != config.allowed_chat_id):
+    if is_daily_report_chat(chat_id, config.daily_report_chat_id) or (
+        config.allowed_chat_id and chat_id != config.allowed_chat_id
+    ):
         return ""
     submission_data = parse_submission_data(text)
     if submission_data and not SUBMISSION_START_ENABLED:
@@ -1286,13 +1289,21 @@ def run_host_machine(run: dict[str, Any]) -> str:
     return str(run.get("host_machine") or "").strip()
 
 
+def is_daily_report_chat(chat_id: str, daily_report_chat_id: str) -> bool:
+    """Return whether a chat is the configured report-only destination."""
+    configured = str(daily_report_chat_id or "").strip()
+    return bool(configured) and str(chat_id or "").strip() == configured
+
+
 def local_original_chat(run: dict[str, Any], config: Config) -> str:
     """Return the immutable original chat after enforcing local run ownership."""
     local_host = str(getattr(config, "submission_host_machine", "") or "").strip()
     if not local_host or run_host_machine(run) != local_host:
         raise RuntimeError("run host is missing or does not belong to this worker")
     chat_id = str(run.get("chat_id") or "")
-    if not chat_id.strip() or chat_id == DAILY_REPORT_CHAT_ID:
+    if not chat_id.strip() or is_daily_report_chat(
+        chat_id, getattr(config, "daily_report_chat_id", "")
+    ):
         raise RuntimeError("run has no valid original workflow chat")
     return chat_id
 
@@ -1322,11 +1333,14 @@ def reject_nonlocal_card_callback(
     run_id: str,
     run: dict[str, Any] | None,
     submission_host_machine: str,
+    daily_report_chat_id: str = "",
 ) -> dict[str, Any] | None:
     local_host = str(submission_host_machine or "").strip()
     card_host = run_host_machine(run or {})
     original_chat = str((run or {}).get("chat_id") or "").strip()
-    valid_original_chat = bool(original_chat) and original_chat != DAILY_REPORT_CHAT_ID
+    valid_original_chat = bool(original_chat) and not is_daily_report_chat(
+        original_chat, daily_report_chat_id
+    )
     if run and local_host and card_host == local_host and valid_original_chat:
         return None
     result = {"toast": {"type": "warning", "content": "非本机卡片，未执行任何操作"}}
@@ -1352,6 +1366,7 @@ def handle_review_card_action(
     value: dict[str, Any],
     operator_id: str,
     submission_host_machine: str,
+    daily_report_chat_id: str = "",
 ) -> dict[str, Any]:
     run_id = str(value.get("run_id") or "")
     decision = str(value.get("decision") or "")
@@ -1368,7 +1383,11 @@ def handle_review_card_action(
 
     existing = find_run(run_id)
     rejected = reject_nonlocal_card_callback(
-        payload, run_id, existing, submission_host_machine
+        payload,
+        run_id,
+        existing,
+        submission_host_machine,
+        daily_report_chat_id,
     )
     if rejected:
         return rejected
@@ -1428,6 +1447,7 @@ def handle_confirmation_card_action(
     value: dict[str, Any],
     operator_id: str,
     submission_host_machine: str,
+    daily_report_chat_id: str = "",
 ) -> dict[str, Any]:
     run_id = str(value.get("run_id") or "")
     decision = str(value.get("decision") or "")
@@ -1439,7 +1459,11 @@ def handle_confirmation_card_action(
         return result
     existing = find_run(run_id)
     rejected = reject_nonlocal_card_callback(
-        payload, run_id, existing, submission_host_machine
+        payload,
+        run_id,
+        existing,
+        submission_host_machine,
+        daily_report_chat_id,
     )
     if rejected:
         return rejected
@@ -1492,17 +1516,27 @@ def handle_confirmation_card_action(
 
 
 def handle_card_action(
-    payload: dict[str, Any], submission_host_machine: str
+    payload: dict[str, Any],
+    submission_host_machine: str,
+    daily_report_chat_id: str = "",
 ) -> dict[str, Any]:
     value, operator_id = card_callback_value(payload)
     action = str(value.get("action") or "")
     if action == "submission_review_decision":
         return handle_review_card_action(
-            payload, value, operator_id, submission_host_machine
+            payload,
+            value,
+            operator_id,
+            submission_host_machine,
+            daily_report_chat_id,
         )
     if action == "submission_confirmation_decision":
         return handle_confirmation_card_action(
-            payload, value, operator_id, submission_host_machine
+            payload,
+            value,
+            operator_id,
+            submission_host_machine,
+            daily_report_chat_id,
         )
     if action != "submission_fault_decision":
         result = {"toast": {"type": "warning", "content": "未识别的卡片动作"}}
@@ -1524,7 +1558,11 @@ def handle_card_action(
 
     existing = find_run(run_id)
     rejected = reject_nonlocal_card_callback(
-        payload, run_id, existing, submission_host_machine
+        payload,
+        run_id,
+        existing,
+        submission_host_machine,
+        daily_report_chat_id,
     )
     if rejected:
         return rejected
@@ -1591,7 +1629,11 @@ def handle_card_action(
     return result
 
 
-def handle_ws_card_action(data: Any, submission_host_machine: str) -> Any:
+def handle_ws_card_action(
+    data: Any,
+    submission_host_machine: str,
+    daily_report_chat_id: str = "",
+) -> Any:
     event = getattr(data, "event", None)
     action = getattr(event, "action", None)
     operator = getattr(event, "operator", None)
@@ -1606,7 +1648,9 @@ def handle_ws_card_action(data: Any, submission_host_machine: str) -> Any:
             "action": {"value": value if isinstance(value, (dict, str)) else {}},
         },
     }
-    result = handle_card_action(payload, submission_host_machine)
+    result = handle_card_action(
+        payload, submission_host_machine, daily_report_chat_id
+    )
     try:
         from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTriggerResponse
 
@@ -1777,7 +1821,11 @@ class FeishuHandler(BaseHTTPRequestHandler):
         if event_type in {"card.action.trigger", "card.action.trigger_v1"}:
             self._json_response(
                 200,
-                handle_card_action(payload, self.config.submission_host_machine),
+                handle_card_action(
+                    payload,
+                    self.config.submission_host_machine,
+                    self.config.daily_report_chat_id,
+                ),
             )
             return
         if event_type != "im.message.receive_v1":
@@ -2822,7 +2870,9 @@ def stop_run_after_decision_timeout(
 
     chat_id = str(updated.get("chat_id") or "")
     try:
-        if not chat_id or chat_id == DAILY_REPORT_CHAT_ID:
+        if not chat_id or is_daily_report_chat(
+            chat_id, getattr(config, "daily_report_chat_id", "")
+        ):
             raise RuntimeError("Timed-out run has no valid original chat_id")
         response = FeishuClient(config).send_card(
             chat_id,
@@ -3077,7 +3127,11 @@ def serve_ws(_args: argparse.Namespace, config: Config) -> int:
         EventDispatcherHandler.builder(config.encrypt_key, config.verification_token)
         .register_p2_im_message_receive_v1(handle_ws_message_receive)
         .register_p2_card_action_trigger(
-            lambda data: handle_ws_card_action(data, config.submission_host_machine)
+            lambda data: handle_ws_card_action(
+                data,
+                config.submission_host_machine,
+                config.daily_report_chat_id,
+            )
         )
         .build()
     )

@@ -32,14 +32,16 @@ from scripts.vm_inventory import (
     scan_inventory,
 )
 from services.feishu_gateway import get_tenant_access_token
+from services.utm_notion_source import (
+    configured_feishu_source as configured_utm_notion_source,
+    resolve_feishu_source as resolve_utm_notion_source,
+)
 
 
 DEFAULT_DATABASE = PROJECT_ROOT / "runtime" / "vm-inventory.sqlite3"
-DEFAULT_APP_TOKEN = "LNFdbb2cxaauuvsVGuGcebMhnxm"
-DEFAULT_TABLE_ID = "tblcENvSwMO6lhSH"
-DEFAULT_VIEW_ID = "vewfxNVEGj"
 UTM_NOTION_FEISHU_ENV_KEYS = frozenset(
     {
+        "UTM_NOTION_FEISHU_WIKI_URL",
         "UTM_NOTION_FEISHU_APP_TOKEN",
         "UTM_NOTION_FEISHU_TABLE_ID",
         "UTM_NOTION_FEISHU_VIEW_ID",
@@ -727,15 +729,19 @@ def execute(
         PROJECT_ROOT / ".env",
         override_keys=UTM_NOTION_FEISHU_ENV_KEYS,
     )
+    configured_source = configured_utm_notion_source()
     token = get_tenant_access_token(
         os.environ.get("FEISHU_APP_ID", ""),
         os.environ.get("FEISHU_APP_SECRET", ""),
     )
+    app_token, table_id, view_id = resolve_utm_notion_source(
+        token, configured_source
+    )
     client = FeishuBitableClient(
         token,
-        os.environ.get("UTM_NOTION_FEISHU_APP_TOKEN", DEFAULT_APP_TOKEN),
-        os.environ.get("UTM_NOTION_FEISHU_TABLE_ID", DEFAULT_TABLE_ID),
-        os.environ.get("UTM_NOTION_FEISHU_VIEW_ID", DEFAULT_VIEW_ID),
+        app_token,
+        table_id,
+        view_id,
     )
     record = client.find_exact_record(run_id=run_id, app_name=app_name)
     fields = dict(record.get("fields") or {})

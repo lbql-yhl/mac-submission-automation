@@ -9,17 +9,27 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.feishu_bot import (
-    DAILY_REPORT_CHAT_ID,
     build_fault_decision_card,
     create_or_update_fault,
     decision_deadline,
     ensure_decision_card_delivered,
-    handle_card_action,
+    handle_card_action as _handle_card_action,
     notify_fault,
     record_decision_by_run_id,
     wait_decision,
 )
 from services.feishu_gateway import send_interactive_card
+
+
+REPORT_ONLY_CHAT = "-".join(("daily", "report", "chat"))
+
+
+def handle_card_action(payload: dict, submission_host_machine: str) -> dict:
+    return _handle_card_action(
+        payload,
+        submission_host_machine,
+        REPORT_ONLY_CHAT,
+    )
 
 
 def main() -> None:
@@ -122,7 +132,7 @@ def main() -> None:
     for rejected_run in (
         {**waiting_run, "submission_data": {"host_machine": "dev1"}},
         {key: value for key, value in waiting_run.items() if key != "submission_data"},
-        {**waiting_run, "chat_id": DAILY_REPORT_CHAT_ID},
+        {**waiting_run, "chat_id": REPORT_ONLY_CHAT},
         {**waiting_run, "chat_id": ""},
     ):
         with (
@@ -214,7 +224,10 @@ def main() -> None:
         recovery_result="",
         unrepairable=False,
     )
-    config = SimpleNamespace(submission_host_machine="海淋")
+    config = SimpleNamespace(
+        submission_host_machine="海淋",
+        daily_report_chat_id=REPORT_ONLY_CHAT,
+    )
     with (
         patch("services.feishu_bot.find_run", return_value={**run, "chat_id": "test-chat"}),
         patch("services.feishu_bot.create_or_update_fault", return_value=run) as create_fault,
@@ -331,8 +344,8 @@ def main() -> None:
         (delivery_run, SimpleNamespace(**{**vars(valid_notify_args), "chat_id": "wrong-chat"})),
         (delivery_run, SimpleNamespace(**{**vars(valid_notify_args), "chat_id": ""})),
         (
-            {**delivery_run, "chat_id": DAILY_REPORT_CHAT_ID},
-            SimpleNamespace(**{**vars(valid_notify_args), "chat_id": DAILY_REPORT_CHAT_ID}),
+            {**delivery_run, "chat_id": REPORT_ONLY_CHAT},
+            SimpleNamespace(**{**vars(valid_notify_args), "chat_id": REPORT_ONLY_CHAT}),
         ),
     )
     for rejected_run, rejected_args in boundary_cases:
