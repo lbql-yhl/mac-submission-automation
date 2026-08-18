@@ -14,7 +14,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from scripts.ssh_password import password_environment, ssh_args as fixed_password_ssh_args
+from scripts.ssh_password import (  # noqa: E402
+    password_environment,
+    ssh_args as configured_guest_password_ssh_args,
+)
 
 
 MAC_RE = re.compile(r"^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$")
@@ -55,7 +58,7 @@ def parse_guest_identity(ioreg_output: str, ifconfig_output: str) -> GuestIdenti
 
 
 def ssh_args(user: str, ip: str) -> list[str]:
-    return fixed_password_ssh_args(user, ip, connect_timeout=5)
+    return configured_guest_password_ssh_args(user, ip, connect_timeout=5)
 
 
 def run(args: argparse.Namespace) -> int:

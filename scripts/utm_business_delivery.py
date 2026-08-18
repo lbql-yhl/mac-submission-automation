@@ -77,7 +77,6 @@ def sync_business_guest_files(
     staged = stage_business_guest_files(shared_dir)
     source_dir = Path(shared_dir) / "AppleAccountScriptsBackup"
     guest_dir = f"/Users/{vm_user}/Downloads/AppleAccountScriptsBackup"
-    environment = password_environment()
     prepare = "\n".join(
         (
             "set -euo pipefail",
@@ -93,7 +92,7 @@ def sync_business_guest_files(
         stderr=subprocess.PIPE,
         timeout=30,
         check=False,
-        env=environment,
+        env=password_environment(),
         cwd=PROJECT_ROOT,
     )
     if prepared.returncode != 0:
@@ -113,7 +112,7 @@ def sync_business_guest_files(
             stderr=subprocess.PIPE,
             timeout=30,
             check=False,
-            env=environment,
+            env=password_environment(),
             cwd=PROJECT_ROOT,
         )
         if copied.returncode != 0:
@@ -138,7 +137,7 @@ def sync_business_guest_files(
         stderr=subprocess.PIPE,
         timeout=30,
         check=False,
-        env=environment,
+        env=password_environment(),
         cwd=PROJECT_ROOT,
     )
     if verified.returncode != 0:

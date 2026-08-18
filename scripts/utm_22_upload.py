@@ -29,8 +29,8 @@ if str(PROJECT_SOURCE_ROOT) not in sys.path:
 
 from scripts.ssh_password import (  # noqa: E402
     password_environment,
-    scp_args as fixed_password_scp_args,
-    ssh_args as fixed_password_ssh_args,
+    scp_args as configured_guest_password_scp_args,
+    ssh_args as configured_guest_password_ssh_args,
 )
 from scripts.utm_clash_ip_target import (  # noqa: E402
     require_exact_bound_vm,
@@ -163,7 +163,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _ssh_command(user: str, ip: str, remote_args: list[str]) -> list[str]:
-    base = fixed_password_ssh_args(user, ip, connect_timeout=5)
+    base = configured_guest_password_ssh_args(user, ip, connect_timeout=5)
     return [
         *base[:-1],
         "-o",
@@ -209,7 +209,9 @@ def _install_distributor(user: str, ip: str) -> str:
     current_hash = before.stdout.split()[0] if before.returncode == 0 and before.stdout.split() else ""
     if current_hash != expected_hash:
         copied = subprocess.run(
-            fixed_password_scp_args(user, ip, DISTRIBUTOR_SOURCE, remote_path),
+            configured_guest_password_scp_args(
+                user, ip, DISTRIBUTOR_SOURCE, remote_path
+            ),
             env=password_environment(),
             text=True,
             capture_output=True,

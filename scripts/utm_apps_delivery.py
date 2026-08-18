@@ -16,9 +16,9 @@ SOURCE_ROOT = Path(__file__).resolve().parents[1]
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-from scripts.ssh_password import password_environment, scp_args, ssh_args
-from services.project_paths import PROJECT_ROOT
-from services.project_paths import SHARED_DIR
+from scripts.ssh_password import password_environment, scp_args, ssh_args  # noqa: E402
+from services.project_paths import PROJECT_ROOT  # noqa: E402
+from services.project_paths import SHARED_DIR  # noqa: E402
 
 
 PLAYWRIGHT_GUEST_FILES = (
@@ -110,7 +110,6 @@ def sync_utm_apps_playwright_files(
             f"/bin/mkdir -p {shlex.quote(guest_dir)}",
         )
     )
-    environment = password_environment()
     prepared = subprocess.run(
         ssh_args(vm_user, vm_ip, connect_timeout=8, tty=False)
         + [shlex.join(("/bin/zsh", "-lc", prepare))],
@@ -119,7 +118,7 @@ def sync_utm_apps_playwright_files(
         stderr=subprocess.PIPE,
         timeout=30,
         check=False,
-        env=environment,
+        env=password_environment(),
         cwd=PROJECT_ROOT,
     )
     if prepared.returncode != 0:
@@ -139,7 +138,7 @@ def sync_utm_apps_playwright_files(
             stderr=subprocess.PIPE,
             timeout=30,
             check=False,
-            env=environment,
+            env=password_environment(),
             cwd=PROJECT_ROOT,
         )
         if copied.returncode != 0:
@@ -170,7 +169,7 @@ def sync_utm_apps_playwright_files(
         stderr=subprocess.PIPE,
         timeout=30,
         check=False,
-        env=environment,
+        env=password_environment(),
         cwd=PROJECT_ROOT,
     )
     if verified.returncode != 0:

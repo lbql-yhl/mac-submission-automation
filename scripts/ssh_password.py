@@ -52,13 +52,28 @@ _BROKER_TIMEOUT_SECONDS = 30.0
 _SOCKET_ENV = "SUBMISSION_SSH_ASKPASS_SOCKET"
 _CAPABILITY_ENV = "SUBMISSION_SSH_ASKPASS_CAPABILITY"
 _UNIX_SOCKET_PATH_LIMIT = 100
+_CWD_LOCK = threading.Lock()
 
 
 class SSHPasswordError(RuntimeError):
     """Raised when the local password-authentication channel is unsafe."""
 
 
-def _secure_runtime_dir(path: Path) -> Path:
+class _SecureRuntimeDirectory:
+    """An open, identity-checked runtime directory used for relative I/O."""
+
+    def __init__(self, path: Path, descriptor: int, identity: tuple[int, int]) -> None:
+        self.path = path
+        self.descriptor = descriptor
+        self.identity = identity
+
+    def close(self) -> None:
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+
+
+def _secure_runtime_dir(path: Path) -> _SecureRuntimeDirectory:
     path = Path(path).expanduser()
     if not path.is_absolute():
         path = Path.cwd() / path
@@ -81,30 +96,59 @@ def _secure_runtime_dir(path: Path) -> Path:
         | getattr(os, "O_DIRECTORY", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )
+    descriptor = -1
     try:
         descriptor = os.open(path, flags)
-        try:
-            opened_stat = os.fstat(descriptor)
-            if (
-                not stat.S_ISDIR(opened_stat.st_mode)
-                or opened_stat.st_dev != path_stat.st_dev
-                or opened_stat.st_ino != path_stat.st_ino
-            ):
-                raise SSHPasswordError("SSH password runtime directory changed")
-            os.fchmod(descriptor, 0o700)
-        finally:
-            os.close(descriptor)
+        opened_stat = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(opened_stat.st_mode)
+            or opened_stat.st_dev != path_stat.st_dev
+            or opened_stat.st_ino != path_stat.st_ino
+        ):
+            raise SSHPasswordError("SSH password runtime directory changed")
+        os.fchmod(descriptor, 0o700)
     except OSError as error:
+        if descriptor >= 0:
+            os.close(descriptor)
         raise SSHPasswordError("SSH password runtime directory is unsafe") from error
-    return path
+    except Exception:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+    return _SecureRuntimeDirectory(
+        path,
+        descriptor,
+        (opened_stat.st_dev, opened_stat.st_ino),
+    )
 
 
-def _askpass_helper(runtime_dir: Path) -> Path:
-    directory = _secure_runtime_dir(runtime_dir)
-    helper = directory / "askpass"
+def _assert_runtime_identity(directory: _SecureRuntimeDirectory) -> None:
+    if directory.descriptor < 0:
+        raise SSHPasswordError("SSH password runtime directory is closed")
+    try:
+        path_stat = directory.path.lstat()
+        opened_stat = os.fstat(directory.descriptor)
+    except OSError as error:
+        raise SSHPasswordError("SSH password runtime directory changed") from error
+    if (
+        not stat.S_ISDIR(path_stat.st_mode)
+        or not stat.S_ISDIR(opened_stat.st_mode)
+        or (path_stat.st_dev, path_stat.st_ino) != directory.identity
+        or (opened_stat.st_dev, opened_stat.st_ino) != directory.identity
+    ):
+        raise SSHPasswordError("SSH password runtime directory changed")
+
+
+def _askpass_helper(directory: _SecureRuntimeDirectory) -> Path:
+    _assert_runtime_identity(directory)
+    helper_name = "askpass"
     existing_source: str | None = None
     try:
-        helper_stat = helper.lstat()
+        helper_stat = os.stat(
+            helper_name,
+            dir_fd=directory.descriptor,
+            follow_symlinks=False,
+        )
     except FileNotFoundError:
         helper_stat = None
     except OSError as error:
@@ -114,7 +158,7 @@ def _askpass_helper(runtime_dir: Path) -> Path:
             raise SSHPasswordError("SSH_ASKPASS helper is unsafe")
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
         try:
-            descriptor = os.open(helper, flags)
+            descriptor = os.open(helper_name, flags, dir_fd=directory.descriptor)
             try:
                 opened_stat = os.fstat(descriptor)
                 if (
@@ -132,67 +176,116 @@ def _askpass_helper(runtime_dir: Path) -> Path:
         except (OSError, UnicodeError) as error:
             raise SSHPasswordError("SSH_ASKPASS helper is unsafe") from error
     if existing_source != _ASKPASS_SCRIPT:
-        temporary = directory / f".askpass-{uuid.uuid4().hex}.tmp"
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        temporary_name = f".askpass-{uuid.uuid4().hex}.tmp"
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=directory.descriptor,
+        )
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 handle.write(_ASKPASS_SCRIPT)
                 handle.flush()
                 os.fsync(handle.fileno())
                 os.fchmod(handle.fileno(), 0o700)
-            os.replace(temporary, helper)
+            os.replace(
+                temporary_name,
+                helper_name,
+                src_dir_fd=directory.descriptor,
+                dst_dir_fd=directory.descriptor,
+            )
         finally:
             try:
-                temporary.unlink()
+                os.unlink(temporary_name, dir_fd=directory.descriptor)
             except FileNotFoundError:
                 pass
     else:
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(helper, flags)
+        descriptor = os.open(helper_name, flags, dir_fd=directory.descriptor)
         try:
             os.fchmod(descriptor, 0o700)
         finally:
             os.close(descriptor)
-    return helper
+    _assert_runtime_identity(directory)
+    return directory.path / helper_name
 
 
-def _socket_directory(runtime_dir: Path) -> Path:
-    candidate = runtime_dir / f".b-{secrets.token_hex(8)}"
+def _socket_directory(
+    runtime_dir: _SecureRuntimeDirectory,
+) -> _SecureRuntimeDirectory:
+    _assert_runtime_identity(runtime_dir)
+    candidate = runtime_dir.path / f".b-{secrets.token_hex(8)}"
     if len(os.fsencode(candidate)) < _UNIX_SOCKET_PATH_LIMIT:
         return runtime_dir
     short_root = Path(tempfile.gettempdir()) / f"submission-ssh-{os.getuid()}"
     return _secure_runtime_dir(short_root)
 
 
-def _unlink_owned_socket(path: Path, identity: tuple[int, int]) -> None:
+def _unlink_owned_socket(
+    directory: _SecureRuntimeDirectory,
+    name: str,
+    identity: tuple[int, int],
+) -> None:
     try:
-        path_stat = path.lstat()
+        path_stat = os.stat(
+            name,
+            dir_fd=directory.descriptor,
+            follow_symlinks=False,
+        )
     except FileNotFoundError:
         return
     if (
         stat.S_ISSOCK(path_stat.st_mode)
         and (path_stat.st_dev, path_stat.st_ino) == identity
     ):
-        path.unlink()
+        os.unlink(name, dir_fd=directory.descriptor)
 
 
-def _start_password_broker(runtime_dir: Path, configured_password: str) -> tuple[Path, str]:
-    directory = _socket_directory(runtime_dir)
+def _bind_socket_at(
+    server: socket.socket,
+    directory: _SecureRuntimeDirectory,
+    socket_name: str,
+) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    with _CWD_LOCK:
+        previous_directory = os.open(".", flags)
+        try:
+            os.fchdir(directory.descriptor)
+            server.bind(socket_name)
+        finally:
+            os.fchdir(previous_directory)
+            os.close(previous_directory)
+
+
+def _start_password_broker(
+    directory: _SecureRuntimeDirectory,
+    configured_password: str,
+) -> tuple[Path, str]:
+    _assert_runtime_identity(directory)
     capability = secrets.token_urlsafe(32)
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    socket_path = directory / f".b-{secrets.token_hex(8)}"
+    socket_name = f".b-{secrets.token_hex(8)}"
+    socket_path = directory.path / socket_name
+    identity: tuple[int, int] | None = None
     try:
-        server.bind(str(socket_path))
-        socket_stat = socket_path.lstat()
+        _bind_socket_at(server, directory, socket_name)
+        socket_stat = os.stat(
+            socket_name,
+            dir_fd=directory.descriptor,
+            follow_symlinks=False,
+        )
+        if not stat.S_ISSOCK(socket_stat.st_mode):
+            raise SSHPasswordError("SSH password broker socket is unsafe")
         identity = (socket_stat.st_dev, socket_stat.st_ino)
+        _assert_runtime_identity(directory)
         server.listen(1)
         server.settimeout(_BROKER_TIMEOUT_SECONDS)
     except Exception:
         server.close()
-        try:
-            socket_path.unlink()
-        except FileNotFoundError:
-            pass
+        if identity is not None:
+            _unlink_owned_socket(directory, socket_name, identity)
+        directory.close()
         raise
 
     def serve_once() -> None:
@@ -214,9 +307,23 @@ def _start_password_broker(runtime_dir: Path, configured_password: str) -> tuple
             pass
         finally:
             server.close()
-            _unlink_owned_socket(socket_path, identity)
+            try:
+                _unlink_owned_socket(directory, socket_name, identity)
+            finally:
+                directory.close()
 
-    threading.Thread(target=serve_once, name="ssh-password-broker", daemon=True).start()
+    thread = threading.Thread(
+        target=serve_once,
+        name="ssh-password-broker",
+        daemon=True,
+    )
+    try:
+        thread.start()
+    except Exception:
+        server.close()
+        _unlink_owned_socket(directory, socket_name, identity)
+        directory.close()
+        raise
     return socket_path, capability
 
 
@@ -226,10 +333,22 @@ def password_environment(
     """Return an environment that forces one configured-password prompt."""
     env = dict(os.environ if base is None else base)
     configured_password = guest_password(environ=base) if base is not None else guest_password()
-    helper = _askpass_helper(runtime_dir)
-    socket_path, capability = _start_password_broker(
-        _secure_runtime_dir(runtime_dir), configured_password
-    )
+    runtime_directory = _secure_runtime_dir(runtime_dir)
+    try:
+        helper = _askpass_helper(runtime_directory)
+        broker_directory = _socket_directory(runtime_directory)
+        if broker_directory is runtime_directory:
+            runtime_directory = None
+        else:
+            runtime_directory.close()
+            runtime_directory = None
+        socket_path, capability = _start_password_broker(
+            broker_directory,
+            configured_password,
+        )
+    finally:
+        if runtime_directory is not None:
+            runtime_directory.close()
     env.pop("SUBMISSION_GUEST_PASSWORD", None)
     env.update(
         {

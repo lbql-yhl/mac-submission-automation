@@ -20,19 +20,20 @@ PROJECT_SOURCE_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_SOURCE_ROOT))
 
-from scripts.notion_api import api_from_env
-from scripts.clean_cli import run_clean_cli
-from scripts.ssh_password import (
+from scripts.notion_api import api_from_env  # noqa: E402
+from scripts.clean_cli import run_clean_cli  # noqa: E402
+from scripts.ssh_password import (  # noqa: E402
     password_environment,
-    ssh_args as fixed_password_ssh_args,
+    ssh_args as configured_guest_password_ssh_args,
 )
-from scripts.utm_7_login import (
+from scripts.utm_7_login import (  # noqa: E402
     GUEST_SHARED_HELPER_DIR,
     _ensure_remote_accessibility,
     _ensure_remote_pyobjc,
     _prepare_shared_helpers,
     _remote_python_command,
 )
+from services.host_config import guest_password  # noqa: E402
 
 
 REQUIRED_GUEST_MARKERS = {
@@ -45,9 +46,37 @@ REQUIRED_GUEST_MARKERS = {
     "PASSWORD_CHANGE=verified",
 }
 
+CHANGE_PASSWORD_HELPER_BRIDGE = """\
+import io, json, os, runpy, sys
+payload = json.load(sys.stdin)
+configured_guest_password = str(payload.pop("SUBMISSION_GUEST_PASSWORD"))
+script = sys.argv[1]
+previous_stdin = sys.stdin
+previous_argv = sys.argv
+previous_path = list(sys.path)
+guest_password_was_present = "SUBMISSION_GUEST_PASSWORD" in os.environ
+previous_guest_password = os.environ.get("SUBMISSION_GUEST_PASSWORD")
+try:
+    os.environ["SUBMISSION_GUEST_PASSWORD"] = configured_guest_password
+    sys.stdin = io.StringIO(json.dumps(payload, ensure_ascii=False))
+    sys.argv = [script, "--stdin-json"]
+    sys.path.insert(0, os.path.dirname(script))
+    runpy.run_path(script, run_name="__main__")
+finally:
+    if guest_password_was_present:
+        os.environ["SUBMISSION_GUEST_PASSWORD"] = previous_guest_password
+    else:
+        os.environ.pop("SUBMISSION_GUEST_PASSWORD", None)
+    sys.stdin = previous_stdin
+    sys.argv = previous_argv
+    sys.path[:] = previous_path
+    configured_guest_password = ""
+    payload = {}
+"""
+
 
 def _ssh_args(user: str, ip: str) -> list[str]:
-    return fixed_password_ssh_args(user, ip, connect_timeout=8)
+    return configured_guest_password_ssh_args(user, ip, connect_timeout=8)
 
 
 def _decode_output(value: bytes | str | None) -> str:
@@ -56,12 +85,15 @@ def _decode_output(value: bytes | str | None) -> str:
     return str(value or "")
 
 
-def _safe_guest_failure_detail(stderr: bytes | str | None, target_password: str) -> str:
-    """Return the complete guest diagnostic with only the password redacted."""
+def _safe_guest_failure_detail(
+    stderr: bytes | str | None, sensitive_values: tuple[str, ...]
+) -> str:
+    """Return the complete guest diagnostic with both passwords redacted."""
     lines = [re.sub(r"\s+", " ", line).strip() for line in _decode_output(stderr).splitlines()]
     detail = " | ".join(line for line in lines if line) or "guest helper exited without detail"
-    if target_password:
-        detail = detail.replace(target_password, "<redacted>")
+    for sensitive_value in sensitive_values:
+        if sensitive_value:
+            detail = detail.replace(sensitive_value, "<redacted>")
     return detail
 
 
@@ -85,6 +117,7 @@ def _validate_context(args: argparse.Namespace) -> None:
 
 def run(args: argparse.Namespace) -> int:
     _validate_context(args)
+    configured_guest_password = guest_password()
 
     api = api_from_env()
     target_password = api.read_field(
@@ -101,21 +134,31 @@ def run(args: argparse.Namespace) -> int:
     _ensure_remote_accessibility(args.vm_user, args.vm_ip)
 
     payload = json.dumps(
-        {"APPLE_ACCOUNT_NEW_PASSWORD": target_password},
+        {
+            "APPLE_ACCOUNT_NEW_PASSWORD": target_password,
+            "SUBMISSION_GUEST_PASSWORD": configured_guest_password,
+        },
         ensure_ascii=False,
     ).encode("utf-8")
     try:
         remote_script = f"{guest_dir}/apple_account_change_password.py"
         result = subprocess.run(
             _ssh_args(args.vm_user, args.vm_ip)
-            + [_remote_python_command("-B", remote_script, "--stdin-json")],
+            + [
+                _remote_python_command(
+                    "-B", "-c", CHANGE_PASSWORD_HELPER_BRIDGE, remote_script
+                )
+            ],
             input=payload,
             check=False,
             capture_output=True,
             env=password_environment(),
         )
         if result.returncode != 0:
-            detail = _safe_guest_failure_detail(result.stderr, target_password)
+            detail = _safe_guest_failure_detail(
+                result.stderr,
+                (target_password, configured_guest_password),
+            )
             print(f"PASSWORD_CHANGE_GUEST_FAILURE={detail}", file=sys.stderr)
             print(f"PASSWORD_CHANGE=blocked: {detail}", file=sys.stderr)
             return result.returncode
@@ -134,6 +177,7 @@ def run(args: argparse.Namespace) -> int:
         return 0
     finally:
         target_password = ""
+        configured_guest_password = ""
         payload = b""
 
 

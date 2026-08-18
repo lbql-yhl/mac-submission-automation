@@ -188,8 +188,8 @@ def handle_mac_password_prompt(pid: int) -> Optional[int]:
     if any(tree_contains_text(final_roots, text) for text in MAC_PASSWORD_PROMPT_TEXTS):
         print("Mac 密码授权弹窗在提交后仍可见。", file=sys.stderr)
         return 5
-    print("FIXED_VM_PASSWORD_CONTEXT=gui_auth")
-    print("FIXED_VM_PASSWORD_RESULT=verified")
+    print("CONFIGURED_GUEST_PASSWORD_CONTEXT=gui_auth")
+    print("CONFIGURED_GUEST_PASSWORD_RESULT=verified")
     return 0
 
 

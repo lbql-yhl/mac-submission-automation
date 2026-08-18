@@ -6,11 +6,11 @@ import subprocess
 
 import pytest
 
+from scripts import check_host_vm_dependencies as dependencies
 from scripts.check_host_vm_dependencies import (
     GUEST_LABELS,
     HOST_LABELS,
     _arp_ips_for_mac,
-    _password_environment,
     _read_active_clone_context,
     _resolve_running_vm_ip,
     check_dependencies,
@@ -107,18 +107,20 @@ def test_vm_ip_falls_back_to_unique_registered_mac_when_backend_has_no_ip(
     assert _resolve_running_vm_ip("stgf", "ce:c3:e8:e0:c1:0c") == "192.168.64.56"
 
 
-def test_password_environment_uses_the_checker_itself_without_creating_a_helper() -> None:
+def test_dependency_checker_uses_shared_broker_without_plaintext_child_environment(
+    tmp_path: Path,
+) -> None:
     dummy_value = "9072"
-    environment = _password_environment(
-        {"PATH": os.environ["PATH"], "SUBMISSION_GUEST_PASSWORD": dummy_value}
+    environment = dependencies.password_environment(
+        {"PATH": os.environ["PATH"], "SUBMISSION_GUEST_PASSWORD": dummy_value},
+        runtime_dir=tmp_path,
     )
 
-    assert environment["SSH_ASKPASS"] == str(
-        (ROOT / "scripts" / "check_host_vm_dependencies.py").resolve()
-    )
     assert environment["SSH_ASKPASS_REQUIRE"] == "force"
-    assert environment["DEPENDENCY_CHECK_ASKPASS"] == "1"
-    assert environment["SUBMISSION_GUEST_PASSWORD"] == dummy_value
+    assert "DEPENDENCY_CHECK_ASKPASS" not in environment
+    assert "SUBMISSION_GUEST_PASSWORD" not in environment
+    assert environment["SUBMISSION_SSH_ASKPASS_SOCKET"]
+    assert environment["SUBMISSION_SSH_ASKPASS_CAPABILITY"]
     assert Path(environment["SSH_ASKPASS"]).stat().st_mode & 0o111
 
     completed = subprocess.run(
@@ -131,9 +133,13 @@ def test_password_environment_uses_the_checker_itself_without_creating_a_helper(
     assert completed.stdout == dummy_value + "\n"
 
 
-def test_checker_explicit_environment_does_not_fall_back_to_ambient_password() -> None:
+def test_shared_broker_explicit_environment_does_not_fall_back_to_ambient_password(
+    tmp_path: Path,
+) -> None:
     with pytest.raises(RuntimeError, match="missing required host setting"):
-        _password_environment({"PATH": os.environ["PATH"]})
+        dependencies.password_environment(
+            {"PATH": os.environ["PATH"]}, runtime_dir=tmp_path
+        )
 
 
 def test_dependency_checker_source_has_no_embedded_askpass_value() -> None:
@@ -142,7 +148,8 @@ def test_dependency_checker_source_has_no_embedded_askpass_value() -> None:
     )
 
     assert 'print("1234")' not in source
-    assert "guest_password(environ=os.environ)" in source
+    assert "DEPENDENCY_CHECK_ASKPASS" not in source
+    assert "guest_password(environ=os.environ)" not in source
 
 
 def test_dependency_checker_contains_no_utm_lifecycle_command() -> None:
@@ -157,7 +164,6 @@ def test_dependency_checker_contains_no_utm_lifecycle_command() -> None:
         "open -a UTM",
         "open ",
         ".utm",
-        "from scripts.ssh_password import password_environment",
         ".write_text(",
         ".write_bytes(",
         ".mkdir(",

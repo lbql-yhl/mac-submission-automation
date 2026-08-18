@@ -24,8 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.ssh_password import ssh_args  # noqa: E402
-from services.host_config import guest_password  # noqa: E402
+from scripts.ssh_password import password_environment, ssh_args  # noqa: E402
 from services.project_paths import SHARED_DIR  # noqa: E402
 
 
@@ -138,23 +137,6 @@ def validate_vm_name(value: str) -> str:
 
 def render_result(label: str, installed: bool) -> str:
     return f"{label}{'已安装' if installed else '未安装'}"
-
-
-def _password_environment(
-    base: Mapping[str, str] | None = None,
-) -> dict[str, str]:
-    environment = dict(os.environ if base is None else base)
-    configured_value = guest_password(environ=base) if base is not None else guest_password()
-    environment.update(
-        {
-            "SSH_ASKPASS": str(Path(__file__).resolve()),
-            "SSH_ASKPASS_REQUIRE": "force",
-            "DISPLAY": environment.get("DISPLAY") or "dependency-check:0",
-            "DEPENDENCY_CHECK_ASKPASS": "1",
-            "SUBMISSION_GUEST_PASSWORD": configured_value,
-        }
-    )
-    return environment
 
 
 def _module_available(name: str) -> bool:
@@ -379,7 +361,7 @@ def check_guest_dependencies(
             ssh_args(vm_name, vm_ip, connect_timeout=5, tty=False) + [remote],
             timeout=30,
             stdin=subprocess.DEVNULL,
-            env=_password_environment(),
+            env=password_environment(),
             cwd=PROJECT_ROOT,
         )
         if result.returncode != 0:
@@ -439,7 +421,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    if os.getenv("DEPENDENCY_CHECK_ASKPASS") == "1":
-        print(guest_password(environ=os.environ))
-        raise SystemExit(0)
     raise SystemExit(main())

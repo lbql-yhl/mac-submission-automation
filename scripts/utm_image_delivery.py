@@ -69,8 +69,6 @@ def sync_utm_image_guest_file(
     source = Path(shared_dir) / "AppleAccountScriptsBackup" / GUEST_FILE
     guest_dir = f"/Users/{vm_user}/Downloads/AppleAccountScriptsBackup"
     target = f"{guest_dir}/{GUEST_FILE}"
-    environment = password_environment()
-
     prepare = subprocess.run(
         ssh_args(vm_user, vm_ip, connect_timeout=8, tty=False)
         + [
@@ -93,7 +91,7 @@ def sync_utm_image_guest_file(
         stderr=subprocess.PIPE,
         timeout=30,
         check=False,
-        env=environment,
+        env=password_environment(),
         cwd=PROJECT_ROOT,
     )
     if prepare.returncode != 0:
@@ -106,7 +104,7 @@ def sync_utm_image_guest_file(
         stderr=subprocess.PIPE,
         timeout=30,
         check=False,
-        env=environment,
+        env=password_environment(),
         cwd=PROJECT_ROOT,
     )
     if copied.returncode != 0:
@@ -130,7 +128,7 @@ def sync_utm_image_guest_file(
         stderr=subprocess.PIPE,
         timeout=30,
         check=False,
-        env=environment,
+        env=password_environment(),
         cwd=PROJECT_ROOT,
     )
     if verified.returncode != 0:

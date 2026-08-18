@@ -20,7 +20,10 @@ if str(PROJECT_SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_SOURCE_ROOT))
 
 from scripts.notion_api import api_from_env
-from scripts.ssh_password import password_environment, ssh_args as fixed_password_ssh_args
+from scripts.ssh_password import (  # noqa: E402
+    password_environment,
+    ssh_args as configured_guest_password_ssh_args,
+)
 from services.project_paths import PROJECT_ROOT
 
 
@@ -152,7 +155,9 @@ def main() -> int:
     target = clone_target(args.vm_name, repo_url)
     payload = build_payload(username, password, repo_url, target)
     remote_command = "/bin/zsh -lc " + shlex.quote(REMOTE_CLONE_SCRIPT)
-    command = fixed_password_ssh_args(args.vm_name, args.vm_ip, connect_timeout=5)
+    command = configured_guest_password_ssh_args(
+        args.vm_name, args.vm_ip, connect_timeout=5
+    )
     command.insert(1, "-T")
     command.append(remote_command)
     result = subprocess.run(

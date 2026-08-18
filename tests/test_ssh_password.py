@@ -90,6 +90,40 @@ def test_password_broker_rejects_wrong_capability_without_disclosing_value(
     assert synthetic_value not in completed.stdout + completed.stderr
 
 
+def test_each_fresh_environment_serves_one_real_helper_and_rejects_replay(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    synthetic_value = "9072"
+    base = {
+        "PATH": os.environ["PATH"],
+        "SUBMISSION_GUEST_PASSWORD": synthetic_value,
+    }
+    environments = [
+        module.password_environment(base, runtime_dir=tmp_path) for _ in range(2)
+    ]
+
+    for environment in environments:
+        first = subprocess.run(
+            [environment["SSH_ASKPASS"]],
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        replay = subprocess.run(
+            [environment["SSH_ASKPASS"]],
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert first.returncode == 0
+        assert first.stdout == synthetic_value + "\n"
+        assert replay.returncode != 0
+        assert synthetic_value not in replay.stdout + replay.stderr
+
+
 def test_password_broker_times_out_and_removes_its_socket(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -130,6 +164,72 @@ def test_runtime_directory_symlink_is_rejected_without_touching_external_target(
     assert external.stat().st_mode & 0o777 == before_mode
     assert marker.read_text(encoding="utf-8") == "leave-me-alone"
     assert sorted(path.name for path in external.iterdir()) == ["marker.txt"]
+
+
+def test_runtime_replacement_after_validation_cannot_redirect_helper_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    displaced = tmp_path / "validated-runtime"
+    marker = runtime / "original.txt"
+    marker.write_text("original", encoding="utf-8")
+    original_secure = module._secure_runtime_dir
+    swapped = False
+
+    def swap_after_validation(path: Path):
+        nonlocal swapped
+        secured = original_secure(path)
+        if not swapped:
+            swapped = True
+            runtime.rename(displaced)
+            runtime.mkdir(mode=0o755)
+            (runtime / "replacement.txt").write_text("replacement", encoding="utf-8")
+            runtime.chmod(0o755)
+        return secured
+
+    monkeypatch.setattr(module, "_secure_runtime_dir", swap_after_validation)
+
+    with pytest.raises(module.SSHPasswordError, match="runtime directory"):
+        module.password_environment(
+            {"SUBMISSION_GUEST_PASSWORD": "9072"}, runtime_dir=runtime
+        )
+
+    assert runtime.stat().st_mode & 0o777 == 0o755
+    assert sorted(path.name for path in runtime.iterdir()) == ["replacement.txt"]
+    assert (runtime / "replacement.txt").read_text(encoding="utf-8") == "replacement"
+    assert marker.with_name("original.txt").exists() is False
+    assert (displaced / "original.txt").read_text(encoding="utf-8") == "original"
+
+
+def test_runtime_replacement_before_socket_creation_is_rejected_without_touching_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    displaced = tmp_path / "validated-runtime"
+    original_helper = module._askpass_helper
+
+    def swap_after_helper(directory):
+        helper = original_helper(directory)
+        runtime.rename(displaced)
+        runtime.mkdir(mode=0o755)
+        (runtime / "replacement.txt").write_text("replacement", encoding="utf-8")
+        runtime.chmod(0o755)
+        return helper
+
+    monkeypatch.setattr(module, "_askpass_helper", swap_after_helper)
+
+    with pytest.raises(module.SSHPasswordError, match="runtime directory"):
+        module.password_environment(
+            {"SUBMISSION_GUEST_PASSWORD": "9072"}, runtime_dir=runtime
+        )
+
+    assert runtime.stat().st_mode & 0o777 == 0o755
+    assert sorted(path.name for path in runtime.iterdir()) == ["replacement.txt"]
+    assert (runtime / "replacement.txt").read_text(encoding="utf-8") == "replacement"
 
 
 def test_explicit_password_environment_does_not_fall_back_to_ambient_setting(
