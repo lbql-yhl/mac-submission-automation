@@ -21,12 +21,12 @@ sys.path.insert(0, str(ROOT))
 import scripts.utm_8_change_password as runner  # noqa: E402
 
 
-TARGET_PASSWORD = "K7mQ9vT2pL6xR4nZy"
-GUEST_PASSWORD = "6194"
+FIXTURE_TARGET_VALUE = "K7mQ9vT2pL6xR4nZy"
+FIXTURE_GUEST_VALUE = "6194"
 
 
 class FakeNotion:
-    def __init__(self, modified_password: str = TARGET_PASSWORD) -> None:
+    def __init__(self, modified_password: str = FIXTURE_TARGET_VALUE) -> None:
         self.modified_password = modified_password
         self.field_reads: list[tuple[str, str, str]] = []
         self.parent_checks: list[str] = []
@@ -101,7 +101,7 @@ class UTM8ChangePasswordTests(unittest.TestCase):
         with patch.object(
             runner, "api_from_env", return_value=api
         ), patch.object(
-            runner, "guest_password", return_value=GUEST_PASSWORD
+            runner, "guest_password", return_value=FIXTURE_GUEST_VALUE
         ) as configured_guest_password, patch.object(
             runner, "password_environment", return_value={"PATH": "/usr/bin"}
         ), patch.object(
@@ -124,8 +124,8 @@ class UTM8ChangePasswordTests(unittest.TestCase):
         self.assertEqual(
             payload,
             {
-                "APPLE_ACCOUNT_NEW_PASSWORD": TARGET_PASSWORD,
-                "SUBMISSION_GUEST_PASSWORD": GUEST_PASSWORD,
+                "APPLE_ACCOUNT_NEW_PASSWORD": FIXTURE_TARGET_VALUE,
+                "SUBMISSION_GUEST_PASSWORD": FIXTURE_GUEST_VALUE,
             },
         )
         configured_guest_password.assert_called_once_with()
@@ -138,19 +138,19 @@ class UTM8ChangePasswordTests(unittest.TestCase):
         self.assertIn("AppleAccountScriptsBackup/apple_account_change_password.py", command)
         self.assertIn("runpy.run_path", command)
         self.assertNotIn("screen_workflow_router", command)
-        self.assertNotIn(TARGET_PASSWORD, command)
-        self.assertNotIn(GUEST_PASSWORD, command)
-        self.assertNotIn(TARGET_PASSWORD, captured["environment"].values())
-        self.assertNotIn(GUEST_PASSWORD, captured["environment"].values())
-        self.assertNotIn(TARGET_PASSWORD, stdout.getvalue())
-        self.assertNotIn(GUEST_PASSWORD, stdout.getvalue())
+        self.assertNotIn(FIXTURE_TARGET_VALUE, command)
+        self.assertNotIn(FIXTURE_GUEST_VALUE, command)
+        self.assertNotIn(FIXTURE_TARGET_VALUE, captured["environment"].values())
+        self.assertNotIn(FIXTURE_GUEST_VALUE, captured["environment"].values())
+        self.assertNotIn(FIXTURE_TARGET_VALUE, stdout.getvalue())
+        self.assertNotIn(FIXTURE_GUEST_VALUE, stdout.getvalue())
         self.assertIn("PASSWORD_CHANGE=verified", stdout.getvalue())
         self.assertIn("UTM_8=verified", stdout.getvalue())
 
     def test_guest_bridge_forwards_only_new_password_and_restores_guest_environment(self) -> None:
         payload = {
-            "APPLE_ACCOUNT_NEW_PASSWORD": TARGET_PASSWORD,
-            "SUBMISSION_GUEST_PASSWORD": GUEST_PASSWORD,
+            "APPLE_ACCOUNT_NEW_PASSWORD": FIXTURE_TARGET_VALUE,
+            "SUBMISSION_GUEST_PASSWORD": FIXTURE_GUEST_VALUE,
         }
         forwarded: dict[str, object] = {}
 
@@ -188,15 +188,15 @@ class UTM8ChangePasswordTests(unittest.TestCase):
                 "path": "/guest/apple_account_change_password.py",
                 "run_name": "__main__",
                 "argv": ["/guest/apple_account_change_password.py", "--stdin-json"],
-                "payload": {"APPLE_ACCOUNT_NEW_PASSWORD": TARGET_PASSWORD},
-                "guest_password": GUEST_PASSWORD,
+                "payload": {"APPLE_ACCOUNT_NEW_PASSWORD": FIXTURE_TARGET_VALUE},
+                "guest_password": FIXTURE_GUEST_VALUE,
             },
         )
 
     def test_guest_bridge_removes_runtime_value_when_guest_had_none(self) -> None:
         payload = {
-            "APPLE_ACCOUNT_NEW_PASSWORD": TARGET_PASSWORD,
-            "SUBMISSION_GUEST_PASSWORD": GUEST_PASSWORD,
+            "APPLE_ACCOUNT_NEW_PASSWORD": FIXTURE_TARGET_VALUE,
+            "SUBMISSION_GUEST_PASSWORD": FIXTURE_GUEST_VALUE,
         }
 
         with patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True):
@@ -227,8 +227,8 @@ class UTM8ChangePasswordTests(unittest.TestCase):
         fake_implementation.main = implementation_main
         fake_implementation.__getattr__ = missing_dependency
         payload = {
-            "APPLE_ACCOUNT_NEW_PASSWORD": TARGET_PASSWORD,
-            "SUBMISSION_GUEST_PASSWORD": GUEST_PASSWORD,
+            "APPLE_ACCOUNT_NEW_PASSWORD": FIXTURE_TARGET_VALUE,
+            "SUBMISSION_GUEST_PASSWORD": FIXTURE_GUEST_VALUE,
         }
         helper = ROOT / "scripts" / "apple_account_change_password.py"
         stdout = io.StringIO()
@@ -251,11 +251,11 @@ class UTM8ChangePasswordTests(unittest.TestCase):
             self.assertNotIn("SUBMISSION_GUEST_PASSWORD", os.environ)
 
         self.assertEqual(exited.exception.code, 0)
-        self.assertEqual(observed["guest_password"], GUEST_PASSWORD)
-        self.assertNotIn(TARGET_PASSWORD, stdout.getvalue())
-        self.assertNotIn(GUEST_PASSWORD, stdout.getvalue())
-        self.assertNotIn(TARGET_PASSWORD, stderr.getvalue())
-        self.assertNotIn(GUEST_PASSWORD, stderr.getvalue())
+        self.assertEqual(observed["guest_password"], FIXTURE_GUEST_VALUE)
+        self.assertNotIn(FIXTURE_TARGET_VALUE, stdout.getvalue())
+        self.assertNotIn(FIXTURE_GUEST_VALUE, stdout.getvalue())
+        self.assertNotIn(FIXTURE_TARGET_VALUE, stderr.getvalue())
+        self.assertNotIn(FIXTURE_GUEST_VALUE, stderr.getvalue())
 
     def test_zero_exit_with_only_legacy_guest_success_marker_is_blocked(self) -> None:
         api = FakeNotion()
@@ -282,7 +282,7 @@ class UTM8ChangePasswordTests(unittest.TestCase):
         api = FakeNotion()
         stderr = io.StringIO()
         with patch.object(runner, "api_from_env", return_value=api), patch.object(
-            runner, "guest_password", return_value=GUEST_PASSWORD
+            runner, "guest_password", return_value=FIXTURE_GUEST_VALUE
         ), patch.object(
             runner, "_prepare_shared_helpers"
         ), patch.object(runner, "_ensure_remote_pyobjc"), patch.object(
@@ -295,7 +295,7 @@ class UTM8ChangePasswordTests(unittest.TestCase):
                 stdout="PASSWORD_CHANGE_STAGE=password_fields\n",
                 stderr=(
                     f"未找到新密码或确认密码输入框。 "
-                    f"new={TARGET_PASSWORD} guest={GUEST_PASSWORD}\n"
+                    f"new={FIXTURE_TARGET_VALUE} guest={FIXTURE_GUEST_VALUE}\n"
                 ),
             ),
         ), contextlib.redirect_stderr(stderr):
@@ -303,8 +303,8 @@ class UTM8ChangePasswordTests(unittest.TestCase):
 
         self.assertEqual(result, 5)
         self.assertIn("PASSWORD_CHANGE_GUEST_FAILURE=", stderr.getvalue())
-        self.assertNotIn(TARGET_PASSWORD, stderr.getvalue())
-        self.assertNotIn(GUEST_PASSWORD, stderr.getvalue())
+        self.assertNotIn(FIXTURE_TARGET_VALUE, stderr.getvalue())
+        self.assertNotIn(FIXTURE_GUEST_VALUE, stderr.getvalue())
         self.assertEqual(stderr.getvalue().count("<redacted>"), 4)
 
     def test_empty_modified_password_stops_before_any_ssh_side_effect(self) -> None:
@@ -331,7 +331,7 @@ class UTM8ChangePasswordTests(unittest.TestCase):
     def test_rejects_guest_downloads_override_before_notion_or_ssh(self) -> None:
         api = FakeNotion()
         args = runner_args()
-        args.guest_dir = "/Users/test1/Downloads"
+        args.guest_dir = "/Users/example/Downloads"
         with patch.object(
             runner, "api_from_env", return_value=api
         ), patch.object(runner.subprocess, "run") as run_command:

@@ -222,7 +222,7 @@ class UTM7LoginRunnerTests(unittest.TestCase):
             ROOT / "docs" / "utm-login.md",
         ):
             text = path.read_text(encoding="utf-8")
-            self.assertIn("/Users/yehailin/Documents/mac提审自动化/scripts/utm_7_login.py", text)
+            self.assertIn(str(ROOT / "scripts" / "utm_7_login.py"), text)
             self.assertIn("不读取或解释脚本内容", text)
             for implementation_detail in (
                 "AppleAccountScriptsBackup",
@@ -332,7 +332,9 @@ class UTM7LoginRunnerTests(unittest.TestCase):
             "/Volumes/My Shared Files/共享文件/AppleAccountScriptsBackup/apple_account_login.py",
             command_text,
         )
-        self.assertNotIn("/Users/test1/Downloads/AppleAccountScriptsBackup", command_text)
+        self.assertNotIn(
+            "/Users/example/Downloads/AppleAccountScriptsBackup", command_text
+        )
         self.assertNotIn("account@example.test", command_text)
         self.assertNotIn("initial-secret", command_text)
 
@@ -376,7 +378,7 @@ class UTM7LoginRunnerTests(unittest.TestCase):
             vm_ip="192.0.2.10",
             parent_title="Host",
             page_title="App-test1",
-            guest_dir="/Users/test1/Downloads",
+            guest_dir="/Users/example/Downloads",
         )
         with patch.object(runner, "api_from_env", return_value=api), patch.object(
             runner, "_prepare_shared_helpers", return_value={}
@@ -415,7 +417,7 @@ class UTM7LoginRunnerTests(unittest.TestCase):
             vm_ip="192.0.2.10",
             parent_title="Host",
             page_title="App-test1",
-            guest_dir="/Users/test1/Downloads",
+            guest_dir="/Users/example/Downloads",
         )
         with patch.object(runner, "api_from_env", return_value=api), patch.object(
             runner, "_prepare_shared_helpers", return_value={}
@@ -474,7 +476,7 @@ class UTM7LoginRunnerTests(unittest.TestCase):
             vm_ip="192.0.2.10",
             parent_title="Host",
             page_title="App-test1",
-            guest_dir="/Users/test1/Downloads",
+            guest_dir="/Users/example/Downloads",
         )
         with patch.object(runner, "api_from_env", return_value=api), patch.object(
             runner, "_prepare_shared_helpers", return_value={}
@@ -558,7 +560,7 @@ class UTM7LoginRunnerTests(unittest.TestCase):
     def test_reads_only_initial_password_for_apple_account_login(self) -> None:
         api = FakeNotion()
         api.values["修改后的密码："] = "modified-secret"
-        guest_secret = "6194"
+        guest_fixture_value = "6194"
         captured: dict[str, object] = {}
 
         def fake_run(command, **kwargs):
@@ -586,14 +588,14 @@ class UTM7LoginRunnerTests(unittest.TestCase):
         ), patch.object(
             runner.subprocess, "run", side_effect=fake_run
         ), patch.object(
-            runner, "guest_password", return_value=guest_secret
+            runner, "guest_password", return_value=guest_fixture_value
         ):
             args = SimpleNamespace(
                 vm_user="test1",
                 vm_ip="192.0.2.10",
                 parent_title="Host",
                 page_title="App-test1",
-                guest_dir="/Users/test1/Downloads",
+                guest_dir="/Users/example/Downloads",
             )
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
@@ -605,7 +607,7 @@ class UTM7LoginRunnerTests(unittest.TestCase):
         payload = json.loads(bytes(captured["payload"]).decode("utf-8"))
         self.assertEqual(payload["APPLE_ACCOUNT_PASSWORD"], "initial-secret")
         self.assertEqual(payload["APPLE_ACCOUNT_EMAIL"], "account@example.test")
-        self.assertEqual(payload["SUBMISSION_GUEST_PASSWORD"], guest_secret)
+        self.assertEqual(payload["SUBMISSION_GUEST_PASSWORD"], guest_fixture_value)
         final_command = next(
             command
             for command in captured["commands"]
@@ -614,11 +616,11 @@ class UTM7LoginRunnerTests(unittest.TestCase):
         command_text = " ".join(final_command)
         self.assertNotIn("account@example.test", command_text)
         self.assertNotIn("initial-secret", command_text)
-        self.assertNotIn(guest_secret, command_text)
-        self.assertNotIn(guest_secret, stdout.getvalue())
+        self.assertNotIn(guest_fixture_value, command_text)
+        self.assertNotIn(guest_fixture_value, stdout.getvalue())
         for path in Path(self.shared_temp.name).rglob("*"):
             if path.is_file():
-                self.assertNotIn(guest_secret.encode(), path.read_bytes())
+                self.assertNotIn(guest_fixture_value.encode(), path.read_bytes())
         self.assertIn("APPLE_ACCOUNT=verified", stdout.getvalue())
         self.assertIn("UTM_7=verified", stdout.getvalue())
 

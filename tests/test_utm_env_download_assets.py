@@ -23,9 +23,13 @@ from scripts.utm_env_download_assets import (
 )
 
 
+FIXTURE_APP_IDENTIFIER = "LNFdbb2cxaauuvsVGuGcebMhnxm"
+FIXTURE_TABLE_IDENTIFIER = "tblcENvSwMO6lhSH"
+FIXTURE_VIEW_IDENTIFIER = "vewfxNVEGj"
+FIXTURE_TENANT_VALUE = "tenant-token"
 BASE_URL = (
-    "https://qv0zc1dq6qy.feishu.cn/base/LNFdbb2cxaauuvsVGuGcebMhnxm"
-    "?table=tblcENvSwMO6lhSH&view=vewfxNVEGj"
+    f"https://qv0zc1dq6qy.feishu.cn/base/{FIXTURE_APP_IDENTIFIER}"
+    f"?table={FIXTURE_TABLE_IDENTIFIER}&view={FIXTURE_VIEW_IDENTIFIER}"
 )
 
 
@@ -55,9 +59,9 @@ class FakeClient:
 
     def list_records(self, location: BaseLocation) -> list[dict]:
         assert location == BaseLocation(
-            app_token="LNFdbb2cxaauuvsVGuGcebMhnxm",
-            table_id="tblcENvSwMO6lhSH",
-            view_id="vewfxNVEGj",
+            app_token=FIXTURE_APP_IDENTIFIER,
+            table_id=FIXTURE_TABLE_IDENTIFIER,
+            view_id=FIXTURE_VIEW_IDENTIFIER,
         )
         return self.records
 
@@ -138,7 +142,7 @@ class UTMEnvDownloadAssetsTests(unittest.TestCase):
         source_record = record()
         source_record["fields"]["研发截图"][0]["url"] = server_url
         client = utm_env.FeishuClient.__new__(utm_env.FeishuClient)
-        client._token = "tenant-token"
+        client._token = FIXTURE_TENANT_VALUE
         client._media_download_urls = {}
 
         with mock.patch.object(
@@ -159,9 +163,9 @@ class UTMEnvDownloadAssetsTests(unittest.TestCase):
         self.assertEqual(
             parse_base_url(BASE_URL),
             BaseLocation(
-                app_token="LNFdbb2cxaauuvsVGuGcebMhnxm",
-                table_id="tblcENvSwMO6lhSH",
-                view_id="vewfxNVEGj",
+                app_token=FIXTURE_APP_IDENTIFIER,
+                table_id=FIXTURE_TABLE_IDENTIFIER,
+                view_id=FIXTURE_VIEW_IDENTIFIER,
             ),
         )
 

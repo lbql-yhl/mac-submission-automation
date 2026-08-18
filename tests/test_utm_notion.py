@@ -325,9 +325,9 @@ def test_build_registration_fields_accepts_unlabelled_phone_before_url_and_count
 
 def test_build_registration_fields_accepts_api1997_phone_url_email_without_separator() -> None:
     fields = stringbed_fields()
-    token = "Ab1" + "x" * 31
-    assert len(token) == 34
-    sms_url = f"https://api1997.com/smsrecord?token={token}"
+    fixture_url_identifier = "Ab1" + "x" * 31
+    assert len(fixture_url_identifier) == 34
+    sms_url = f"https://api1997.com/smsrecord?token={fixture_url_identifier}"
     fields["账号信息"] = {
         "text": (
             f"+12025550123----{sms_url}"
@@ -349,9 +349,9 @@ def test_build_registration_fields_accepts_api1997_phone_url_email_without_separ
 
 def test_build_registration_fields_accepts_xsd20vip_compact_account_format() -> None:
     fields = stringbed_fields()
-    token = "PG2" + "c" * 31
-    assert len(token) == 34
-    sms_url = f"https://xsd20vip.com/smsrecord?token={token}"
+    fixture_url_identifier = "PG2" + "c" * 31
+    assert len(fixture_url_identifier) == 34
+    sms_url = f"https://xsd20vip.com/smsrecord?token={fixture_url_identifier}"
     fields["账号信息"] = {
         "text": (
             f"+12025550123----{sms_url}"

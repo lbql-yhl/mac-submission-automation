@@ -6,6 +6,7 @@ from scripts import preflight
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FIXTURE_ALLOWED_CHAT = "oc_allowed"
 ORDERED = (
     "utm-vm-clone",
     "utm-notion",
@@ -70,7 +71,7 @@ def test_feishu_submission_start_entry_is_disabled(tmp_path, monkeypatch) -> Non
         feishu_bot.load_config(
             environ={"FEISHU_DAILY_REPORT_CHAT_ID": "test-report-chat"}
         ),
-        allowed_chat_id="oc_allowed",
+        allowed_chat_id=FIXTURE_ALLOWED_CHAT,
         submission_host_machine="海淋",
         assistant_enabled=False,
     )
@@ -85,7 +86,7 @@ InitialPass123!
 15550101234 https://example.com/sms
 """
     assert feishu_bot.handle_incoming_text(
-        config, registration, "oc_allowed", source="test"
+        config, registration, FIXTURE_ALLOWED_CHAT, source="test"
     ) == ""
     assert not feishu_bot.RUNS_FILE.exists()
     assert not feishu_bot.PROMPTS_DIR.exists()

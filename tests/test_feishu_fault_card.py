@@ -22,6 +22,8 @@ from services.feishu_gateway import send_interactive_card
 
 
 REPORT_ONLY_CHAT = "-".join(("daily", "report", "chat"))
+FIXTURE_CHAT = "test-chat"
+FIXTURE_WRONG_CHAT = "wrong-chat"
 
 
 def handle_card_action(payload: dict, submission_host_machine: str) -> dict:
@@ -46,7 +48,7 @@ def main() -> None:
 
     run = {
         "id": "fault-card-test",
-        "chat_id": "test-chat",
+        "chat_id": FIXTURE_CHAT,
         "submission_data": {"host_machine": "海淋"},
         "pending_decision": {
             "kind": "fault",
@@ -209,7 +211,7 @@ def main() -> None:
     assert stdout.getvalue().strip() == "retry_skill"
 
     notify_args = SimpleNamespace(
-        chat_id="test-chat",
+        chat_id=FIXTURE_CHAT,
         run_id="fault-card-test",
         stage="test",
         fault="test fault",
@@ -229,7 +231,10 @@ def main() -> None:
         daily_report_chat_id=REPORT_ONLY_CHAT,
     )
     with (
-        patch("services.feishu_bot.find_run", return_value={**run, "chat_id": "test-chat"}),
+        patch(
+            "services.feishu_bot.find_run",
+            return_value={**run, "chat_id": FIXTURE_CHAT},
+        ),
         patch("services.feishu_bot.create_or_update_fault", return_value=run) as create_fault,
         patch("services.feishu_bot.FeishuClient.send_card"),
         redirect_stderr(StringIO()),
@@ -239,7 +244,7 @@ def main() -> None:
 
     delivery_run = {
         **run,
-        "chat_id": "test-chat",
+        "chat_id": FIXTURE_CHAT,
         "pending_decision": {
             **run["pending_decision"],
             "requested_at": "2026-07-20T08:00:00+00:00",
@@ -341,7 +346,12 @@ def main() -> None:
             {key: value for key, value in delivery_run.items() if key != "submission_data"},
             valid_notify_args,
         ),
-        (delivery_run, SimpleNamespace(**{**vars(valid_notify_args), "chat_id": "wrong-chat"})),
+        (
+            delivery_run,
+            SimpleNamespace(
+                **{**vars(valid_notify_args), "chat_id": FIXTURE_WRONG_CHAT}
+            ),
+        ),
         (delivery_run, SimpleNamespace(**{**vars(valid_notify_args), "chat_id": ""})),
         (
             {**delivery_run, "chat_id": REPORT_ONLY_CHAT},
@@ -365,7 +375,7 @@ def main() -> None:
     # chat. notify_fault enforces equality before reaching this helper.
     original_chat_run = {
         **delivery_run,
-        "chat_id": "test-chat",
+        "chat_id": FIXTURE_CHAT,
         "pending_decision": {},
         "events": [],
     }
@@ -381,14 +391,14 @@ def main() -> None:
     ):
         create_or_update_fault(
             run_id="fault-card-test",
-            chat_id="wrong-chat",
+            chat_id=FIXTURE_WRONG_CHAT,
             stage="new-stage",
             fault="new fault",
             suggested_action="retry",
             recovery_skill="utm-24",
             host_machine="海淋",
         )
-    assert original_chat_run["chat_id"] == "test-chat"
+    assert original_chat_run["chat_id"] == FIXTURE_CHAT
     assert original_chat_run["pending_decision"]["decision_id"]
 
     waiting_fault = {
@@ -408,7 +418,7 @@ def main() -> None:
         try:
             create_or_update_fault(
                 run_id="fault-card-test",
-                chat_id="test-chat",
+                chat_id=FIXTURE_CHAT,
                 stage="different-stage",
                 fault="different fault",
                 suggested_action="retry",
@@ -591,7 +601,7 @@ def main() -> None:
         send_interactive_card(
             "app-id",
             "app-secret",
-            "test-chat",
+            FIXTURE_CHAT,
             {"schema": "2.0"},
             message_uuid="fault-message-uuid",
         )

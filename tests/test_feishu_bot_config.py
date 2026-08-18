@@ -14,6 +14,10 @@ import pytest
 from services.host_config import ConfigurationError
 
 
+FIXTURE_REPORT_CHAT = "report-v2"
+FIXTURE_EVENT_CHAT = "chat-v1"
+
+
 @pytest.fixture
 def feishu_bot() -> ModuleType:
     return importlib.import_module("services.feishu_bot")
@@ -237,7 +241,7 @@ def test_serve_ws_registers_message_and_card_handlers_with_same_config_snapshot(
     )
     config_v2 = replace(
         config_v1,
-        daily_report_chat_id="report-v2",
+        daily_report_chat_id=FIXTURE_REPORT_CHAT,
         submission_host_machine="host-v2",
     )
 
@@ -300,7 +304,7 @@ def test_serve_ws_registers_message_and_card_handlers_with_same_config_snapshot(
         event=SimpleNamespace(
             message=SimpleNamespace(
                 message_id="message-v1",
-                chat_id="chat-v1",
+                chat_id=FIXTURE_EVENT_CHAT,
                 content='{"text":"hello"}',
             )
         )

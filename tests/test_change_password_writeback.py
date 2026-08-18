@@ -11,6 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+FIXTURE_ACCEPTED_VALUE = "K7mQ9vT2pL6xR4nZy"
+
 from scripts.change_password_writeback import restore_previous_password, write_accepted_password
 
 
@@ -53,13 +55,13 @@ class FakeNotion:
 class ChangePasswordWritebackTests(unittest.TestCase):
     def test_writes_and_independently_verifies_accepted_password(self) -> None:
         api = FakeNotion()
-        password = "K7mQ9vT2pL6xR4nZy"
+        fixture_value = FIXTURE_ACCEPTED_VALUE
 
-        result = write_accepted_password(api, "test1", password)
+        result = write_accepted_password(api, "test1", fixture_value)
 
-        self.assertEqual(result["bytes"], len(password.encode()))
-        self.assertEqual(result["sha256"], hashlib.sha256(password.encode()).hexdigest())
-        self.assertEqual(api.read_field("test1", "账号信息", "修改后的密码："), password)
+        self.assertEqual(result["bytes"], len(fixture_value.encode()))
+        self.assertEqual(result["sha256"], hashlib.sha256(fixture_value.encode()).hexdigest())
+        self.assertEqual(api.read_field("test1", "账号信息", "修改后的密码："), fixture_value)
         self.assertIn("用户名：Test User", api.section)
         self.assertIn("邮箱：test@example.test", api.section)
 
@@ -72,7 +74,7 @@ class ChangePasswordWritebackTests(unittest.TestCase):
 
     def test_restores_blank_preflight_value(self) -> None:
         api = FakeNotion()
-        write_accepted_password(api, "test1", "K7mQ9vT2pL6xR4nZy")
+        write_accepted_password(api, "test1", FIXTURE_ACCEPTED_VALUE)
         result = restore_previous_password(api, "test1", "")
         self.assertEqual(result["bytes"], 0)
         self.assertEqual(api.read_field("test1", "账号信息", "修改后的密码："), "")

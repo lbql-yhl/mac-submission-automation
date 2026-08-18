@@ -12,6 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import services.feishu_bot as feishu_bot
 
 
+FIXTURE_ALLOWED_CHAT = "oc_allowed"
+
+
 class ImmediateThread:
     def __init__(self, target, **_kwargs):
         self.target = target
@@ -25,7 +28,7 @@ def assistant_config():
         feishu_bot.load_config(
             environ={"FEISHU_DAILY_REPORT_CHAT_ID": "test-report-chat"}
         ),
-        allowed_chat_id="oc_allowed",
+        allowed_chat_id=FIXTURE_ALLOWED_CHAT,
         assistant_provider="codex",
         assistant_enabled=True,
         assistant_require_mention=True,
@@ -49,7 +52,9 @@ def test_codex_command() -> None:
             patch.object(feishu_bot, "CONVERSATIONS_FILE", tmp_path / "conversations.json"),
             patch.object(feishu_bot.subprocess, "run", fake_run),
         ):
-            assert feishu_bot.ask_codex_assistant(assistant_config(), "oc_allowed", "你是谁") == "MODEL_OK"
+            assert feishu_bot.ask_codex_assistant(
+                assistant_config(), FIXTURE_ALLOWED_CHAT, "你是谁"
+            ) == "MODEL_OK"
 
     cmd = captured[0]
     assert cmd[0] == "/opt/test/bin/codex"
@@ -65,7 +70,7 @@ def test_websocket_and_poller_reply_once() -> None:
         event=SimpleNamespace(
             message=SimpleNamespace(
                 message_id="om_test",
-                chat_id="oc_allowed",
+                chat_id=FIXTURE_ALLOWED_CHAT,
                 content=json.dumps({"text": "@_user_1 你是谁"}, ensure_ascii=False),
             )
         )
@@ -88,9 +93,9 @@ def test_websocket_and_poller_reply_once() -> None:
             patch.object(feishu_bot.threading, "Thread", ImmediateThread),
         ):
             feishu_bot.handle_ws_message_receive(event, config)
-            assert feishu_bot.poll_once(config, ["oc_allowed"]) == 0
+            assert feishu_bot.poll_once(config, [FIXTURE_ALLOWED_CHAT]) == 0
 
-    assert sent == [("oc_allowed", "测试回复")]
+    assert sent == [(FIXTURE_ALLOWED_CHAT, "测试回复")]
 
 
 def main() -> None:

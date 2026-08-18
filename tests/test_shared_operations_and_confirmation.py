@@ -22,6 +22,7 @@ from services.feishu_bot import (  # noqa: E402
 
 
 REPORT_ONLY_CHAT = "-".join(("daily", "report", "chat"))
+FIXTURE_ORIGINAL_CHAT = "original-chat"
 
 
 def handle_card_action(payload: dict, submission_host_machine: str) -> dict:
@@ -211,7 +212,7 @@ def main() -> None:
 
     notify_api_args = SimpleNamespace(
         run_id="safety-policy-confirmation",
-        chat_id="original-chat",
+        chat_id=FIXTURE_ORIGINAL_CHAT,
         stage="utm-test:safety-policy",
         current_skill="utm-test",
         confirmation_question="检测到安全策略限制，是否允许继续当前操作？",
@@ -414,7 +415,7 @@ def main() -> None:
 
     notify_args = SimpleNamespace(
         run_id="confirmation-test",
-        chat_id="original-chat",
+        chat_id=FIXTURE_ORIGINAL_CHAT,
         stage="utm-test:irreversible-step",
         current_skill="utm-test",
         confirmation_question="是否继续？",
@@ -490,7 +491,7 @@ def main() -> None:
     }.items():
         skill = (root / "skills" / skill_name / "SKILL.md").read_text(encoding="utf-8")
         assert "OP-APPLE-WEB-SCRIPT" in skill, skill_name
-        assert f"/Users/yehailin/Documents/mac提审自动化/scripts/{script_name}" in skill
+        assert str(ROOT / "scripts" / script_name) in skill
         assert "同一 PID" in skill
 
     for contract_file in ("AGENTS.md", "README.md"):

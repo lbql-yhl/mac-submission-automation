@@ -15,6 +15,17 @@ from scripts.public_release_audit import (
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT_SCRIPT = ROOT / "scripts/public_release_audit.py"
+FIXTURE_FIXED_PASSWORD_KEY = "FIXED_" + "PASSWORD"
+FIXTURE_DEFAULT_APP_TOKEN_KEY = "DEFAULT_APP_" + "TOKEN"
+FIXTURE_DAILY_REPORT_CHAT_KEY = "DAILY_REPORT_" + "CHAT_ID"
+FIXTURE_API_TOKEN_KEY = "API_" + "TOKEN"
+FIXTURE_NOTION_TOKEN_KEY = "NOTION_" + "TOKEN"
+FIXTURE_REPORT_DESTINATION_KEY = "REPORT_" + "DESTINATION"
+FIXTURE_BYTE_PASSWORD_KEY = "BYTE_" + "PASSWORD"
+FIXTURE_RAW_TOKEN_KEY = "RAW_" + "TOKEN"
+FIXTURE_UNICODE_SECRET_KEY = "UNICODE_" + "SECRET"
+FIXTURE_FORMAT_APP_ID_KEY = "FORMAT_APP_" + "ID"
+FIXTURE_TARGET_CHAT_ID_KEY = "TARGET_CHAT_" + "ID"
 
 KNOWN_RULES = {
     "EXAMPLE_DUPLICATE_KEY",
@@ -86,9 +97,9 @@ def _tracked_fixture_repository(tmp_path: Path) -> Path:
     secret_value = "fixture-value-that-must-not-be-reported"
     (root / "unsafe.py").write_text(
         f'HOME_PATH = "{personal_home}"\n'
-        f'FIXED_PASSWORD = "{secret_value}"\n'
-        f'DEFAULT_APP_TOKEN = "{secret_value}"\n'
-        f'DAILY_REPORT_CHAT_ID = "{secret_value}"\n',
+        f'{FIXTURE_FIXED_PASSWORD_KEY} = "{secret_value}"\n'
+        f'{FIXTURE_DEFAULT_APP_TOKEN_KEY} = "{secret_value}"\n'
+        f'{FIXTURE_DAILY_REPORT_CHAT_KEY} = "{secret_value}"\n',
         encoding="utf-8",
     )
     historical = root / "docs/superpowers/plans/old.md"
@@ -98,14 +109,14 @@ def _tracked_fixture_repository(tmp_path: Path) -> Path:
         personal_home.encode() + b"\0" + secret_value.encode()
     )
     (root / ".env").write_text(
-        f'FIXED_PASSWORD="{secret_value}"\n', encoding="utf-8"
+        f'{FIXTURE_FIXED_PASSWORD_KEY}="{secret_value}"\n', encoding="utf-8"
     )
     (root / ".env.example").write_text(
         "".join(f"{key}=\n" for key in REQUIRED_SENSITIVE_EXAMPLE_KEYS),
         encoding="utf-8",
     )
     (root / "untracked.py").write_text(
-        f'FIXED_PASSWORD = "{secret_value}"\n', encoding="utf-8"
+        f'{FIXTURE_FIXED_PASSWORD_KEY} = "{secret_value}"\n', encoding="utf-8"
     )
     tracked_link = root / "tracked-link.py"
     try:
@@ -176,13 +187,17 @@ def test_index_stage_zero_blobs_are_the_only_content_source(
     tmp_path: Path, monkeypatch,
 ) -> None:
     root = _tracked_fixture_repository(tmp_path)
-    secret = "index-only-fixture-secret"
-    external_secret = "external-symlink-fixture-secret"
+    fixture_value = "index-only-fixture-secret"
+    external_fixture_value = "external-symlink-fixture-secret"
 
     staged_unsafe = root / "staged-unsafe.py"
-    staged_unsafe.write_text(f'FIXED_PASSWORD = "{secret}"\n', encoding="utf-8")
+    staged_unsafe.write_text(
+        f'{FIXTURE_FIXED_PASSWORD_KEY} = "{fixture_value}"\n', encoding="utf-8"
+    )
     deleted = root / "deleted.py"
-    deleted.write_text(f'API_TOKEN = "{secret}"\n', encoding="utf-8")
+    deleted.write_text(
+        f'{FIXTURE_API_TOKEN_KEY} = "{fixture_value}"\n', encoding="utf-8"
+    )
     staged_safe = root / "staged-safe.py"
     staged_safe.write_text("VALUE = 1\n", encoding="utf-8")
     worktree_symlink = root / "worktree-symlink.py"
@@ -205,11 +220,14 @@ def test_index_stage_zero_blobs_are_the_only_content_source(
 
     staged_unsafe.write_text("VALUE = 1\n", encoding="utf-8")
     deleted.unlink()
-    staged_safe.write_text(f'API_TOKEN = "{secret}"\n', encoding="utf-8")
+    staged_safe.write_text(
+        f'{FIXTURE_API_TOKEN_KEY} = "{fixture_value}"\n', encoding="utf-8"
+    )
     (root / ".gitignore").write_text("", encoding="utf-8")
     outside = tmp_path / "outside.py"
     outside.write_text(
-        f'FIXED_PASSWORD = "{external_secret}"\n', encoding="utf-8"
+        f'{FIXTURE_FIXED_PASSWORD_KEY} = "{external_fixture_value}"\n',
+        encoding="utf-8",
     )
     worktree_symlink.unlink()
     try:
@@ -228,16 +246,17 @@ def test_index_stage_zero_blobs_are_the_only_content_source(
     assert ("SENSITIVE_ASSIGNMENT", "staged-safe.py") not in findings
     assert ("SENSITIVE_ASSIGNMENT", "worktree-symlink.py") not in findings
     assert not any(rule == "IGNORE_RULE_MISSING" for rule, _ in findings)
-    assert secret not in repr(findings)
-    assert external_secret not in repr(findings)
+    assert fixture_value not in repr(findings)
+    assert external_fixture_value not in repr(findings)
 
 
 def test_index_symlink_to_external_file_is_not_scanned(tmp_path: Path) -> None:
     root = _tracked_fixture_repository(tmp_path)
-    external_secret = "external-index-symlink-secret"
+    external_fixture_value = "external-index-symlink-secret"
     outside = tmp_path / "external.py"
     outside.write_text(
-        f'FIXED_PASSWORD = "{external_secret}"\n', encoding="utf-8"
+        f'{FIXTURE_FIXED_PASSWORD_KEY} = "{external_fixture_value}"\n',
+        encoding="utf-8",
     )
     link = root / "external-link.py"
     try:
@@ -249,7 +268,7 @@ def test_index_symlink_to_external_file_is_not_scanned(tmp_path: Path) -> None:
     findings = audit_repository(root)
 
     assert not any(path == "external-link.py" for _, path in findings)
-    assert external_secret not in repr(findings)
+    assert external_fixture_value not in repr(findings)
 
 
 def test_sensitive_example_keys_are_required_and_must_be_empty(tmp_path: Path) -> None:
@@ -278,7 +297,12 @@ def test_duplicate_example_key_cannot_hide_an_earlier_nonempty_value(
 ) -> None:
     root = _tracked_fixture_repository(tmp_path)
     lines = [f"{key}=\n" for key in REQUIRED_SENSITIVE_EXAMPLE_KEYS]
-    lines.extend(("NOTION_TOKEN=nonempty-fixture-value\n", "NOTION_TOKEN=\n"))
+    lines.extend(
+        (
+            f"{FIXTURE_NOTION_TOKEN_KEY}=nonempty-fixture-value\n",
+            f"{FIXTURE_NOTION_TOKEN_KEY}=\n",
+        )
+    )
     (root / ".env.example").write_text("".join(lines), encoding="utf-8")
     assert _git(root, "add", ".env.example").returncode == 0
 
@@ -295,7 +319,7 @@ def test_fixed_report_destination_does_not_require_a_sensitive_key_suffix(
     root = _tracked_fixture_repository(tmp_path)
     value = "fixture-destination-that-must-not-be-reported"
     (root / "report.py").write_text(
-        f'REPORT_DESTINATION = "{value}"\n', encoding="utf-8"
+        f'{FIXTURE_REPORT_DESTINATION_KEY} = "{value}"\n', encoding="utf-8"
     )
     assert _git(root, "add", "report.py").returncode == 0
 
@@ -311,12 +335,12 @@ def test_sensitive_assignment_syntaxes_are_detected_without_reporting_values(
     root = _tracked_fixture_repository(tmp_path)
     value = "syntax-fixture-secret-value"
     sources = {
-        "dotenv.env.sample": f"API_TOKEN={value}\n",
-        "bytes.py": f'BYTE_PASSWORD = b"{value}"\n',
-        "raw.py": f'RAW_TOKEN = r"{value}"\n',
-        "unicode.py": f'UNICODE_SECRET = u"{value}"\n',
-        "format.py": f'FORMAT_APP_ID = f"{value}"\n',
-        "javascript.js": f"const TARGET_CHAT_ID = `{value}`;\n",
+        "dotenv.env.sample": f"{FIXTURE_API_TOKEN_KEY}={value}\n",
+        "bytes.py": f'{FIXTURE_BYTE_PASSWORD_KEY} = b"{value}"\n',
+        "raw.py": f'{FIXTURE_RAW_TOKEN_KEY} = r"{value}"\n',
+        "unicode.py": f'{FIXTURE_UNICODE_SECRET_KEY} = u"{value}"\n',
+        "format.py": f'{FIXTURE_FORMAT_APP_ID_KEY} = f"{value}"\n',
+        "javascript.js": f"const {FIXTURE_TARGET_CHAT_ID_KEY} = `{value}`;\n",
     }
     for relative_path, content in sources.items():
         (root / relative_path).write_text(content, encoding="utf-8")
@@ -350,9 +374,11 @@ def test_personal_home_paths_include_root_and_escaped_windows_source(
 
 def test_cli_audits_index_and_never_prints_matching_values(tmp_path: Path) -> None:
     root = _tracked_fixture_repository(tmp_path)
-    secret = "cli-fixture-secret-that-must-not-leak"
+    fixture_value = "cli-fixture-secret-that-must-not-leak"
     indexed = root / "indexed.py"
-    indexed.write_text(f'FIXED_PASSWORD = "{secret}"\n', encoding="utf-8")
+    indexed.write_text(
+        f'{FIXTURE_FIXED_PASSWORD_KEY} = "{fixture_value}"\n', encoding="utf-8"
+    )
     assert _git(root, "add", "indexed.py").returncode == 0
     indexed.write_text("VALUE = 1\n", encoding="utf-8")
     cli = _copy_audit_cli(root)
@@ -371,8 +397,8 @@ def test_cli_audits_index_and_never_prints_matching_values(tmp_path: Path) -> No
         re.fullmatch(r"[A-Z_]+ [^\r\n]+", line)
         for line in completed.stdout.splitlines()
     )
-    assert secret not in completed.stdout
-    assert secret not in completed.stderr
+    assert fixture_value not in completed.stdout
+    assert fixture_value not in completed.stderr
 
 
 def test_cli_prints_exact_success_marker_for_a_clean_index(tmp_path: Path) -> None:

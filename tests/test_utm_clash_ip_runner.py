@@ -25,6 +25,7 @@ from scripts.utm_clash_ip import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FIXTURE_PROXY_VALUE = "proxy-password"
 
 
 def test_render_profile_has_one_private_proxy_and_proxy_match_rule() -> None:
@@ -32,7 +33,7 @@ def test_render_profile_has_one_private_proxy_and_proxy_match_rule() -> None:
         host=ipaddress.IPv4Address("203.0.113.9"),
         port=1080,
         username="proxy-user",
-        password="proxy-password",
+        password=FIXTURE_PROXY_VALUE,
     )
 
     rendered = render_socks5_profile(values)
@@ -230,7 +231,7 @@ def test_parse_proxy_stdin_accepts_exact_json_without_printing_values() -> None:
         host=ipaddress.IPv4Address("203.0.113.9"),
         port=1080,
         username="proxy-user",
-        password="proxy-password",
+        password=FIXTURE_PROXY_VALUE,
     )
 
 

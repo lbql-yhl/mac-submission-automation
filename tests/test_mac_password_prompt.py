@@ -20,7 +20,7 @@ def test_flat_guest_deployment_imports_without_services(
 ) -> None:
     deployed_script = tmp_path / "mac_password_prompt.py"
     shutil.copy2(ROOT / "scripts" / "mac_password_prompt.py", deployed_script)
-    guest_secret = "6194"
+    guest_fixture_value = "6194"
     probe = """
 import runpy
 import sys
@@ -37,7 +37,7 @@ namespace = runpy.run_path(sys.argv[1])
 print(namespace["guest_password"]())
 """
     child_environment = os.environ.copy()
-    child_environment["SUBMISSION_GUEST_PASSWORD"] = guest_secret
+    child_environment["SUBMISSION_GUEST_PASSWORD"] = guest_fixture_value
 
     result = subprocess.run(
         [sys.executable, "-I", "-c", probe, str(deployed_script)],
@@ -49,7 +49,7 @@ print(namespace["guest_password"]())
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == guest_secret
+    assert result.stdout.strip() == guest_fixture_value
     assert "ModuleNotFoundError" not in result.stderr
     assert not (tmp_path / "services").exists()
 
@@ -58,18 +58,18 @@ def test_guest_password_fails_closed_when_runtime_value_is_missing(
     monkeypatch,
     capsys,
 ) -> None:
-    unrelated_secret = "must-not-be-echoed"
+    unrelated_fixture_value = "must-not-be-echoed"
     monkeypatch.delenv("SUBMISSION_GUEST_PASSWORD", raising=False)
-    monkeypatch.setenv("UNRELATED_SECRET", unrelated_secret)
+    monkeypatch.setenv("UNRELATED_SECRET", unrelated_fixture_value)
 
     with pytest.raises(RuntimeError) as raised:
         prompt.guest_password()
 
     captured = capsys.readouterr()
     assert "SUBMISSION_GUEST_PASSWORD" in str(raised.value)
-    assert unrelated_secret not in str(raised.value)
-    assert unrelated_secret not in captured.out
-    assert unrelated_secret not in captured.err
+    assert unrelated_fixture_value not in str(raised.value)
+    assert unrelated_fixture_value not in captured.out
+    assert unrelated_fixture_value not in captured.err
 
 
 def test_secure_field_accepts_exact_length_when_macos_uses_private_mask_glyphs(

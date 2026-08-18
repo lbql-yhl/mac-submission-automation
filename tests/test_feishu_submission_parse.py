@@ -13,6 +13,9 @@ from services.feishu_bot import parse_submission_data
 from scripts.notion_utm_prepare import format_account_block, validate_account_block
 
 
+FIXTURE_ALLOWED_CHAT = "oc_allowed"
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     daily_docs = "\n".join(
@@ -29,7 +32,7 @@ def main() -> None:
         feishu_bot.load_config(
             environ={"FEISHU_DAILY_REPORT_CHAT_ID": report_only_chat}
         ),
-        allowed_chat_id="oc_allowed",
+        allowed_chat_id=FIXTURE_ALLOWED_CHAT,
         daily_report_chat_id=report_only_chat,
     )
     assert (
@@ -112,22 +115,31 @@ Account Number：000000000000
         feishu_bot.CODEX_APP_SESSIONS_DIR = tmp_path / "codex-app-sessions"
         config = replace(
             config,
-            allowed_chat_id="oc_allowed",
+            allowed_chat_id=FIXTURE_ALLOWED_CHAT,
             runner_command="python3 services/submission_runner.py",
             assistant_enabled=False,
             submission_host_machine="海淋",
         )
         try:
             blank_config = replace(config, submission_host_machine="")
-            assert feishu_bot.handle_incoming_text(blank_config, text, "oc_allowed", source="test") == ""
+            assert feishu_bot.handle_incoming_text(
+                blank_config, text, FIXTURE_ALLOWED_CHAT, source="test"
+            ) == ""
             foreign_text = text.replace("使用的宿主机：海淋", "使用的宿主机：dev1", 1)
-            assert feishu_bot.handle_incoming_text(config, foreign_text, "oc_allowed", source="test") == ""
-            assert feishu_bot.handle_incoming_text(config, "/提审 开始 SampleApp", "oc_allowed", source="test") == ""
+            assert feishu_bot.handle_incoming_text(
+                config, foreign_text, FIXTURE_ALLOWED_CHAT, source="test"
+            ) == ""
+            assert feishu_bot.handle_incoming_text(
+                config, "/提审 开始 SampleApp", FIXTURE_ALLOWED_CHAT, source="test"
+            ) == ""
             assert not feishu_bot.RUNS_FILE.exists()
             assert not feishu_bot.PROMPTS_DIR.exists()
 
             assert feishu_bot.handle_incoming_text(
-                config, text.split("银行信息：", 1)[0], "oc_allowed", source="test"
+                config,
+                text.split("银行信息：", 1)[0],
+                FIXTURE_ALLOWED_CHAT,
+                source="test",
             ) == ""
             assert not feishu_bot.RUNS_FILE.exists()
             assert not feishu_bot.PROMPTS_DIR.exists()
@@ -139,7 +151,10 @@ Account Number：000000000000
             ):
                 assert (
                     feishu_bot.handle_incoming_text(
-                        config, text.split("银行信息：", 1)[0], "oc_allowed", source="test"
+                        config,
+                        text.split("银行信息：", 1)[0],
+                        FIXTURE_ALLOWED_CHAT,
+                        source="test",
                     )
                     == "收到，准备开始SampleApp提审。"
                 )

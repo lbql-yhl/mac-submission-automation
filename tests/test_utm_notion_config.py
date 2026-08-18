@@ -17,9 +17,9 @@ WIKI_URL = (
     "https://example.feishu.cn/wiki/ExampleWikiNode123"
     "?table=tblExample123&view=vewExample123"
 )
-DIRECT_APP_TOKEN = "bascnExampleToken123"
-DIRECT_TABLE_ID = "tblExampleTable123"
-DIRECT_VIEW_ID = "vewExampleView123"
+FIXTURE_APP_IDENTIFIER = "bascnExampleToken123"
+FIXTURE_TABLE_IDENTIFIER = "tblExampleTable123"
+FIXTURE_VIEW_IDENTIFIER = "vewExampleView123"
 
 
 def valid_runtime_settings() -> dict[str, str]:
@@ -31,9 +31,9 @@ def valid_runtime_settings() -> dict[str, str]:
         "NOTION_TEMPLATE_TITLE": "模板",
         "SUBMISSION_HOST_MACHINE": "Test Host",
         "SUBMISSION_VM_IMAGES_DIR": "/tmp/utm-notion-vm-images",
-        "UTM_NOTION_FEISHU_APP_TOKEN": DIRECT_APP_TOKEN,
-        "UTM_NOTION_FEISHU_TABLE_ID": DIRECT_TABLE_ID,
-        "UTM_NOTION_FEISHU_VIEW_ID": DIRECT_VIEW_ID,
+        "UTM_NOTION_FEISHU_APP_TOKEN": FIXTURE_APP_IDENTIFIER,
+        "UTM_NOTION_FEISHU_TABLE_ID": FIXTURE_TABLE_IDENTIFIER,
+        "UTM_NOTION_FEISHU_VIEW_ID": FIXTURE_VIEW_IDENTIFIER,
     }
 
 
@@ -188,9 +188,9 @@ def test_runtime_config_uses_one_snapshot_and_is_frozen(
 def test_complete_direct_source_needs_no_wiki_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("UTM_NOTION_FEISHU_APP_TOKEN", DIRECT_APP_TOKEN)
-    monkeypatch.setenv("UTM_NOTION_FEISHU_TABLE_ID", DIRECT_TABLE_ID)
-    monkeypatch.setenv("UTM_NOTION_FEISHU_VIEW_ID", DIRECT_VIEW_ID)
+    monkeypatch.setenv("UTM_NOTION_FEISHU_APP_TOKEN", FIXTURE_APP_IDENTIFIER)
+    monkeypatch.setenv("UTM_NOTION_FEISHU_TABLE_ID", FIXTURE_TABLE_IDENTIFIER)
+    monkeypatch.setenv("UTM_NOTION_FEISHU_VIEW_ID", FIXTURE_VIEW_IDENTIFIER)
     monkeypatch.setattr(
         utm_notion.urllib.request,
         "urlopen",
@@ -200,9 +200,9 @@ def test_complete_direct_source_needs_no_wiki_request(
     configured = utm_notion_source.configured_feishu_source()
 
     assert utm_notion_source.resolve_feishu_source("tenant-token", configured) == (
-        DIRECT_APP_TOKEN,
-        DIRECT_TABLE_ID,
-        DIRECT_VIEW_ID,
+        FIXTURE_APP_IDENTIFIER,
+        FIXTURE_TABLE_IDENTIFIER,
+        FIXTURE_VIEW_IDENTIFIER,
     )
 
 
@@ -279,9 +279,9 @@ def test_execute_reads_project_source_without_mutating_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (tmp_path / ".env").write_text(
-        f"UTM_NOTION_FEISHU_APP_TOKEN={DIRECT_APP_TOKEN}\n"
-        f"UTM_NOTION_FEISHU_TABLE_ID={DIRECT_TABLE_ID}\n"
-        f"UTM_NOTION_FEISHU_VIEW_ID={DIRECT_VIEW_ID}\n"
+        f"UTM_NOTION_FEISHU_APP_TOKEN={FIXTURE_APP_IDENTIFIER}\n"
+        f"UTM_NOTION_FEISHU_TABLE_ID={FIXTURE_TABLE_IDENTIFIER}\n"
+        f"UTM_NOTION_FEISHU_VIEW_ID={FIXTURE_VIEW_IDENTIFIER}\n"
         "FEISHU_APP_ID=project-feishu-app\n"
         "FEISHU_APP_SECRET=project-feishu-secret\n"
         "NOTION_TOKEN=project-notion-token\n"
@@ -332,8 +332,8 @@ def test_execute_reads_project_source_without_mutating_environment(
     assert captured == {
         "app_id": "project-feishu-app",
         "token": "token",
-        "app_token": DIRECT_APP_TOKEN,
-        "table_id": DIRECT_TABLE_ID,
-        "view_id": DIRECT_VIEW_ID,
+        "app_token": FIXTURE_APP_IDENTIFIER,
+        "table_id": FIXTURE_TABLE_IDENTIFIER,
+        "view_id": FIXTURE_VIEW_IDENTIFIER,
     }
     assert dict(os.environ) == before
