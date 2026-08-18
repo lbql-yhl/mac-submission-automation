@@ -359,6 +359,8 @@ printf 'DEMO_ACCOUNT=absent\n'
 
 def demo_cleanup_script() -> str:
     return r'''set -e
+demo_user=demo
+demo_home="/Users/${demo_user}"
 if /usr/bin/pgrep -u demo >/dev/null 2>&1; then
   printf 'DEMO_ACTIVE=present\n'
   exit 2
@@ -367,7 +369,7 @@ if /usr/bin/id demo >/dev/null 2>&1; then
   printf 'DEMO_ID=present\n'
   exit 3
 fi
-if /usr/bin/dscl . -read /Users/demo >/dev/null 2>&1; then
+if /usr/bin/dscl . -read "$demo_home" >/dev/null 2>&1; then
   printf 'DEMO_DSCL=present\n'
   exit 4
 fi
@@ -393,7 +395,7 @@ if [ -L "$clash_state" ] || [ -L "$clash_runtime" ] || [ -L "$clash_plist" ]; th
   printf 'CLASH_STALE_STATE_UNSAFE=symlink\n'
   exit 5
 fi
-if [ -f "$clash_state" ] && /usr/bin/grep -Fq '/Users/demo/' "$clash_state"; then
+if [ -f "$clash_state" ] && /usr/bin/grep -Fq "$demo_home/" "$clash_state"; then
   stale_clash=1
   /usr/bin/grep -Fq '"core_should_be_running"' "$clash_state"
   /usr/bin/grep -Fq '"config_dir"' "$clash_state"
@@ -444,15 +446,15 @@ if [ "$stale_clash" = 1 ]; then
     exit 7
   fi
 fi
-if [ -L /Users/demo ]; then
+if [ -L "$demo_home" ]; then
   printf 'DEMO_HOME_UNSAFE=present\n'
   exit 8
 fi
-if [ -e /Users/demo ]; then
-  /bin/rm -rf -- /Users/demo
+if [ -e "$demo_home" ]; then
+  /bin/rm -rf -- "$demo_home"
 fi
-test ! -e /Users/demo -a ! -L /Users/demo
-if [ -f "$clash_state" ] && /usr/bin/grep -Fq '/Users/demo/' "$clash_state"; then
+test ! -e "$demo_home" -a ! -L "$demo_home"
+if [ -f "$clash_state" ] && /usr/bin/grep -Fq "$demo_home/" "$clash_state"; then
   printf 'CLASH_STALE_STATE=present\n'
   exit 9
 fi
@@ -460,7 +462,7 @@ if [ -n "$(live_pids "$stale_demo_pattern")" ]; then
   printf 'STALE_DEMO_PATH_PROCESS=present\n'
   exit 10
 fi
-if [ -e /Users/demo ] || [ -L /Users/demo ]; then
+if [ -e "$demo_home" ] || [ -L "$demo_home" ]; then
   printf 'DEMO_HOME=present\n'
   exit 11
 fi
@@ -487,18 +489,20 @@ def demo_cleanup_verified(output: str) -> bool:
 
 def residual_demo_home_cleanup_script() -> str:
     return r'''set -e
-if /usr/bin/id demo >/dev/null 2>&1 || /usr/bin/dscl . -read /Users/demo >/dev/null 2>&1; then
+demo_user=demo
+demo_home="/Users/${demo_user}"
+if /usr/bin/id demo >/dev/null 2>&1 || /usr/bin/dscl . -read "$demo_home" >/dev/null 2>&1; then
   printf 'DEMO_ACCOUNT_RECORD=present\n'
   exit 2
 fi
-if [ -L /Users/demo ]; then
+if [ -L "$demo_home" ]; then
   printf 'DEMO_HOME_UNSAFE=symlink\n'
   exit 3
 fi
-if [ -e /Users/demo ]; then
-  /bin/rm -rf -- /Users/demo
+if [ -e "$demo_home" ]; then
+  /bin/rm -rf -- "$demo_home"
 fi
-test ! -e /Users/demo -a ! -L /Users/demo
+test ! -e "$demo_home" -a ! -L "$demo_home"
 printf 'DEMO_RESIDUAL_HOME=absent\n'
 '''
 

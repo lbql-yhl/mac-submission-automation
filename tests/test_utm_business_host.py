@@ -105,7 +105,7 @@ def test_host_birthday_accepts_only_notion_year_month_day_order() -> None:
 
 def test_guest_execution_uses_only_playwright_and_ssh_stdin() -> None:
     command = utm_business.guest_execution_command("abcd")
-    assert "/Users/abcd/Downloads/AppleAccountScriptsBackup/utm_business_one.mjs" in command
+    assert "/Users/example/Downloads/AppleAccountScriptsBackup/utm_business_one.mjs" in command
     assert "exec node" in command
     for forbidden in (
         "utm_business_guest.py",
@@ -124,7 +124,7 @@ def test_guest_preflight_reads_live_playwright_session_without_legacy_ledger() -
         "session.mjs",
         "utm_business_one.mjs",
     ):
-        assert f"/Users/abcd/Downloads/AppleAccountScriptsBackup/{filename}" in command
+        assert f"/Users/example/Downloads/AppleAccountScriptsBackup/{filename}" in command
     assert "currentSessionIdentity" in command
     assert ".utm-apps-state" not in command
     assert "completed_stages" not in command

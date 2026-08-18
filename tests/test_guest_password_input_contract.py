@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-GUEST = Path("/Users/yehailin/Downloads/find_system_settings_general.py")
+GUEST = Path("/Users/example/Downloads/find_system_settings_general.py")
 
 
 def test_password_change_wakes_change_button_with_literal_suffix_key() -> None:

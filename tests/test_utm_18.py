@@ -424,7 +424,7 @@ def _args(tmp_path: Path) -> argparse.Namespace:
 
 def _attempt(tmp_path: Path, state: str = "prepared") -> Attempt:
     attempt_id = "a" * 32
-    log = f"/Users/abcd/Downloads/utm-18-fill-description-{attempt_id}.log"
+    log = f"/Users/example/Downloads/utm-18-fill-description-{attempt_id}.log"
     return Attempt(
         attempt_id=attempt_id,
         run_id="run-12345678",
@@ -655,8 +655,8 @@ def test_known_finished_retryable_attempt_is_archived_then_full_entry_replays(
         **{
             **failed.__dict__,
             "attempt_id": "b" * 32,
-            "log_path": f"/Users/abcd/Downloads/utm-18-fill-description-{'b' * 32}.log",
-            "status_path": f"/Users/abcd/Downloads/utm-18-fill-description-{'b' * 32}.log.status",
+            "log_path": f"/Users/example/Downloads/utm-18-fill-description-{'b' * 32}.log",
+            "status_path": f"/Users/example/Downloads/utm-18-fill-description-{'b' * 32}.log.status",
             "ledger_path": tmp_path / "run-12345678" / f"{'b' * 32}.json",
             "state": "prepared",
         }
@@ -955,8 +955,8 @@ def test_direct_mode_reuses_shared_context_id_and_never_reads_or_cards_a_feishu_
         run_id=DIRECT_CONTEXT_ID,
         vm_name="abcd",
         vm_ip="192.168.64.20",
-        log_path=f"/Users/abcd/Downloads/utm-18-fill-description-{'a' * 32}.log",
-        status_path=f"/Users/abcd/Downloads/utm-18-fill-description-{'a' * 32}.log.status",
+        log_path=f"/Users/example/Downloads/utm-18-fill-description-{'a' * 32}.log",
+        status_path=f"/Users/example/Downloads/utm-18-fill-description-{'a' * 32}.log.status",
         ledger_path=tmp_path / DIRECT_CONTEXT_ID / f"{'a' * 32}.json",
         state="verified",
         prepared_at="2026-08-07T00:00:00+00:00",
@@ -1008,8 +1008,8 @@ def test_run_mode_still_resolves_owned_run_context_without_legacy_page_or_parent
             run_id="run-12345678",
             vm_name="abcd",
             vm_ip="192.168.64.20",
-            log_path=f"/Users/abcd/Downloads/utm-18-fill-description-{'b' * 32}.log",
-            status_path=f"/Users/abcd/Downloads/utm-18-fill-description-{'b' * 32}.log.status",
+            log_path=f"/Users/example/Downloads/utm-18-fill-description-{'b' * 32}.log",
+            status_path=f"/Users/example/Downloads/utm-18-fill-description-{'b' * 32}.log.status",
             ledger_path=tmp_path / "run-12345678" / f"{'b' * 32}.json",
             state="verified",
             prepared_at="2026-08-07T00:00:00+00:00",

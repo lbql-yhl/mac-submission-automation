@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "skills/utm-script/SKILL.md"
 DOC = ROOT / "docs/utm-script.md"
 UTM19_SKILL = ROOT / "skills/utm-image/SKILL.md"
-COMPLETE_ENTRY = "/Users/yehailin/Documents/mac提审自动化/scripts/utm_18.py"
+COMPLETE_ENTRY = "$PROJECT_ROOT/scripts/utm_18.py"
 
 
 def main() -> None:
@@ -54,8 +54,8 @@ def main() -> None:
         ):
             assert forbidden not in text, f"{label}: {forbidden}"
 
-    assert "python3 \"/Users/yehailin/Documents/mac提审自动化/scripts/utm_18_edge.py\"" not in skill
-    assert "python3 \"/Users/yehailin/Documents/mac提审自动化/scripts/utm_18_ssh.py\"" not in skill
+    assert "python3 \"$PROJECT_ROOT/scripts/utm_18_edge.py\"" not in skill
+    assert "python3 \"$PROJECT_ROOT/scripts/utm_18_ssh.py\"" not in skill
     assert "正常成功路径不暂停、不询问用户" in skill
 
     synchronized = {

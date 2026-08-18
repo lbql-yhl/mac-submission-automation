@@ -11,7 +11,7 @@ def test_utm_clash_ip_unifies_notion_proxy_clash_egress_and_environment() -> Non
     assert "name: utm-clash-ip" in text
     assert "utm-login" in text
     assert "UTM_CLASH_IP=verified" in text
-    assert "/Users/yehailin/Documents/mac提审自动化/scripts/utm_clash_ip.py" in text
+    assert "$PROJECT_ROOT/scripts/utm_clash_ip.py" in text
     assert "--application-name '<app-name>'" in text
     assert "不读取或解释脚本内容" in text
 
@@ -31,9 +31,9 @@ def test_utm_clash_ip_docs_publish_mainline_and_explicit_test_entries() -> None:
     docs = (ROOT / "docs" / "utm-clash-ip.md").read_text(encoding="utf-8")
 
     for text in (skill, docs):
-        assert "/Users/yehailin/Documents/mac提审自动化/scripts/utm_clash_ip.py" in text
+        assert "$PROJECT_ROOT/scripts/utm_clash_ip.py" in text
         assert "--application-name '<app-name>'" in text
-        assert "/Users/yehailin/Documents/mac提审自动化/scripts/utm_clash_ip_explicit_test.py" not in text
+        assert "$PROJECT_ROOT/scripts/utm_clash_ip_explicit_test.py" not in text
         assert "UTM_CLASH_IP=verified" in text
 
 

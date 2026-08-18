@@ -8,11 +8,11 @@ SKILL = ROOT / "skills" / "utm-notion" / "SKILL.md"
 def test_utm_notion_skill_is_a_thin_deterministic_script_entry() -> None:
     text = SKILL.read_text(encoding="utf-8")
     run_id_command = (
-        "python3 /Users/yehailin/Documents/mac提审自动化/scripts/utm_notion.py "
+        "python3 $PROJECT_ROOT/scripts/utm_notion.py "
         "--run-id '<run-id>'"
     )
     app_name_command = (
-        "python3 /Users/yehailin/Documents/mac提审自动化/scripts/utm_notion.py "
+        "python3 $PROJECT_ROOT/scripts/utm_notion.py "
         "--app-name '<app-name>'"
     )
 

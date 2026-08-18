@@ -356,8 +356,8 @@ def test_demo_cleanup_checks_account_process_and_home_path() -> None:
     script = demo_cleanup_script()
     assert "pgrep -u demo" in script
     assert "id demo" in script
-    assert "dscl . -read /Users/demo" in script
-    assert "/Users/demo" in script
+    assert 'demo_home=' in script
+    assert 'dscl . -read "$demo_home"' in script
     assert "DEMO_ID=absent" in script
     assert "DEMO_DSCL=absent" in script
     assert "DEMO_HOME=absent" in script
@@ -369,7 +369,7 @@ def test_demo_cleanup_removes_clash_desired_state_that_recreates_demo_home() -> 
         "/var/root/.local/state/clash-verge-service/desired-state.json",
         "core_should_be_running",
         "config_dir",
-        "/Users/demo/",
+        '"$demo_home/"',
         "launchctl bootout system",
         "CLASH_STALE_STATE=absent",
         "STALE_DEMO_PATH_PROCESS=absent",

@@ -103,6 +103,6 @@ def test_utm_apps_contracts_name_only_playwright_stage_files() -> None:
         assert "utm_13_one.mjs" not in source, relative
         assert "skills/<skill>/SKILL.md" in source, relative
     docs = (ROOT / "docs/utm-apps.md").read_text(encoding="utf-8")
-    assert "/Users/yehailin/Documents/mac提审自动化/scripts/utm_apps.py" in docs
+    assert "$PROJECT_ROOT/scripts/utm_apps.py" in docs
     assert "utm_12_one.mjs" not in docs
     assert "utm_13_one.mjs" not in docs

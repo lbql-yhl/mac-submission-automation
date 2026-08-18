@@ -35,9 +35,9 @@ def main() -> None:
     utm_9 = read("utm-key")
     docs_9 = (ROOT / "docs" / "utm-key.md").read_text(encoding="utf-8")
     for required in (
-        "/Users/yehailin/Documents/mac提审自动化/scripts/utm_9.py",
+        "$PROJECT_ROOT/scripts/utm_9.py",
         "CSR_ATTEMPT_ID",
-        "CSR_PATH=/Users/<vm_name>/Desktop/CertificateSigningRequest.certSigningRequest",
+        "CSR_PATH=/Users/example/Desktop/CertificateSigningRequest.certSigningRequest",
         "CSR_PRIVATE_KEY=verified",
         "CSR_DISK=verified",
         "/usr/bin/certtool",
@@ -58,8 +58,8 @@ def main() -> None:
 
     utm_business = read("utm-business")
     for required in (
-        "/Users/yehailin/Documents/mac提审自动化/scripts/utm_business.py",
-        "/Users/<vm_name>/Downloads/AppleAccountScriptsBackup/utm_business_one.mjs",
+        "$PROJECT_ROOT/scripts/utm_business.py",
+        "/Users/example/Downloads/AppleAccountScriptsBackup/utm_business_one.mjs",
         "SSH stdin JSON",
         "FOREIGN_STATUS_FORM=verified",
         "W8BEN_SUBMIT=verified",

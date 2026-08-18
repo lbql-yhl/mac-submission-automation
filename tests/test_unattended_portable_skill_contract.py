@@ -74,7 +74,7 @@ def main() -> None:
     require_all(
         clone,
         (
-            "/Users/yehailin/Documents/mac提审自动化/scripts/utm_clone_and_initialize.py",
+            "$PROJECT_ROOT/scripts/utm_clone_and_initialize.py",
             "UTM_CLONE_AND_INITIALIZE=verified",
             "DATABASE_AVAILABLE=1",
             "VM_SHUTDOWN=verified",
@@ -90,7 +90,7 @@ def main() -> None:
             require_all(
                 text,
                 (
-                    "/Users/yehailin/Documents/mac提审自动化/scripts/utm_notion.py",
+                    "$PROJECT_ROOT/scripts/utm_notion.py",
                     '"status": "verified"',
                     '"handoff": "utm-clash-ip"',
                 ),
@@ -101,7 +101,7 @@ def main() -> None:
             require_all(
                 text,
                 (
-                    "/Users/yehailin/Documents/mac提审自动化/scripts/utm_apps.py",
+                    "$PROJECT_ROOT/scripts/utm_apps.py",
                     "操作者只运行以上唯一宿主入口",
                     "UTM_APPS=verified",
                     "成功后交接 `utm-business`",
@@ -117,7 +117,7 @@ def main() -> None:
                 text,
                 (
                     "OP-FULL-ENTRY-REPLAY",
-                    "/Users/yehailin/Documents/mac提审自动化/scripts/utm_business.py",
+                    "$PROJECT_ROOT/scripts/utm_business.py",
                     "UTM_BUSINESS=verified",
                     "成功后交接 `utm-env`",
                 ),
@@ -268,7 +268,7 @@ def main() -> None:
     require_all(
         utm_9,
         (
-            "/Users/yehailin/Documents/mac提审自动化/scripts/utm_9.py",
+            "$PROJECT_ROOT/scripts/utm_9.py",
             "固定密码 SSH",
             "不使用视觉",
             "/usr/bin/certtool",
@@ -331,7 +331,7 @@ def main() -> None:
     )
 
     generator = (ROOT / "scripts" / "utm_env_generate.py").read_text(encoding="utf-8")
-    assert "/Users/yehailin" not in generator
+    assert "/Users/" not in generator
     assert "SHARED_DIR" in generator
 
     runner = (ROOT / "services" / "submission_runner.py").read_text(encoding="utf-8")

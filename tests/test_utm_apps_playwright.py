@@ -175,7 +175,7 @@ def test_utm10_no_status_waits_then_refreshes_once_before_reading_yes_status() -
 def test_preflight_checks_all_playwright_files() -> None:
     command = utm_apps.guest_preflight_command("abcd")
     for filename in utm_apps.GUEST_WRAPPER_FILENAMES:
-        assert f"/Users/abcd/Downloads/AppleAccountScriptsBackup/{filename}" in command
+        assert f"/Users/example/Downloads/AppleAccountScriptsBackup/{filename}" in command
     assert "playwright-core/index.mjs" in command
     assert "node --check" in command
 
@@ -196,7 +196,7 @@ def test_preflight_sha256_matches_every_current_host_playwright_file() -> None:
 def test_stage_execution_uses_node_for_all_four_stages() -> None:
     for stage, filename in utm_apps.GUEST_WRAPPERS.items():
         command = utm_apps.guest_execution_command("abcd", stage)
-        assert f"/Users/abcd/Downloads/AppleAccountScriptsBackup/{filename}" in command
+        assert f"/Users/example/Downloads/AppleAccountScriptsBackup/{filename}" in command
         assert "node" in command
         assert "currentSessionIdentity" in command
 
@@ -204,7 +204,7 @@ def test_stage_execution_uses_node_for_all_four_stages() -> None:
 def test_utm12_stage_execution_uses_180_second_guest_timeout() -> None:
     command = utm_apps.guest_execution_command("igec", "utm-12")
     assert "/usr/bin/pkill -f" in command
-    assert "^node /Users/igec/Downloads/AppleAccountScriptsBackup/utm_12_one\\.mjs$" in command
+    assert "^node /Users/example/Downloads/AppleAccountScriptsBackup/utm_12_one\\.mjs$" in command
     assert "/usr/bin/perl -e" in command
     assert "alarm shift; exec @ARGV" in command
     assert "UTM_12_ERROR=TIMEOUT_180_SECONDS" in command
@@ -960,7 +960,7 @@ def test_utm12_unique_visible_wait_rejects_multiple_matches_immediately() -> Non
 
 def test_utm12_notion_fields_command_uses_read_only_recovery_mode() -> None:
     command = utm_apps.guest_utm12_notion_fields_command("abcd")
-    assert "/Users/abcd/Downloads/AppleAccountScriptsBackup/utm_12_one.mjs" in command
+    assert "/Users/example/Downloads/AppleAccountScriptsBackup/utm_12_one.mjs" in command
     assert "notion-fields" in command
     assert "currentSessionIdentity" in command
 

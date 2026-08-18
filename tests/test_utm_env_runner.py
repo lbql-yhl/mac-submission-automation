@@ -42,7 +42,7 @@ class FakeTransport:
             "fire_one_env_mode": "600",
             "asset_count": 4,
             "guest_download_asset_count": 3,
-            "guest_code_path": "/Users/abcd/StudioProjects/FlagCue",
+            "guest_code_path": "/Users/example/StudioProjects/FlagCue",
             "guest_code_copy": "verified_or_identical_existing",
         }
 
@@ -135,7 +135,7 @@ class UTMEnvRunnerTests(unittest.TestCase):
         self.assertEqual(result["fire_one_env_sha256"], "exact")
         self.assertEqual(result["fire_one_env_mode"], "600")
         self.assertEqual(result["guest_download_asset_count"], 3)
-        self.assertEqual(result["guest_code_path"], "/Users/abcd/StudioProjects/FlagCue")
+        self.assertEqual(result["guest_code_path"], "/Users/example/StudioProjects/FlagCue")
         self.assertEqual(result["guest_code_copy"], "verified_or_identical_existing")
         self.assertNotIn("terminal_app_management", result)
         self.assertEqual(result["utm_env"], "verified")
@@ -228,7 +228,7 @@ class UTMEnvRunnerTests(unittest.TestCase):
             "fire_one_env_sha256": "exact",
             "fire_one_env_mode": "600",
             "guest_download_asset_count": 3,
-            "guest_code_path": "/Users/abcd/StudioProjects/FlagCue",
+            "guest_code_path": "/Users/example/StudioProjects/FlagCue",
             "guest_code_copy": "verified_or_identical_existing",
             "utm_env": "verified",
         }

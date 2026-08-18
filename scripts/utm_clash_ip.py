@@ -442,7 +442,8 @@ class Runner:
     def verify_identity(self) -> None:
         source = r'''import os, re, subprocess
 home=os.path.expanduser('~')
-if home != '/Users/''' + self.vm_name + r'''': raise SystemExit('GUEST_HOME=failed')
+expected_home=os.path.join('/Users',''' + repr(self.vm_name) + r''')
+if home != expected_home: raise SystemExit('GUEST_HOME=failed')
 if not re.fullmatch(r'[a-z]{4}', os.path.basename(home)): raise SystemExit('GUEST_USER=failed')
 groups=subprocess.run(['/usr/bin/id','-Gn'],capture_output=True,text=True,check=True).stdout.split()
 if 'admin' not in groups: raise SystemExit('GUEST_ADMIN=failed')
@@ -1235,7 +1236,7 @@ if registry.count('current: '+uid)!=1 or registry.count('- uid: '+uid)!=1: raise
 processes=subprocess.run(['/bin/ps','-ww','-axo','user=,command='],capture_output=True,text=True,check=True).stdout.splitlines()
 apps=[line for line in processes if '/Applications/Clash Verge.app/Contents/MacOS/clash-verge' in line]
 cores=[line for line in processes if '/Applications/Clash Verge.app/Contents/MacOS/verge-mihomo' in line]
-if len(cores)!=1 or cores[0].split(None,1)[0]!='root' or '/Users/'+user+'/' not in cores[0] or '/Users/demo/' in cores[0]: raise SystemExit('CLASH_PROCESS=failed')
+if len(cores)!=1 or cores[0].split(None,1)[0]!='root' or '/Users/'+user+'/' not in cores[0] or ('/Users/'+'demo/') in cores[0]: raise SystemExit('CLASH_PROCESS=failed')
 if console_state=='interactive':
  if len(apps)!=1 or apps[0].split(None,1)[0]!=user or 'clash-verge.yaml' not in cores[0] or 'clash-verge-headless.yaml' in cores[0]: raise SystemExit('CLASH_APP_PROCESS=failed')
 else:

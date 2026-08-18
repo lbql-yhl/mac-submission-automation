@@ -207,7 +207,7 @@ def test_development_attachment_rejects_unsafe_metadata(
 def test_skill_contract_uses_feishu_automatically_without_manual_link_input() -> None:
     assert SKILL.is_file(), "utm-image must be the canonical skill name"
     text = SKILL.read_text(encoding="utf-8")
-    assert "/Users/yehailin/Documents/mac提审自动化/scripts/utm_image.py" in text
+    assert "$PROJECT_ROOT/scripts/utm_image.py" in text
     for implementation_detail in (BASE_URL, "美女截图 链接", "研发截图", "utm_image_source.py"):
         assert implementation_detail not in text
     assert "shareUrl" not in text

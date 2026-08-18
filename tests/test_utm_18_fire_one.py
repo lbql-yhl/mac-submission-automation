@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 SOURCE = Path(
-    "/Users/yehailin/Desktop/共享文件/Fire_One_en1.3/src/fill-description.ts"
+    "/Users/example/Desktop/共享文件/Fire_One_en1.3/src/fill-description.ts"
 )
 
 

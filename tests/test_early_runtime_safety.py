@@ -34,7 +34,7 @@ def main() -> None:
     assert "BatchMode=yes" not in ssh_password
 
     notion = (ROOT / "skills" / "utm-notion" / "SKILL.md").read_text(encoding="utf-8")
-    assert "/Users/yehailin/Documents/mac提审自动化/scripts/utm_notion.py" in notion
+    assert "$PROJECT_ROOT/scripts/utm_notion.py" in notion
     assert "空值保留模板标签" in notion
     assert '"status": "verified"' in notion
 

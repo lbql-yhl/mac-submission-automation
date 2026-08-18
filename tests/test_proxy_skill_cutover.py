@@ -17,6 +17,6 @@ def test_proxy_work_is_one_clash_ip_stage_without_development_environment() -> N
         "/usr/local/opt/ruby/bin",
     ):
         assert forbidden not in text
-    assert "/Users/yehailin/Documents/mac提审自动化/scripts/utm_clash_ip.py" in text
+    assert "$PROJECT_ROOT/scripts/utm_clash_ip.py" in text
     assert "不读取或解释脚本内容" in text
     assert "UTM_CLASH_IP=verified" in text

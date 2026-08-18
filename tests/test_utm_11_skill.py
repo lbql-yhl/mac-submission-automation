@@ -12,8 +12,8 @@ def main() -> None:
 
     for document in (skill, docs):
         for value in (
-            "/Users/yehailin/Documents/mac提审自动化/scripts/utm_apps.py",
-            "/Users/<vm_name>/Downloads/AppleAccountScriptsBackup/utm_11_one.mjs",
+            "$PROJECT_ROOT/scripts/utm_apps.py",
+            "/Users/example/Downloads/AppleAccountScriptsBackup/utm_11_one.mjs",
             "UTM_11=verified",
             "NOTION_MEMBERSHIP_FIELDS=updated",
             "UTM_APPS=verified",

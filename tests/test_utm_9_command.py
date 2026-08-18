@@ -53,7 +53,7 @@ def test_certtool_input_uses_rsa_2048_sha256_and_exact_subject() -> None:
 def test_guest_payload_rejects_control_characters_and_wrong_path() -> None:
     valid = {
         "expected_user": "abcd",
-        "csr_path": "/Users/abcd/Desktop/CertificateSigningRequest.certSigningRequest",
+        "csr_path": "/Users/example/Desktop/CertificateSigningRequest.certSigningRequest",
         "key_label": "utm-9-0123456789abcdef",
         "challenge": "utm-9-0123456789abcdef",
         "keychain_password": DUMMY_GUEST_VALUE,
@@ -65,7 +65,7 @@ def test_guest_payload_rejects_control_characters_and_wrong_path() -> None:
     for field, value in (
         ("email", "account@example.test\nleak"),
         ("common_name", "Example\rUser"),
-        ("csr_path", "/Users/other/Desktop/CertificateSigningRequest.certSigningRequest"),
+        ("csr_path", "/Users/example/Desktop/CertificateSigningRequest.certSigningRequest"),
     ):
         invalid = dict(valid)
         invalid[field] = value
@@ -81,7 +81,7 @@ def test_keychain_unlock_uses_password_prompt_without_password_in_argv() -> None
         return 0
 
     utm_9_guest.unlock_keychain(
-        Path("/Users/abcd/Library/Keychains/login.keychain-db"),
+        Path("/Users/example/Library/Keychains/login.keychain-db"),
         DUMMY_GUEST_VALUE,
         prompt_runner=fake_prompt,
     )
@@ -91,7 +91,7 @@ def test_keychain_unlock_uses_password_prompt_without_password_in_argv() -> None
     assert command == [
         "/usr/bin/security",
         "unlock-keychain",
-        "/Users/abcd/Library/Keychains/login.keychain-db",
+        "/Users/example/Library/Keychains/login.keychain-db",
     ]
     assert password == DUMMY_GUEST_VALUE
     assert DUMMY_GUEST_VALUE not in command
@@ -243,7 +243,7 @@ def test_attempt_is_mode_600_idempotent_and_context_locked(tmp_path: Path) -> No
         "vm_name": "abcd",
         "vm_ip": "192.0.2.10",
         "vm_user": "abcd",
-        "csr_path": "/Users/abcd/Desktop/CertificateSigningRequest.certSigningRequest",
+        "csr_path": "/Users/example/Desktop/CertificateSigningRequest.certSigningRequest",
     }
     before = {"desktop_count": 3, "desktop_digest": "a" * 64}
 
@@ -264,7 +264,7 @@ def test_sensitive_subject_values_are_stdin_only() -> None:
         "attempt_id": "01234567-89ab-cdef-0123-456789abcdef",
         "key_label": "utm-9-0123456789abcdef",
         "challenge": "utm-9-0123456789abcdef",
-        "csr_path": "/Users/abcd/Desktop/CertificateSigningRequest.certSigningRequest",
+        "csr_path": "/Users/example/Desktop/CertificateSigningRequest.certSigningRequest",
         "desktop_before": {"desktop_count": 3, "desktop_digest": "a" * 64},
     }
     payload = utm_9.build_create_payload(
@@ -275,7 +275,7 @@ def test_sensitive_subject_values_are_stdin_only() -> None:
     )
     command = utm_9.remote_helper_command(
         vm_user="abcd",
-        guest_dir="/Users/abcd/Downloads",
+        guest_dir="/Users/example/Downloads",
         mode="create",
     )
 
@@ -322,7 +322,7 @@ def test_managed_guest_helper_hash_drift_is_atomically_upgraded(
     utm_9.install_guest_helper(
         "abcd",
         "192.0.2.10",
-        "/Users/abcd/Downloads",
+        "/Users/example/Downloads",
         ssh_runner=fake_ssh,
         scp_runner=fake_scp,
         token_factory=lambda: "stabletoken",
@@ -353,7 +353,7 @@ def test_unmanaged_guest_helper_hash_drift_still_blocks(
         utm_9.install_guest_helper(
             "abcd",
             "192.0.2.10",
-            "/Users/abcd/Downloads",
+            "/Users/example/Downloads",
             ssh_runner=fake_ssh,
             scp_runner=lambda *args, **kwargs: pytest.fail("must not copy conflict"),
         )
@@ -373,7 +373,7 @@ def test_guest_helper_source_syntax_is_checked_before_remote_access(
         utm_9.install_guest_helper(
             "abcd",
             "192.0.2.10",
-            "/Users/abcd/Downloads",
+            "/Users/example/Downloads",
             ssh_runner=lambda *args, **kwargs: pytest.fail("must validate locally first"),
         )
 
@@ -399,7 +399,7 @@ def test_guest_error_preserves_complete_stderr_with_exit_code(
         utm_9.call_guest(
             vm_user="abcd",
             vm_ip="192.0.2.10",
-            guest_dir="/Users/abcd/Downloads",
+            guest_dir="/Users/example/Downloads",
             mode="verify",
             payload=b"{}",
         )
@@ -413,7 +413,7 @@ def test_canonical_skill_and_docs_use_only_the_command_entry() -> None:
     docs = (root / "docs" / "utm-key.md").read_text(encoding="utf-8")
     canonical = skill + "\n" + docs
     for required in (
-        "/Users/yehailin/Documents/mac提审自动化/scripts/utm_9.py",
+        "$PROJECT_ROOT/scripts/utm_9.py",
         "--run-id '<run-id>'",
         "--page-title '<page-title>'",
         "--vm-name '<vm-name>'",

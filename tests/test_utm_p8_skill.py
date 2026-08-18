@@ -13,7 +13,7 @@ def test_utm_p8_uses_only_the_host_entry_in_documentation() -> None:
     combined = "\n".join((skill, doc))
 
     for required in (
-        "/Users/yehailin/Documents/mac提审自动化/scripts/utm_p8.py",
+        "$PROJECT_ROOT/scripts/utm_p8.py",
         "UTM_P8=verified",
         "SHARED_APP_ASSETS_CLEANED=verified",
         "--cleanup-only",
@@ -44,7 +44,7 @@ def test_utm_p8_documentation_excludes_internal_write_details() -> None:
         )
     )
     for forbidden in (
-        "/Users/yehailin/Documents/mac提审自动化/scripts/notion_api.py",
+        "$PROJECT_ROOT/scripts/notion_api.py",
         "verify-parent",
         "更新信息",
         "退款回调及p8",
@@ -63,6 +63,6 @@ def test_utm_p8_documentation_excludes_internal_write_details() -> None:
 
 def test_utm_p8_is_a_single_script_entry() -> None:
     skill = SKILL.read_text(encoding="utf-8")
-    assert skill.count("/Users/yehailin/Documents/mac提审自动化/scripts/utm_p8.py") == 2
+    assert skill.count("$PROJECT_ROOT/scripts/utm_p8.py") == 2
     assert "python3 -c" not in skill
     assert "ssh " not in skill

@@ -16,7 +16,7 @@ GUEST_SCRIPT = ROOT / "skills" / "utm-image" / "scripts" / "utm_19_one.mjs"
 
 def test_guest_script_path_is_fixed_in_downloads_backup() -> None:
     assert utm_image.guest_script_path("abcd") == (
-        "/Users/abcd/Downloads/AppleAccountScriptsBackup/utm_19_one.mjs"
+        "/Users/example/Downloads/AppleAccountScriptsBackup/utm_19_one.mjs"
     )
 
 
@@ -24,8 +24,8 @@ def test_guest_preflight_verifies_script_dependency_and_existing_edge() -> None:
     digest = hashlib.sha256(GUEST_SCRIPT.read_bytes()).hexdigest()
     command = utm_image.guest_preflight_command("abcd", digest)
     for required in (
-        "/Users/abcd/Downloads/AppleAccountScriptsBackup/utm_19_one.mjs",
-        "/Users/abcd/Downloads/Fire_One_en1.3/node_modules/playwright-core/index.mjs",
+        "/Users/example/Downloads/AppleAccountScriptsBackup/utm_19_one.mjs",
+        "/Users/example/Downloads/Fire_One_en1.3/node_modules/playwright-core/index.mjs",
         "shasum -a 256",
         '--check "$target"',
         "127.0.0.1:9222/json/version",
@@ -168,7 +168,7 @@ def test_guest_reuses_existing_exact_app_page_before_apps_list_lookup() -> None:
 
 def test_skill_contract_has_only_host_ssh_entry() -> None:
     skill = (ROOT / "skills" / "utm-image" / "SKILL.md").read_text(encoding="utf-8")
-    assert "/Users/yehailin/Documents/mac提审自动化/scripts/utm_image.py" in skill
+    assert "$PROJECT_ROOT/scripts/utm_image.py" in skill
     assert "/Users/<vm_name>/Downloads/AppleAccountScriptsBackup/utm_19_one.mjs" not in skill
     assert "不读取或解释脚本内容" in skill
     assert "printf '%s\\n' '{}' | /usr/bin/node" not in skill

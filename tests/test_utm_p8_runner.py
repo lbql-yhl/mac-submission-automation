@@ -15,7 +15,7 @@ def _payload() -> dict[str, str]:
     return {
         "issuer_id": "11111111-2222-3333-4444-555555555555",
         "key_id": "ABC123DEFG",
-        "private_key_path": "/Users/abcd/Downloads/apple-store-bm/AuthKey_ABC123DEFG.p8",
+        "private_key_path": "/Users/example/Downloads/apple-store-bm/AuthKey_ABC123DEFG.p8",
         "private_key": "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----\n",
     }
 
@@ -41,7 +41,7 @@ def test_main_preserves_the_complete_actual_error(monkeypatch, capsys) -> None:
 
 def test_guest_command_reads_only_the_fixed_prod_yml_and_p8() -> None:
     command = utm_p8.guest_read_command("abcd")
-    assert "/Users/abcd/Downloads/apple-store-bm/config/prod.yml" in command
+    assert "/Users/example/Downloads/apple-store-bm/config/prod.yml" in command
     assert "AuthKey_" in command
     assert "Downloads/apple-store-bm" in command
     for mutating in ("os.O_WRONLY", "os.unlink", "os.replace", "os.chmod", "os.mkdir", "rm -"):
@@ -52,7 +52,7 @@ def test_guest_payload_is_validated_without_printing_secret() -> None:
     parsed = utm_p8.parse_guest_payload(json.dumps(_payload()))
     assert parsed["key_id"] == "ABC123DEFG"
     broken = _payload()
-    broken["private_key_path"] = "/Users/abcd/Downloads/other/AuthKey_ABC123DEFG.p8"
+    broken["private_key_path"] = "/Users/example/Downloads/other/AuthKey_ABC123DEFG.p8"
     with pytest.raises(utm_p8.UTMP8Error, match="GUEST_P8_PATH_INVALID"):
         utm_p8.parse_guest_payload(json.dumps(broken))
 

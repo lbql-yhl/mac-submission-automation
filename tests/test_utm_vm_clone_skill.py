@@ -13,8 +13,8 @@ def test_utm_vm_clone_skill_documents_the_single_entry_and_ten_step_recovery() -
     assert "name: utm-vm-clone" in text
     assert "Use when" in text
     assert (
-        "/Users/yehailin/.venvs/py312-common/bin/python3 "
-        "/Users/yehailin/Documents/mac提审自动化/scripts/utm_clone_and_initialize.py"
+        "/Users/example/.venvs/py312-common/bin/python3 "
+        "$PROJECT_ROOT/scripts/utm_clone_and_initialize.py"
     ) in text
     assert "UTM_CLONE_AND_INITIALIZE=verified" in text
     for step in range(1, 11):

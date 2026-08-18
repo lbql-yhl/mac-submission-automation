@@ -93,7 +93,7 @@ def test_key_guest_failure_keeps_actual_stderr_and_redacts_configured_password(
         utm_9.call_guest(
             vm_user="abcd",
             vm_ip="192.0.2.10",
-            guest_dir="/Users/abcd/Downloads",
+            guest_dir="/Users/example/Downloads",
             mode="create",
             payload=b"{}",
         )
@@ -113,7 +113,7 @@ def test_key_error_does_not_rewrite_unrelated_numeric_status(
         utm_9.call_guest(
             vm_user="abcd",
             vm_ip="192.0.2.10",
-            guest_dir="/Users/abcd/Downloads",
+            guest_dir="/Users/example/Downloads",
             mode="verify",
             payload=b"{}",
         )

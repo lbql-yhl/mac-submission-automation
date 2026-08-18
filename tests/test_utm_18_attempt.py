@@ -35,11 +35,11 @@ def test_attempt_ledger_and_paths_are_unique_mode_600(tmp_path: Path) -> None:
     )
     assert (attempt.ledger_path.stat().st_mode & 0o777) == 0o600
     assert attempt.log_path == (
-        f"/Users/abcd/Downloads/utm-18-fill-description-{attempt.attempt_id}.log"
+        f"/Users/example/Downloads/utm-18-fill-description-{attempt.attempt_id}.log"
     )
     assert attempt.status_path == f"{attempt.log_path}.status"
     assert attempt.command_path == (
-        f"/Users/abcd/Downloads/utm-18-fill-description-{attempt.attempt_id}.command"
+        f"/Users/example/Downloads/utm-18-fill-description-{attempt.attempt_id}.command"
     )
     saved = json.loads(attempt.ledger_path.read_text(encoding="utf-8"))
     assert saved["state"] == "prepared"

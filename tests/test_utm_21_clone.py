@@ -24,7 +24,7 @@ def main() -> None:
         else:
             raise AssertionError(invalid)
 
-    assert clone_target("abcd", url) == Path("/Users/abcd/StudioProjects/example")
+    assert clone_target("abcd", url) == Path("/Users/example/StudioProjects/example")
     payload = build_payload("user", "secret", url, clone_target("abcd", url))
     assert payload.count(b"\0") == 4
     assert payload.endswith(b"\0")
