@@ -2218,7 +2218,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--handle-mac-password",
         action="store_true",
-        help="处理当前已显示的 Enter Mac Password 弹窗并输入固定 1234",
+        help="处理当前已显示的 Enter Mac Password 弹窗并输入宿主配置的客机密码",
     )
     parser.add_argument(
         "--change-password",

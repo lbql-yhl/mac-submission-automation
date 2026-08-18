@@ -3,7 +3,7 @@
 
 All workflow values arrive through stdin JSON.  The helper emits exactly one
 JSON result line and never echoes account values, application values, phone
-numbers, SMS URLs, verification codes, or the fixed guest password.
+numbers, SMS URLs, verification codes, or the configured guest password.
 """
 
 from __future__ import annotations

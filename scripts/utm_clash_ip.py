@@ -3,7 +3,7 @@
 
 The runner is command-only: it verifies the exact inventory binding, starts
 that same VM only when it is stopped, refreshes its IP by registered MAC, and
-uses fixed-password SSH.  It has no screenshot, OCR, CUA, or coordinate path.
+uses configured-password SSH.  It has no screenshot, OCR, CUA, or coordinate path.
 """
 
 from __future__ import annotations

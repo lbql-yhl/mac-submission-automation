@@ -18,6 +18,11 @@ import scripts.utm_terminal_app_management as terminal  # noqa: E402
 import scripts.utm_terminal_app_management_guest as guest  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def configured_guest_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUBMISSION_GUEST_PASSWORD", "9072")
+
+
 def test_step_9_contains_only_deep_link_existing_terminal_ax_and_reread() -> None:
     host_source = HOST.read_text(encoding="utf-8")
     guest_source = GUEST.read_text(encoding="utf-8")
@@ -72,11 +77,12 @@ def test_host_opens_app_management_with_background_deep_link() -> None:
     ]
 
 
-def test_host_runs_one_nonpersistent_ax_process_in_console_session() -> None:
+def test_host_runs_one_nonpersistent_ax_process_in_console_session(monkeypatch) -> None:
     transport = terminal.TerminalPermissionTransport.__new__(
         terminal.TerminalPermissionTransport
     )
     transport.vm_name = "stgf"
+    dummy_value = "9072"
     calls: list[tuple[str, str | None]] = []
 
     def fake_run(command: str, *, timeout: int = 120, input_text: str | None = None):
@@ -84,6 +90,7 @@ def test_host_runs_one_nonpersistent_ax_process_in_console_session() -> None:
         return SimpleNamespace(stdout="TERMINAL_APP_MANAGEMENT=verified\n")
 
     transport._run = fake_run
+    monkeypatch.setattr(terminal, "guest_password", lambda: dummy_value)
     transport.run_ax()
 
     assert len(calls) == 1
@@ -91,7 +98,31 @@ def test_host_runs_one_nonpersistent_ax_process_in_console_session() -> None:
     assert command.endswith("exec /usr/bin/python3 -B - --vm-user stgf")
     assert "launchctl" not in command
     assert "sudo" not in command
-    assert input_text == GUEST.read_text(encoding="utf-8")
+    assert dummy_value not in command
+    assert "SUBMISSION_GUEST_PASSWORD" in command
+    assert input_text == dummy_value + "\n" + GUEST.read_text(encoding="utf-8")
+
+
+def test_guest_requires_runtime_password_without_echoing_invalid_value(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("SUBMISSION_GUEST_PASSWORD", raising=False)
+    with pytest.raises(guest.TerminalAppManagementGuestError) as missing:
+        guest._configured_guest_password()
+    assert "SUBMISSION_GUEST_PASSWORD" in str(missing.value)
+
+    invalid = "not-a-pin"
+    monkeypatch.setenv("SUBMISSION_GUEST_PASSWORD", invalid)
+    with pytest.raises(guest.TerminalAppManagementGuestError) as captured:
+        guest._configured_guest_password()
+    assert invalid not in str(captured.value)
+
+
+def test_guest_authorization_uses_only_the_runtime_password() -> None:
+    source = GUEST.read_text(encoding="utf-8")
+
+    assert "_configured_guest_password()" in source
+    assert 'kAXValueAttribute, "1234"' not in source
 
 
 def test_host_preserves_safe_stderr_when_guest_process_fails_before_marker(

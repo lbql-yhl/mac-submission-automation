@@ -29,6 +29,7 @@ from scripts.ssh_password import connection_options, password_environment, ssh_a
 from scripts.utm_apps_delivery import sync_utm_apps_playwright_files
 from scripts.utm_direct_context import resolve_direct_context
 from services.feishu_bot import find_run, load_config, run_host_machine
+from services.host_config import guest_password
 from services.project_paths import SHARED_DIR
 
 
@@ -519,7 +520,7 @@ def _stage_stdin(stage: str, payload: Mapping[str, Any]) -> bytes:
     elif stage == "utm-13":
         value = {
             "authorizationAttemptId": "current-run",
-            "systemKeychainPassword": "1234",
+            "systemKeychainPassword": guest_password(),
             "certificateUserName": str(payload.get("APPLE_ACCOUNT_USER_NAME") or ""),
         }
     else:

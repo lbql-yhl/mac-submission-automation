@@ -219,7 +219,9 @@ def test_non_utm12_stage_execution_keeps_60_second_guest_timeout(stage: str) -> 
     assert f"{stage_code}_ERROR=TIMEOUT_180_SECONDS" not in command
 
 
-def test_utm13_authorization_binds_to_the_current_certificate_attempt() -> None:
+def test_utm13_authorization_uses_the_runtime_guest_value(monkeypatch) -> None:
+    dummy_value = "9072"
+    monkeypatch.setattr(utm_apps, "guest_password", lambda: dummy_value)
     payload = json.loads(
         utm_apps._stage_stdin(
             "utm-13",
@@ -228,6 +230,10 @@ def test_utm13_authorization_binds_to_the_current_certificate_attempt() -> None:
     )
     assert payload["authorizationAttemptId"] == "current-run"
     assert payload["certificateUserName"] == "Marius Engel"
+    assert payload["systemKeychainPassword"] == dummy_value
+    assert "FIXED_PASSWORD" not in (ROOT / "scripts" / "utm_apps.py").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_utm12_identifier_recovery_checks_unique_app_name_before_create() -> None:

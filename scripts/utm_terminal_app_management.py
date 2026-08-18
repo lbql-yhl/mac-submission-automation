@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.ssh_password import password_environment, ssh_args  # noqa: E402
+from services.host_config import guest_password  # noqa: E402
 
 
 DEEP_LINK = (
@@ -120,12 +121,18 @@ class TerminalPermissionTransport:
             (
                 'target_user="$(/usr/bin/stat -f %Su /dev/console)"',
                 f'test "$target_user" = {quoted_user}',
+                "IFS= read -r SUBMISSION_GUEST_PASSWORD",
+                "export SUBMISSION_GUEST_PASSWORD",
                 f"exec /usr/bin/python3 -B - --vm-user {quoted_user}",
             )
         )
         output = self._run(
             remote_command,
-            input_text=GUEST_SCRIPT.read_text(encoding="utf-8"),
+            input_text=(
+                guest_password()
+                + "\n"
+                + GUEST_SCRIPT.read_text(encoding="utf-8")
+            ),
             timeout=120,
         ).stdout
         if output.splitlines().count(TERMINAL_MANAGEMENT_MARKER) != 1:

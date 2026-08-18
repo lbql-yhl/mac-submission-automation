@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
 
@@ -19,6 +20,11 @@ from scripts.check_host_vm_dependencies import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def configured_guest_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUBMISSION_GUEST_PASSWORD", "9072")
 
 
 def test_render_result_has_only_the_two_allowed_forms() -> None:
@@ -102,15 +108,36 @@ def test_vm_ip_falls_back_to_unique_registered_mac_when_backend_has_no_ip(
 
 
 def test_password_environment_uses_the_checker_itself_without_creating_a_helper() -> None:
-    environment = _password_environment({"PATH": "/usr/bin:/bin"})
+    dummy_value = "9072"
+    environment = _password_environment(
+        {"PATH": os.environ["PATH"], "SUBMISSION_GUEST_PASSWORD": dummy_value}
+    )
 
     assert environment["SSH_ASKPASS"] == str(
         (ROOT / "scripts" / "check_host_vm_dependencies.py").resolve()
     )
     assert environment["SSH_ASKPASS_REQUIRE"] == "force"
     assert environment["DEPENDENCY_CHECK_ASKPASS"] == "1"
-    assert "1234" not in environment.values()
+    assert environment["SUBMISSION_GUEST_PASSWORD"] == dummy_value
     assert Path(environment["SSH_ASKPASS"]).stat().st_mode & 0o111
+
+    completed = subprocess.run(
+        [environment["SSH_ASKPASS"]],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert completed.stdout == dummy_value + "\n"
+
+
+def test_dependency_checker_source_has_no_embedded_askpass_value() -> None:
+    source = (ROOT / "scripts" / "check_host_vm_dependencies.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'print("1234")' not in source
+    assert "guest_password(environ=os.environ)" in source
 
 
 def test_dependency_checker_contains_no_utm_lifecycle_command() -> None:

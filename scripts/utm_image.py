@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the pre-delivered UTM-IMAGE guest script over fixed-password SSH."""
+"""Run the pre-delivered UTM-IMAGE guest script over configured-password SSH."""
 
 from __future__ import annotations
 

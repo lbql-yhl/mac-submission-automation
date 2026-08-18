@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
-import sys
 import time
 from collections import deque
 from typing import Any, Iterator
@@ -19,6 +19,16 @@ CONTROL_WAIT_SECONDS = 15.0
 
 class TerminalAppManagementGuestError(RuntimeError):
     """Raised when the App Management page or Terminal row is not exact."""
+
+
+def _configured_guest_password() -> str:
+    """Read the host-supplied runtime value without any repository fallback."""
+    value = str(os.environ.get("SUBMISSION_GUEST_PASSWORD") or "").strip()
+    if re.fullmatch(r"[0-9]{4}", value) is None:
+        raise TerminalAppManagementGuestError(
+            "SUBMISSION_GUEST_PASSWORD runtime configuration is missing or invalid"
+        )
+    return value
 
 
 class AXCommon:
@@ -445,7 +455,9 @@ def _add_terminal(common: Any) -> None:
         if authentication is not None:
             password, modify = authentication
             error = common.AX.AXUIElementSetAttributeValue(
-                password, common.AX.kAXValueAttribute, "1234"
+                password,
+                common.AX.kAXValueAttribute,
+                _configured_guest_password(),
             )
             if error != common.AX.kAXErrorSuccess:
                 raise TerminalAppManagementGuestError(
