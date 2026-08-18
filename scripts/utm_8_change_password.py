@@ -13,6 +13,7 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 
@@ -86,9 +87,11 @@ def _decode_output(value: bytes | str | None) -> str:
 
 
 def _safe_guest_failure_detail(
-    stderr: bytes | str | None, sensitive_values: tuple[str, ...]
+    stderr: bytes | str | None, sensitive_values: str | Iterable[str]
 ) -> str:
     """Return the complete guest diagnostic with both passwords redacted."""
+    if isinstance(sensitive_values, str):
+        sensitive_values = (sensitive_values,)
     lines = [re.sub(r"\s+", " ", line).strip() for line in _decode_output(stderr).splitlines()]
     detail = " | ".join(line for line in lines if line) or "guest helper exited without detail"
     for sensitive_value in sensitive_values:
