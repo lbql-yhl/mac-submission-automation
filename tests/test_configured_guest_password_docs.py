@@ -14,6 +14,16 @@ TARGETS = (
     "docs/utm-21.md",
     "docs/utm-22.md",
 )
+HISTORICAL_FIXED_PASSWORD_SPEC = (
+    ROOT / "docs/superpowers/specs/2026-08-14-utm-script-visible-terminal-design.md"
+)
+STALE_PASSWORD_SEMANTICS = (
+    "OP-FIXED-PASSWORD-1234",
+    "`1234`",
+    "fixed password",
+    "fixed-password",
+    "固定密码",
+)
 
 
 def test_operational_docs_require_host_configured_guest_password() -> None:
@@ -31,3 +41,15 @@ def test_operational_docs_require_host_configured_guest_password() -> None:
     for relative in TARGETS[1:6]:
         text = (ROOT / relative).read_text(encoding="utf-8")
         assert "OP-CONFIGURED-GUEST-PASSWORD" in text, relative
+
+
+def test_tracked_docs_and_skills_contain_no_stale_fixed_password_semantics() -> None:
+    markdown_files = sorted(
+        (*((ROOT / "docs").rglob("*.md")), *((ROOT / "skills").rglob("*.md")))
+    )
+    for path in markdown_files:
+        text = path.read_text(encoding="utf-8")
+        for stale in STALE_PASSWORD_SEMANTICS:
+            assert stale not in text, f"{path.relative_to(ROOT)}: {stale}"
+
+    assert not HISTORICAL_FIXED_PASSWORD_SPEC.exists()
