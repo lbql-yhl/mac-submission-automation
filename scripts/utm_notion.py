@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import secrets
 import string
@@ -14,6 +13,8 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -31,7 +32,11 @@ from scripts.vm_inventory import (
     rebind_application_name,
     scan_inventory,
 )
-from services.feishu_gateway import get_tenant_access_token, read_env_file
+from services.feishu_gateway import get_tenant_access_token
+from services.host_config import (  # noqa: E402
+    ConfigurationError,
+    host_settings_snapshot,
+)
 from services.utm_notion_source import (
     SOURCE_ENV_KEYS,
     configured_feishu_source as configured_utm_notion_source,
@@ -117,25 +122,75 @@ GENERATED_PASSWORD_LENGTH = 16
 TEST_MISSING_VALUE = "test"
 
 
-def runtime_settings(
-    env_path: Path,
+@dataclass(frozen=True)
+class UtmNotionRuntimeConfig:
+    feishu_app_id: str
+    feishu_app_secret: str
+    configured_source: tuple[str, str, str, str]
+    notion_token: str
+    notion_root_page_id: str
+    notion_template_title: str
+    host_title: str
+    images_dir: Path
+
+
+def _required_runtime_setting(settings: Mapping[str, str], key: str) -> str:
+    value = str(settings.get(key, "")).strip()
+    if not value:
+        raise ConfigurationError(f"missing required host setting: {key}")
+    return value
+
+
+def load_runtime_config(
     *,
-    environ: dict[str, str] | None = None,
-) -> dict[str, str]:
-    """Build call-local settings without modifying the process environment."""
-    values = dict(os.environ if environ is None else environ)
-    project_values = read_env_file(env_path)
-    for key, value in project_values.items():
-        if key in UTM_NOTION_FEISHU_ENV_KEYS or key not in values:
-            values[key] = value
-    return values
+    environ: Mapping[str, str] | None = None,
+    env_path: Path | None = None,
+) -> UtmNotionRuntimeConfig:
+    if env_path is None:
+        settings_path = None if environ is not None else PROJECT_ROOT / ".env"
+    else:
+        settings_path = Path(env_path)
+    settings = host_settings_snapshot(
+        environ=environ,
+        env_path=settings_path,
+        file_override_keys=UTM_NOTION_FEISHU_ENV_KEYS,
+    )
+    feishu_app_id = _required_runtime_setting(settings, "FEISHU_APP_ID")
+    feishu_app_secret = _required_runtime_setting(settings, "FEISHU_APP_SECRET")
+    notion_token = _required_runtime_setting(settings, "NOTION_TOKEN")
+    notion_root_page_id = _required_runtime_setting(settings, "NOTION_ROOT_PAGE_ID")
+    host_title = _required_runtime_setting(settings, "SUBMISSION_HOST_MACHINE")
+    images_dir_value = _required_runtime_setting(
+        settings, "SUBMISSION_VM_IMAGES_DIR"
+    )
+    images_dir = Path(images_dir_value).expanduser()
+    if not images_dir.is_absolute():
+        raise ConfigurationError(
+            "invalid host setting: SUBMISSION_VM_IMAGES_DIR must be an absolute path"
+        )
+    try:
+        configured_source = configured_utm_notion_source(settings)
+    except RuntimeError as error:
+        raise ConfigurationError(str(error)) from error
+    return UtmNotionRuntimeConfig(
+        feishu_app_id=feishu_app_id,
+        feishu_app_secret=feishu_app_secret,
+        configured_source=configured_source,
+        notion_token=notion_token,
+        notion_root_page_id=notion_root_page_id,
+        notion_template_title=str(
+            settings.get("NOTION_TEMPLATE_TITLE", "模板") or "模板"
+        ).strip(),
+        host_title=host_title,
+        images_dir=images_dir,
+    )
 
 
-def notion_api_from_settings(settings: dict[str, str]) -> NotionAPI:
+def notion_api_from_config(config: UtmNotionRuntimeConfig) -> NotionAPI:
     return NotionAPI(
-        settings.get("NOTION_TOKEN", ""),
-        settings.get("NOTION_ROOT_PAGE_ID", ""),
-        settings.get("NOTION_TEMPLATE_TITLE", "模板"),
+        config.notion_token,
+        config.notion_root_page_id,
+        config.notion_template_title,
     )
 
 
@@ -741,14 +796,13 @@ def execute(
     fill_missing_with_test: bool = False,
     rename_from: str = "",
 ) -> dict[str, object]:
-    settings = runtime_settings(PROJECT_ROOT / ".env")
-    configured_source = configured_utm_notion_source(settings)
+    runtime_config = load_runtime_config(env_path=PROJECT_ROOT / ".env")
     token = get_tenant_access_token(
-        settings.get("FEISHU_APP_ID", ""),
-        settings.get("FEISHU_APP_SECRET", ""),
+        runtime_config.feishu_app_id,
+        runtime_config.feishu_app_secret,
     )
     app_token, table_id, view_id = resolve_utm_notion_source(
-        token, configured_source
+        token, runtime_config.configured_source
     )
     client = FeishuBitableClient(
         token,
@@ -763,31 +817,22 @@ def execute(
         fill_missing_with_test=fill_missing_with_test,
     )
     exact_app_name = application_replacements["应用名: "]
-    images_dir_value = settings.get("SUBMISSION_VM_IMAGES_DIR", "").strip()
-    if not images_dir_value:
-        raise RuntimeError("SUBMISSION_VM_IMAGES_DIR is required")
-    images_dir = Path(images_dir_value).expanduser()
-    if not images_dir.is_absolute():
-        raise RuntimeError("SUBMISSION_VM_IMAGES_DIR must be an absolute path")
     vm_name = _bind_vm(
         fields,
         exact_app_name,
         database.resolve(),
-        images_dir,
+        runtime_config.images_dir,
         expected_vm_name=vm_name,
         rename_from=rename_from,
     )
     feishu_changed = client.ensure_vm(record, vm_name)
 
-    host_title = settings.get("SUBMISSION_HOST_MACHINE", "").strip()
-    if not host_title:
-        raise RuntimeError("SUBMISSION_HOST_MACHINE is required")
-    notion = notion_api_from_settings(settings)
-    notion.verify_parent(host_title)
+    notion = notion_api_from_config(runtime_config)
+    notion.verify_parent(runtime_config.host_title)
     page_title = f"{exact_app_name}-{vm_name}"
     page_id, page_created = notion.create_registration_copy(page_title)
 
-    notion.verify_parent(host_title)
+    notion.verify_parent(runtime_config.host_title)
     account_before = notion.read_section(page_title, "账号信息")
     application_before = notion.read_section(page_title, "应用信息")
     modified_password_generated = ensure_modified_password(
@@ -805,12 +850,12 @@ def execute(
         multiline_labels=APPLICATION_MULTILINE_LABELS,
     )
 
-    notion.verify_parent(host_title)
+    notion.verify_parent(runtime_config.host_title)
     changed = notion.write_registration_sections(
         page_title,
         {"账号信息": account_desired, "应用信息": application_desired},
     )
-    notion.verify_parent(host_title)
+    notion.verify_parent(runtime_config.host_title)
     account_after = notion.read_section(page_title, "账号信息")
     application_after = notion.read_section(page_title, "应用信息")
     if account_after != account_desired or application_after != application_desired:

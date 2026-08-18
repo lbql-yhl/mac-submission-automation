@@ -74,7 +74,6 @@ def test_project_configuration_no_longer_exposes_ssh_key_paths() -> None:
     for relative in (
         "services/project_paths.py",
         ".env.example",
-        "config/workflow.env.example",
         "skills/_shared/AUTOMATION_CONTRACT.md",
     ):
         source = (ROOT / relative).read_text(encoding="utf-8")

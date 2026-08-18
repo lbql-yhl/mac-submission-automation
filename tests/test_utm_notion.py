@@ -137,17 +137,23 @@ def test_execute_prefers_project_env_for_utm_notion_feishu_source(
     (tmp_path / ".env").write_text(
         "\n".join(
             (
-                "UTM_NOTION_FEISHU_APP_TOKEN=new-app-token",
-                "UTM_NOTION_FEISHU_TABLE_ID=new-table-id",
-                "UTM_NOTION_FEISHU_VIEW_ID=new-view-id",
+                "UTM_NOTION_FEISHU_APP_TOKEN=bascnNewAppToken123",
+                "UTM_NOTION_FEISHU_TABLE_ID=tblNewTable123",
+                "UTM_NOTION_FEISHU_VIEW_ID=vewNewView123",
+                "FEISHU_APP_ID=cliExampleApp123",
+                "FEISHU_APP_SECRET=example-secret",
+                "NOTION_TOKEN=example-notion-token",
+                "NOTION_ROOT_PAGE_ID=example-notion-root",
+                "SUBMISSION_HOST_MACHINE=Test Host",
+                "SUBMISSION_VM_IMAGES_DIR=/tmp/test-vm-images",
             )
         ),
         encoding="utf-8",
     )
     monkeypatch.setattr(utm_notion, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setenv("UTM_NOTION_FEISHU_APP_TOKEN", "old-app-token")
-    monkeypatch.setenv("UTM_NOTION_FEISHU_TABLE_ID", "old-table-id")
-    monkeypatch.setenv("UTM_NOTION_FEISHU_VIEW_ID", "old-view-id")
+    monkeypatch.setenv("UTM_NOTION_FEISHU_APP_TOKEN", "bascnOldAppToken123")
+    monkeypatch.setenv("UTM_NOTION_FEISHU_TABLE_ID", "tblOldTable123")
+    monkeypatch.setenv("UTM_NOTION_FEISHU_VIEW_ID", "vewOldView123")
     monkeypatch.setattr(utm_notion, "get_tenant_access_token", lambda *_: "token")
 
     captured: dict[str, str] = {}
@@ -180,9 +186,9 @@ def test_execute_prefers_project_env_for_utm_notion_feishu_source(
 
     assert captured == {
         "token": "token",
-        "app_token": "new-app-token",
-        "table_id": "new-table-id",
-        "view_id": "new-view-id",
+        "app_token": "bascnNewAppToken123",
+        "table_id": "tblNewTable123",
+        "view_id": "vewNewView123",
     }
 
 

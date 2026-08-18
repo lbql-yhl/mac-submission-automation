@@ -295,7 +295,7 @@ def main() -> None:
         ROOT / "services" / "feishu_supervisor.py",
         ROOT / "services" / "project_paths.py",
         ROOT / "services" / "submission_runner.py",
-        ROOT / "config" / "workflow.env.example",
+        ROOT / ".env.example",
         ROOT / "shared-files" / "README.md",
         ROOT / "shared-files" / "apple-store-bm" / "README.md",
         ROOT / "shared-files" / "apple-store-bm" / "apple_store_tools",
@@ -351,13 +351,12 @@ def main() -> None:
         "installer",
     )
 
-    env_example = (ROOT / "config" / "workflow.env.example").read_text(encoding="utf-8")
+    env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
     assert "SUBMISSION_HOST_MACHINE=\n" in env_example
     require_all(env_example, ("CODEUP_USERNAME=", "CODEUP_PASSWORD="), "env example")
 
     portable_sources = (
         ROOT / ".env.example",
-        ROOT / "config" / "workflow.env.example",
         ROOT / "services" / "project_paths.py",
     )
     for source in portable_sources:

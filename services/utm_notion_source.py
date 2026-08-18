@@ -20,6 +20,19 @@ SOURCE_ENV_KEYS = frozenset(
         "UTM_NOTION_FEISHU_VIEW_ID",
     }
 )
+DIRECT_IDENTIFIER_PATTERNS = {
+    "UTM_NOTION_FEISHU_APP_TOKEN": re.compile(r"[A-Za-z0-9]+"),
+    "UTM_NOTION_FEISHU_TABLE_ID": re.compile(r"tbl[A-Za-z0-9]+"),
+    "UTM_NOTION_FEISHU_VIEW_ID": re.compile(r"vew[A-Za-z0-9]+"),
+}
+
+
+def validate_direct_identifier(key: str, value: str) -> str:
+    """Validate one direct Base identifier without echoing its value."""
+    pattern = DIRECT_IDENTIFIER_PATTERNS[key]
+    if pattern.fullmatch(value) is None:
+        raise RuntimeError(f"invalid UTM_NOTION_FEISHU direct identifier: {key}")
+    return value
 
 
 def configured_feishu_source(
@@ -56,15 +69,28 @@ def configured_feishu_source(
             or not re.fullmatch(r"[A-Za-z0-9]+", path_parts[1])
             or len(table_values) != 1
             or len(view_values) != 1
-            or not re.fullmatch(r"tbl[A-Za-z0-9]+", table_values[0])
-            or not re.fullmatch(r"vew[A-Za-z0-9]+", view_values[0])
         ):
             raise RuntimeError(
                 "invalid UTM_NOTION_FEISHU_WIKI_URL source category"
             )
-        return "wiki", path_parts[1], table_values[0], view_values[0]
+        try:
+            table_id = validate_direct_identifier(
+                "UTM_NOTION_FEISHU_TABLE_ID", table_values[0]
+            )
+            view_id = validate_direct_identifier(
+                "UTM_NOTION_FEISHU_VIEW_ID", view_values[0]
+            )
+        except RuntimeError as error:
+            raise RuntimeError(
+                "invalid UTM_NOTION_FEISHU_WIKI_URL source category"
+            ) from error
+        return "wiki", path_parts[1], table_id, view_id
     if all(direct_values):
-        return "direct", *direct_values
+        validated = tuple(
+            validate_direct_identifier(key, value)
+            for key, value in zip(direct_keys, direct_values)
+        )
+        return "direct", *validated
     if any(direct_values):
         missing = ", ".join(
             key for key, value in zip(direct_keys, direct_values) if not value
@@ -114,8 +140,12 @@ def resolve_feishu_source(
         )
     node = dict((result.get("data") or {}).get("node") or {})
     app_token = str(node.get("obj_token") or "").strip()
-    if node.get("obj_type") != "bitable" or not re.fullmatch(
-        r"[A-Za-z0-9]+", app_token
-    ):
+    if node.get("obj_type") != "bitable":
         raise RuntimeError("Feishu Wiki source category is not a Base")
-    return app_token, table_id, view_id
+    try:
+        validated_app_token = validate_direct_identifier(
+            "UTM_NOTION_FEISHU_APP_TOKEN", app_token
+        )
+    except RuntimeError as error:
+        raise RuntimeError("Feishu Wiki source category is not a Base") from error
+    return validated_app_token, table_id, view_id

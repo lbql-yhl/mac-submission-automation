@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import FrozenInstanceError
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
 from scripts import utm_notion
+from services.host_config import ConfigurationError
 from services import utm_notion_source
 
 
@@ -14,6 +17,24 @@ WIKI_URL = (
     "https://example.feishu.cn/wiki/ExampleWikiNode123"
     "?table=tblExample123&view=vewExample123"
 )
+DIRECT_APP_TOKEN = "bascnExampleToken123"
+DIRECT_TABLE_ID = "tblExampleTable123"
+DIRECT_VIEW_ID = "vewExampleView123"
+
+
+def valid_runtime_settings() -> dict[str, str]:
+    return {
+        "FEISHU_APP_ID": "cliExampleAppId123",
+        "FEISHU_APP_SECRET": "feishu-app-secret-sentinel",
+        "NOTION_TOKEN": "notion-token-sentinel",
+        "NOTION_ROOT_PAGE_ID": "notion-root-page-id",
+        "NOTION_TEMPLATE_TITLE": "模板",
+        "SUBMISSION_HOST_MACHINE": "Test Host",
+        "SUBMISSION_VM_IMAGES_DIR": "/tmp/utm-notion-vm-images",
+        "UTM_NOTION_FEISHU_APP_TOKEN": DIRECT_APP_TOKEN,
+        "UTM_NOTION_FEISHU_TABLE_ID": DIRECT_TABLE_ID,
+        "UTM_NOTION_FEISHU_VIEW_ID": DIRECT_VIEW_ID,
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -39,9 +60,16 @@ def test_execute_rejects_missing_partial_or_mixed_source_before_network(
     configured: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(utm_notion, "read_env_file", lambda _path: {})
-    for key, value in configured.items():
-        monkeypatch.setenv(key, value)
+    settings = valid_runtime_settings()
+    for key in utm_notion_source.SOURCE_ENV_KEYS:
+        settings.pop(key, None)
+    settings.update(configured)
+    monkeypatch.setattr(
+        utm_notion,
+        "host_settings_snapshot",
+        lambda **_kwargs: MappingProxyType(settings),
+        raising=False,
+    )
     monkeypatch.setattr(
         utm_notion,
         "get_tenant_access_token",
@@ -70,12 +98,99 @@ def test_execute_rejects_missing_partial_or_mixed_source_before_network(
     assert dict(os.environ) == before
 
 
+@pytest.mark.parametrize(
+    "missing_key",
+    (
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
+        "NOTION_TOKEN",
+        "NOTION_ROOT_PAGE_ID",
+        "SUBMISSION_HOST_MACHINE",
+        "SUBMISSION_VM_IMAGES_DIR",
+        "UTM_NOTION_FEISHU_APP_TOKEN",
+        "UTM_NOTION_FEISHU_TABLE_ID",
+        "UTM_NOTION_FEISHU_VIEW_ID",
+    ),
+)
+def test_execute_preflights_every_required_setting_before_any_side_effect(
+    missing_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = valid_runtime_settings()
+    missing_value = settings.pop(missing_key)
+    monkeypatch.setattr(
+        utm_notion,
+        "host_settings_snapshot",
+        lambda **_kwargs: MappingProxyType(settings),
+        raising=False,
+    )
+    for name in (
+        "get_tenant_access_token",
+        "resolve_utm_notion_source",
+        "FeishuBitableClient",
+        "_bind_vm",
+        "NotionAPI",
+    ):
+        monkeypatch.setattr(
+            utm_notion,
+            name,
+            lambda *_args, _name=name, **_kwargs: pytest.fail(
+                f"{_name} must not run before configuration preflight"
+            ),
+        )
+    before = dict(os.environ)
+
+    with pytest.raises(ConfigurationError) as captured:
+        utm_notion.execute(app_name="PackWise")
+
+    message = str(captured.value)
+    assert missing_key in message
+    assert missing_value not in message
+    assert all(value not in message for value in settings.values())
+    assert dict(os.environ) == before
+
+
+def test_runtime_config_uses_one_snapshot_and_is_frozen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    version_one = valid_runtime_settings()
+    version_two = {
+        **version_one,
+        "SUBMISSION_HOST_MACHINE": "Changed Host",
+        "SUBMISSION_VM_IMAGES_DIR": "/tmp/changed-images",
+    }
+    snapshots = iter(
+        (MappingProxyType(version_one), MappingProxyType(version_two))
+    )
+    calls = 0
+
+    def next_snapshot(**_kwargs: object):
+        nonlocal calls
+        calls += 1
+        return next(snapshots)
+
+    monkeypatch.setattr(
+        utm_notion,
+        "host_settings_snapshot",
+        next_snapshot,
+        raising=False,
+    )
+
+    config = utm_notion.load_runtime_config(environ={})
+
+    assert calls == 1
+    assert config.host_title == "Test Host"
+    assert config.images_dir == Path("/tmp/utm-notion-vm-images")
+    with pytest.raises(FrozenInstanceError):
+        config.host_title = "mutated"
+
+
 def test_complete_direct_source_needs_no_wiki_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("UTM_NOTION_FEISHU_APP_TOKEN", "direct-app")
-    monkeypatch.setenv("UTM_NOTION_FEISHU_TABLE_ID", "direct-table")
-    monkeypatch.setenv("UTM_NOTION_FEISHU_VIEW_ID", "direct-view")
+    monkeypatch.setenv("UTM_NOTION_FEISHU_APP_TOKEN", DIRECT_APP_TOKEN)
+    monkeypatch.setenv("UTM_NOTION_FEISHU_TABLE_ID", DIRECT_TABLE_ID)
+    monkeypatch.setenv("UTM_NOTION_FEISHU_VIEW_ID", DIRECT_VIEW_ID)
     monkeypatch.setattr(
         utm_notion.urllib.request,
         "urlopen",
@@ -85,10 +200,33 @@ def test_complete_direct_source_needs_no_wiki_request(
     configured = utm_notion_source.configured_feishu_source()
 
     assert utm_notion_source.resolve_feishu_source("tenant-token", configured) == (
-        "direct-app",
-        "direct-table",
-        "direct-view",
+        DIRECT_APP_TOKEN,
+        DIRECT_TABLE_ID,
+        DIRECT_VIEW_ID,
     )
+
+
+@pytest.mark.parametrize(
+    ("key", "invalid_value"),
+    (
+        ("UTM_NOTION_FEISHU_APP_TOKEN", "base-token-with-dashes"),
+        ("UTM_NOTION_FEISHU_TABLE_ID", "tableWithoutTblPrefix"),
+        ("UTM_NOTION_FEISHU_VIEW_ID", "viewWithoutVewPrefix"),
+    ),
+)
+def test_direct_source_uses_shared_real_identifier_validation(
+    key: str,
+    invalid_value: str,
+) -> None:
+    settings = valid_runtime_settings()
+    settings[key] = invalid_value
+
+    with pytest.raises(RuntimeError) as captured:
+        utm_notion_source.configured_feishu_source(settings)
+
+    message = str(captured.value)
+    assert key in message
+    assert invalid_value not in message
 
 
 def test_wiki_source_resolves_base_token_after_local_validation(
@@ -141,16 +279,21 @@ def test_execute_reads_project_source_without_mutating_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (tmp_path / ".env").write_text(
-        "UTM_NOTION_FEISHU_APP_TOKEN=project-app\n"
-        "UTM_NOTION_FEISHU_TABLE_ID=project-table\n"
-        "UTM_NOTION_FEISHU_VIEW_ID=project-view\n"
-        "FEISHU_APP_ID=project-feishu-app\n",
+        f"UTM_NOTION_FEISHU_APP_TOKEN={DIRECT_APP_TOKEN}\n"
+        f"UTM_NOTION_FEISHU_TABLE_ID={DIRECT_TABLE_ID}\n"
+        f"UTM_NOTION_FEISHU_VIEW_ID={DIRECT_VIEW_ID}\n"
+        "FEISHU_APP_ID=project-feishu-app\n"
+        "FEISHU_APP_SECRET=project-feishu-secret\n"
+        "NOTION_TOKEN=project-notion-token\n"
+        "NOTION_ROOT_PAGE_ID=project-notion-root\n"
+        "SUBMISSION_HOST_MACHINE=Project Host\n"
+        "SUBMISSION_VM_IMAGES_DIR=/tmp/project-vm-images\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(utm_notion, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setenv("UTM_NOTION_FEISHU_APP_TOKEN", "process-app")
-    monkeypatch.setenv("UTM_NOTION_FEISHU_TABLE_ID", "process-table")
-    monkeypatch.setenv("UTM_NOTION_FEISHU_VIEW_ID", "process-view")
+    monkeypatch.setenv("UTM_NOTION_FEISHU_APP_TOKEN", "bascnProcessToken123")
+    monkeypatch.setenv("UTM_NOTION_FEISHU_TABLE_ID", "tblProcessTable123")
+    monkeypatch.setenv("UTM_NOTION_FEISHU_VIEW_ID", "vewProcessView123")
     monkeypatch.delenv("FEISHU_APP_ID", raising=False)
     before = dict(os.environ)
     captured: dict[str, str] = {}
@@ -189,8 +332,8 @@ def test_execute_reads_project_source_without_mutating_environment(
     assert captured == {
         "app_id": "project-feishu-app",
         "token": "token",
-        "app_token": "project-app",
-        "table_id": "project-table",
-        "view_id": "project-view",
+        "app_token": DIRECT_APP_TOKEN,
+        "table_id": DIRECT_TABLE_ID,
+        "view_id": DIRECT_VIEW_ID,
     }
     assert dict(os.environ) == before
