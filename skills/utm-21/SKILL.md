@@ -7,7 +7,7 @@ description: Use after utm-p8 when the matching UTM macOS guest needs its Codeup
 
 ## 全局自动恢复与最后故障卡规则
 
-本技能调用共享重复操作记忆中的 `OP-NATIVE-PASTE`、`OP-BROWSER-URL-NO-SCHEME`、`OP-APPLE-PHONE-OTP`、`OP-FIXED-PASSWORD-1234` 和 `OP-USER-CONFIRMATION`。故障按三轮“诊断→实际修复→独立复验”处理。
+本技能调用共享重复操作记忆中的 `OP-NATIVE-PASTE`、`OP-BROWSER-URL-NO-SCHEME`、`OP-APPLE-PHONE-OTP`、`OP-CONFIGURED-GUEST-PASSWORD` 和 `OP-USER-CONFIRMATION`。故障按三轮“诊断→实际修复→独立复验”处理。
 
 执行任何命令前，在项目根目录运行 `eval "$(python3 scripts/preflight.py --project-only --emit-shell)"`，取得当前机器的动态路径。必须先完整遵守 [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md)：固定顺序是自动诊断、自动修复、自动复验，只有智能体确实无法修复时才允许发送飞书故障卡。
 
@@ -48,7 +48,7 @@ python3 services/feishu_bot.py wait-decision \
 | 仓库目录已存在 | 只读验证 origin/main/HEAD、当前 run 的 Bundle/App ID 替换和既有 workspace 结构；全部匹配则幂等恢复到第一个未完成步骤 | 非空不匹配/所有权不明为 `unrepairable`，不删除 |
 | 四项总命中为零 | 检查是否已替换为目标值；目标增量和旧值为零且结构一致则视为已完成 | 旧/新均无证据为代码语义故障，发卡 |
 | workspace 缺失或不安全 | 三轮只读核对同一仓库、`ios/Runner.xcworkspace` 类型、归属、真实路径和内容锚点；禁止生成、修复或改选其他 workspace | 三轮仍缺失、冲突或无法归属时为 `unrepairable` |
-| SSH 连接异常 | 只恢复同一 VM 的固定密码连接并复验用户/home | 三轮仍失败才 `exhausted` |
+| SSH 连接异常 | 只恢复同一 VM 的宿主配置密码连接并复验用户/home | 三轮仍失败才 `exhausted` |
 
 ## 定位
 
@@ -60,8 +60,8 @@ python3 services/feishu_bot.py wait-decision \
 
 ## SSH 全自动约束
 
-- 直接继承 `utm-p8` 的同一精确 VM/IP、`<vm_name>` 和固定密码 SSH 身份；本技能只复验一次用户/home，不安装、生成或恢复 SSH key。
-- SSH 连接失败时自动按同一 VM 的精确 MAC 刷新 IP、检查 Remote Login/端口，并只用固定 `1234` 恢复密码 SSH；不得生成、安装、恢复或请求 SSH Key，也不得向用户索取密码或 IP。自动恢复仍失败时记录 `SSH_AUTO_RECOVERY=blocked`，先按 `utm-21-ssh-auto-recovery` 记录故障阶段并执行本技能自动恢复矩阵；恢复穷尽后才发送最后故障卡并等待当前执行器处理决定。
+- 直接继承 `utm-p8` 的同一精确 VM/IP、`<vm_name>` 和已配置密码 SSH 身份；本技能只复验一次用户/home，不安装、生成或恢复 SSH key。
+- SSH 连接失败时自动按同一 VM 的精确 MAC 刷新 IP、检查 Remote Login/端口，并只用宿主 `.env` 的 `SUBMISSION_GUEST_PASSWORD` 按 `OP-CONFIGURED-GUEST-PASSWORD` 恢复密码 SSH；不得生成、安装、恢复或请求 SSH Key，也不得向用户索取密码或 IP。自动恢复仍失败时记录 `SSH_AUTO_RECOVERY=blocked`，先按 `utm-21-ssh-auto-recovery` 记录故障阶段并执行本技能自动恢复矩阵；恢复穷尽后才发送最后故障卡并等待当前执行器处理决定。
 - 目标路径已存在或四项总命中为零是代码现场安全边界，不是 SSH 认证问题；其现有决定流程不得被用来要求用户修 SSH。
 
 ## Codeup 认证边界
@@ -83,7 +83,7 @@ Codeup 凭据只存在于迁移后本机的 `${PROJECT_ROOT}/.env`：`CODEUP_USE
 
 ### 二、锁定 guest 与固定路径
 
-4. 直接复用 `utm-p8` 继承的 VM IP 和固定密码 SSH 身份，只读确认用户为 `<vm_name>`、home 为 `/Users/<vm_name>`。正常路径不得重新扫描 VM、MAC 或 ARP；只有继承 IP 已不可达时，才允许按该 `<vm_name>.utm` 的精确配置 MAC 刷新 IP、检查 Remote Login 并用固定 `1234` 恢复，禁止选择其他或“最新”VM。
+4. 直接复用 `utm-p8` 继承的 VM IP 和已配置密码 SSH 身份，只读确认用户为 `<vm_name>`、home 为 `/Users/<vm_name>`。正常路径不得重新扫描 VM、MAC 或 ARP；只有继承 IP 已不可达时，才允许按该 `<vm_name>.utm` 的精确配置 MAC 刷新 IP、检查 Remote Login 并通过 `OP-CONFIGURED-GUEST-PASSWORD` 恢复，禁止选择其他或“最新”VM。
 5. 从 `CODE_LINK` 末段只删除 `.git` 得到 `repo_name`。仓库名必须满足 `re.fullmatch(r"[A-Za-z0-9._-]+", repo_name)` 且 `repo_name not in {'.', '..'}`；URL 解码前后名称必须相同，禁止斜杠、反斜杠、NUL、百分号编码路径分隔符或空名称。
 6. 目标固定为 `/Users/<vm_name>/StudioProjects/<repo_name>`。只允许创建父目录 `/Users/<vm_name>/StudioProjects`；不得删除、覆盖、移动、重命名目标或改用其他目录。
 7. 对目标路径先做只读分类，不得因为“已存在”就立刻发卡：

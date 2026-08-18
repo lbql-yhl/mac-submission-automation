@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -18,9 +19,38 @@ class ConfigurationError(RuntimeError):
 
 def _dotenv_setting(name: str, env_path: Path) -> str:
     path = Path(env_path)
-    if not path.is_file():
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
         return ""
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    except OSError as error:
+        raise ConfigurationError("unable to inspect host settings file") from error
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise ConfigurationError("unsafe host settings file")
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ConfigurationError("unable to open host settings file safely") from error
+    try:
+        opened_stat = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened_stat.st_mode)
+            or opened_stat.st_dev != path_stat.st_dev
+            or opened_stat.st_ino != path_stat.st_ino
+        ):
+            raise ConfigurationError("host settings file changed during secure open")
+        with os.fdopen(descriptor, encoding="utf-8") as handle:
+            descriptor = -1
+            contents = handle.read()
+    except (OSError, UnicodeError) as error:
+        raise ConfigurationError("unable to read host settings file safely") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+    for raw_line in contents.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue

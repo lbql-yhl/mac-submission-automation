@@ -6,7 +6,7 @@
 
 ## 共享重复操作记忆
 
-以下操作 ID 是整个项目唯一的重复操作方法。任一技能遇到对应场景时，必须直接调用该 ID 的完整步骤和成功判定，不得临时改成键盘盲输、快捷键盲贴、旧剪贴板复用、重新拼接 URL 或询问用户固定密码。执行记录必须写出操作 ID 和对应成功标记；没有成功标记就回到该操作的第 1 步。
+以下操作 ID 是整个项目唯一的重复操作方法。任一技能遇到对应场景时，必须直接调用该 ID 的完整步骤和成功判定，不得临时改成键盘盲输、快捷键盲贴、旧剪贴板复用、重新拼接 URL 或询问用户 guest 密码。执行记录必须写出操作 ID 和对应成功标记；没有成功标记就回到该操作的第 1 步。
 
 ### `OP-NATIVE-PASTE`：权威值原生粘贴
 
@@ -50,12 +50,12 @@
 
 ### `OP-APPLE-ACCOUNT-LOGIN-SCRIPT`：Notion API 到 guest 的 Apple Account 登录
 
-1. 仅由 `utm-login` 调用。先确认当前 run、精确 `vm_name`、guest IP 和最终 SSH 用户；只允许固定密码 `1234` 的密码 SSH 并显式禁用公钥认证，不得重新选择 VM、生成/恢复 SSH key、读取其他页面或使用宿主桌面视觉操作。
+1. 仅由 `utm-login` 调用。先确认当前 run、精确 `vm_name`、guest IP 和最终 SSH 用户；只允许宿主 `.env` 的 `SUBMISSION_GUEST_PASSWORD` 密码 SSH 并显式禁用公钥认证，不得重新选择 VM、生成/恢复 SSH key、读取其他页面或使用宿主桌面视觉操作。
 2. 在项目根目录执行 `/Users/yehailin/Documents/mac提审自动化/scripts/notion_api.py verify-parent --title '<宿主机名称>'`，然后从唯一匹配的 `<应用名>-<vm_name>` 页面 `账号信息` 读取 `邮箱：`、只读取 `初始密码：`、`电话：` 和 `电话短信接收平台：`。`utm-login` 不读取 `修改后的密码：`；值只能进入当前脚本内存，不能进入 argv、日志、卡片或临时明文文件；短信 URL 必须是有效 `http(s)`。
 3. `/Users/yehailin/Documents/mac提审自动化/scripts/utm_7_login.py` 把项目 `scripts/` 中七个 Apple Account/Apple 网页 helper 自动同步到当前配置解析出的 `${SUBMISSION_SHARED_DIR}/AppleAccountScriptsBackup`：五个 System Settings helper 加 `apple_web_workflow.py`、`edge_accessibility.py`。每个源先验证 regular、非 symlink、非空和 AST；目标缺失或哈希漂移时使用同目录临时文件、文件 `fsync`、`os.replace` 和目录 `fsync` 原子更新，保留目录内其他文件。随后新密码 SSH 从 `/Volumes/My Shared Files/共享文件/AppleAccountScriptsBackup` 复验同七项 AST/SHA-256 与项目源完全一致；失败按 0/5/10 秒三轮重新同步和新 SSH 复验。禁止 SCP、guest Downloads 回退或删除其他备份文件。PyObjC 缺失时用一个 guest 新进程安装，再用另一个新进程导入复验，最多三轮。
-4. 若新的 SSH 进程没有 Accessibility 权限，入口触发当前 `sshd-keygen-wrapper` 请求，仅通过 guest 已授权 AEServer 的 Remote Apple Events 点击唯一 `Open System Settings`，在 `Accessibility` 页打开唯一 `sshd-keygen-wrapper` 开关；授权 sheet 中唯一聚焦 `Password`、输入固定 `1234`、点击唯一 `Modify Settings`。每个动作后立即读取最新状态，目标尚未就绪时仅做条件轮询，最后由全新密码 SSH 进程验证 `AXIsProcessTrusted=true`。禁止数据库写入、`tccutil`、坐标和人工确认。
+4. 若新的 SSH 进程没有 Accessibility 权限，入口触发当前 `sshd-keygen-wrapper` 请求，仅通过 guest 已授权 AEServer 的 Remote Apple Events 点击唯一 `Open System Settings`，在 `Accessibility` 页打开唯一 `sshd-keygen-wrapper` 开关；授权 sheet 中唯一聚焦 `Password`、通过 `OP-CONFIGURED-GUEST-PASSWORD` 输入当次配置值、点击唯一 `Modify Settings`。每个动作后立即读取最新状态，目标尚未就绪时仅做条件轮询，最后由全新密码 SSH 进程验证 `AXIsProcessTrusted=true`。禁止数据库写入、`tccutil`、坐标和人工确认。
 5. 宿主桥接器把本次账号值交给 guest 子进程并执行共享挂载中的 `apple_account_login.py`；guest 入口每次启动先结束同一路径旧实例。
-6. guest helper 自动打开/复用 System Settings，使用 Accessibility API 完成邮箱、初始密码、Continue、唯一电话尾号、最新短信验证码、Mac Password `1234`、`Don't know passcode?`/`Enter Passcode Later` 和 `Don't Merge`。验证码按当前 SMS URL 处理：有时间字段取时间最新，无时间字段取页面顺序最后一条；不复用旧码。邮箱在任意阶段出现即跳过不必要步骤。
+6. guest helper 自动打开/复用 System Settings，使用 Accessibility API 完成邮箱、初始密码、Continue、唯一电话尾号、最新短信验证码、由短期 guest 进程环境提供的 Mac Password、`Don't know passcode?`/`Enter Passcode Later` 和 `Don't Merge`。验证码按当前 SMS URL 处理：有时间字段取时间最新，无时间字段取页面顺序最后一条；不复用旧码。邮箱在任意阶段出现即跳过不必要步骤。
 7. 成功证据必须同时包括：七个项目源/宿主共享/guest 挂载哈希一致并记录 `APPLE_ACCOUNT_SHARED_BACKUP=verified`、`APPLE_ACCOUNT_GUEST_MOUNT=verified`，guest helper 退出码为 `0`、Apple Account 详情页邮箱与 Notion `邮箱：` 完全匹配、首次邮箱确认后 System Settings 已关闭、重开后再次确认同一邮箱、第二次确认后保持 System Settings 打开；记录 `APPLE_ACCOUNT=verified`、`UTM_7=verified` 和 `UTM_7_ELAPSED_SECONDS=<seconds>`。邮箱不匹配、账号锁定、CAPTCHA、未知挑战、无法判定最新验证码或第二次复核失败，先按同一 VM 三轮自动恢复/只读复核，穷尽后才进入最后故障卡。
 
 ### `OP-APPLE-WEB-SCRIPT`：`utm-apps` 四脚本同一 Edge 流程
@@ -65,15 +65,15 @@
 3. 页面、账号、应用、会话、恢复和写后回读均由入口脚本处理；调用者只读取退出状态和脚本输出。
 4. 入口故障停止并修复后，执行 `OP-FULL-ENTRY-REPLAY`，重新运行同一入口并从 UTM-10 开始顺序复验。
 
-### `OP-FIXED-PASSWORD-1234`：项目固定 VM 密码
+### `OP-CONFIGURED-GUEST-PASSWORD`：项目宿主配置的 VM 密码
 
-固定密码只有 `1234`，无用户、run 或账号覆盖分支，也不得向用户询问。先按当前提示类型选择唯一子流程：
+唯一权威值是宿主 `.env` 中的 `SUBMISSION_GUEST_PASSWORD`：宿主进程每次使用时读取，必须恰好为四个 ASCII 数字，无用户、run 或账号覆盖分支，也不得向用户询问。值只能经当前操作的 stdin、内存或短期子进程环境传递，不得进入 argv、临时明文文件或日志，任何成功或错误输出均不得回显。先按当前提示类型选择唯一子流程：
 
-- **VM 登录界面**：确认精确 VM、用户和密码框后，分别发送 `1`、`2`、`3`、`4` 四个按键；回读四个圆点，再激活唯一登录按钮。不得通过剪贴板粘贴。
-- **已识别的 macOS/Keychain 授权弹窗或 `Enter Mac Password`**：先确认弹窗所属 guest、应用、当前 attempt 和账号，再把固定值作为本轮项目常量按 `OP-NATIVE-PASTE` 粘贴；回读四个圆点，只点击唯一蓝色 `Allow`、`OK`、`Continue` 或 `Trust`。未知/归属不明弹窗禁止输入。
+- **VM 登录界面**：确认精确 VM、用户和密码框后，从宿主访问器获取当次值并逐个发送四个数字按键；回读四个圆点，再激活唯一登录按钮。不得通过剪贴板粘贴。
+- **已识别的 macOS/Keychain 授权弹窗或 `Enter Mac Password`**：先确认弹窗所属 guest、应用、当前 attempt 和账号，再把当次配置值按 `OP-NATIVE-PASTE` 粘贴；回读四个圆点，只点击唯一蓝色 `Allow`、`OK`、`Continue` 或 `Trust`。未知/归属不明弹窗禁止输入。
 - **宿主 PTY 中的远端 `sudo` 或 `User password` 提示**：只有提示文本、目标 VM/IP/用户和当前命令全部匹配时才交互输入一次；密码不得进入 argv、管道、剪贴板、脚本、输出或日志。随后用新的密码 SSH/身份/权限只读命令验证结果，提示消失本身不算成功；禁止 `ssh-copy-id` 或任何 SSH key 恢复。
 
-成功记录 `FIXED_VM_PASSWORD_CONTEXT=login|gui_auth|pty_prompt` 和 `FIXED_VM_PASSWORD_RESULT=verified`。失败时只恢复同一提示和同一目标；三轮仍失败才允许最后故障卡，绝不改用 Apple Account 密码或让用户代输。
+成功记录 `CONFIGURED_GUEST_PASSWORD_CONTEXT=login|gui_auth|pty_prompt` 和 `CONFIGURED_GUEST_PASSWORD_RESULT=verified`。失败时只恢复同一提示和同一目标；三轮仍失败才允许最后故障卡，绝不改用 Apple Account 密码或让用户代输。
 
 ### `OP-USER-CONFIRMATION`：必须由用户决定的流程步骤
 
@@ -205,7 +205,7 @@ GUI 动作包括窗口切换、点击、双击、右键、菜单移动、按键�
 - 所有 SSH 身份/存活探针除 `ConnectTimeout=5` 外，还必须由宿主执行器设置 `SSH_PROBE_TOTAL_TIMEOUT_SECONDS=12`；`ConnectTimeout=5 只限制 TCP 建连`，不能限制连接建立后的认证、远端 shell 或命令挂起。每轮总超时后结束该轮精确 SSH 子进程，再按同一 VM 做下一轮，最多三轮；不得无限等待或改选用户/VM。
 - 长 SSH 业务命令使用技能正文规定的独立总上限，不能复用 12 秒探针上限。默认用户安全删除固定 `DEMO_DELETE_TOTAL_TIMEOUT_SECONDS=180`；上限只是截止时间，命令提前结束就立即继续。超时后先检查同一 attempt 的远端进程、账号记录和 home，禁止把超时直接当作未执行并盲目重做。
 - 从 SSH 启动当前 console 用户的 Finder 或其他 GUI 应用时，先验证 console user 等于当前目标用户，动态读取 `uid=$(/usr/bin/id -u "$target_user")`，由 root 使用 `/bin/launchctl asuser "$uid"` 进入该 Aqua bootstrap 域，再用 `/usr/bin/sudo -u "$target_user" -H` 降权启动；不得写死 `gui/502`、UID、VM 名或 IP。启动后立即读取该 UID 的进程和最新桌面状态，尚未就绪时仅做条件轮询；普通 SSH 中直接 `open -a Finder` 不算成功。
-- SSH 失败只对同一 VM 自动刷新精确 MAC 对应 IP、检查 Remote Login/端口，并用固定 `1234` 密码 SSH 重新验证用户/home；不得安装、生成、恢复或依赖 SSH key。
+- SSH 失败只对同一 VM 自动刷新精确 MAC 对应 IP、检查 Remote Login/端口，并用 `OP-CONFIGURED-GUEST-PASSWORD` 密码 SSH 重新验证用户/home；不得安装、生成、恢复或依赖 SSH key。
 - GET/只读 API 的瞬态错误按 2、5、10 秒重试三次；写入前必须有 before 快照，写后必须独立回读。
 - 可幂等复制/生成在目标可证明由当前 run 所有且内容不匹配时，重新执行一次并再次比较；已有完全相同内容直接视为已完成。
 - 写入回读失败时，若动作可逆，使用 before 快照自动还原并独立回读；还原成功后才允许发卡报告原写入失败。

@@ -144,11 +144,7 @@ def _password_environment(
     base: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     environment = dict(os.environ if base is None else base)
-    configured_value = (
-        guest_password(environ=base)
-        if base is not None and "SUBMISSION_GUEST_PASSWORD" in base
-        else guest_password()
-    )
+    configured_value = guest_password(environ=base) if base is not None else guest_password()
     environment.update(
         {
             "SSH_ASKPASS": str(Path(__file__).resolve()),

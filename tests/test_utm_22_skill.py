@@ -31,7 +31,7 @@ def main() -> None:
         "/Users/yehailin/Documents/mac提审自动化/scripts/utm_22_upload.py --target '<应用名>-<VM名>'",
         "--archive-path '<精确 xcarchive 绝对路径>'",
         "同一 upload attempt 复用一个 JWT",
-        "不读取项目源码", "固定密码 `1234`", "不启动、重启、恢复或切换 VM",
+        "不读取项目源码", "SUBMISSION_GUEST_PASSWORD", "不启动、重启、恢复或切换 VM",
     ):
         assert value in combined, value
 

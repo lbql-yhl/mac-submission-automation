@@ -7,7 +7,7 @@ description: Use when the same signed-in UTM guest has completed utm-22 and is r
 
 ## 全局自动恢复与最后故障卡规则
 
-本技能调用共享重复操作记忆中的 `OP-NATIVE-PASTE`、`OP-BROWSER-URL-NO-SCHEME`、`OP-APPLE-PHONE-OTP`、`OP-FIXED-PASSWORD-1234` 和 `OP-USER-CONFIRMATION`。故障按三轮“诊断→实际修复→独立复验”处理。
+本技能调用共享重复操作记忆中的 `OP-NATIVE-PASTE`、`OP-BROWSER-URL-NO-SCHEME`、`OP-APPLE-PHONE-OTP`、`OP-CONFIGURED-GUEST-PASSWORD` 和 `OP-USER-CONFIRMATION`。guest 密码唯一来源是宿主 `.env` 的 `SUBMISSION_GUEST_PASSWORD`，不得写死或回显。故障按三轮“诊断→实际修复→独立复验”处理。
 
 执行任何命令前，在项目根目录运行 `eval "$(python3 scripts/preflight.py --project-only --emit-shell)"`，取得当前机器的动态路径。必须先完整遵守 [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md)：固定顺序是自动诊断、自动修复、自动复验，只有智能体确实无法修复时才允许发送飞书故障卡。
 

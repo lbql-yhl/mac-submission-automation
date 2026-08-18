@@ -131,6 +131,11 @@ def test_password_environment_uses_the_checker_itself_without_creating_a_helper(
     assert completed.stdout == dummy_value + "\n"
 
 
+def test_checker_explicit_environment_does_not_fall_back_to_ambient_password() -> None:
+    with pytest.raises(RuntimeError, match="missing required host setting"):
+        _password_environment({"PATH": os.environ["PATH"]})
+
+
 def test_dependency_checker_source_has_no_embedded_askpass_value() -> None:
     source = (ROOT / "scripts" / "check_host_vm_dependencies.py").read_text(
         encoding="utf-8"

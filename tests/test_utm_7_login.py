@@ -78,6 +78,46 @@ class UTM7LoginRunnerTests(unittest.TestCase):
         self.password_patch.stop()
         self.shared_temp.cleanup()
 
+    def test_existing_helper_bridge_temporarily_installs_all_runtime_values(self) -> None:
+        payload = {
+            "APPLE_ACCOUNT_EMAIL": "account@example.test",
+            "APPLE_ACCOUNT_PASSWORD": "initial-secret",
+            "APPLE_ACCOUNT_PHONE": "+1 555 0100",
+            "APPLE_ACCOUNT_SMS_URL": "https://sms.example.test/latest",
+            "SUBMISSION_GUEST_PASSWORD": "6194",
+        }
+        observed_environment: dict[str, str | None] = {}
+
+        def observe_guest_script(path, *, run_name):
+            self.assertEqual(path, "/guest/apple_account_login.py")
+            self.assertEqual(run_name, "__main__")
+            for key in payload:
+                observed_environment[key] = os.environ.get(key)
+            os.environ["SUBMISSION_GUEST_PASSWORD"] = "changed-by-helper"
+
+        original_environment = {
+            "PREEXISTING_GUEST_VALUE": "preserved",
+            "APPLE_ACCOUNT_EMAIL": "preexisting@example.test",
+        }
+        with patch.dict(os.environ, original_environment, clear=True):
+            with patch.object(
+                sys,
+                "stdin",
+                io.StringIO(json.dumps(payload)),
+            ), patch.object(
+                sys,
+                "argv",
+                ["-c", "/guest/apple_account_login.py"],
+            ), patch(
+                "runpy.run_path",
+                side_effect=observe_guest_script,
+            ):
+                exec(runner.EXISTING_HELPER_BRIDGE, {})
+
+            self.assertEqual(os.environ, original_environment)
+
+        self.assertEqual(observed_environment, payload)
+
     def test_main_reports_elapsed_seconds(self) -> None:
         argv = [
             "utm_7_login.py",
@@ -358,6 +398,7 @@ class UTM7LoginRunnerTests(unittest.TestCase):
     def test_persistent_guest_login_failure_reports_sanitized_actual_detail(self) -> None:
         api = FakeNotion()
         detail = "未找到 Email or Phone Number 输入框。"
+        guest_secret = os.environ["SUBMISSION_GUEST_PASSWORD"]
 
         def fake_run(command, **_kwargs):
             command_text = " ".join(str(part) for part in command)
@@ -365,7 +406,7 @@ class UTM7LoginRunnerTests(unittest.TestCase):
                 return SimpleNamespace(
                     returncode=5,
                     stdout=b"",
-                    stderr=(detail + "\n").encode(),
+                    stderr=(f"{detail} runtime={guest_secret}\n").encode(),
                 )
             raise AssertionError(command_text)
 
@@ -391,6 +432,7 @@ class UTM7LoginRunnerTests(unittest.TestCase):
         message = str(raised.exception)
         self.assertNotIn("account@example.test", message)
         self.assertNotIn("initial-secret", message)
+        self.assertNotIn(guest_secret, message)
 
     def test_sms_delivery_timeout_resumes_without_reentering_the_guest_desktop(self) -> None:
         api = FakeNotion()
@@ -516,6 +558,7 @@ class UTM7LoginRunnerTests(unittest.TestCase):
     def test_reads_only_initial_password_for_apple_account_login(self) -> None:
         api = FakeNotion()
         api.values["修改后的密码："] = "modified-secret"
+        guest_secret = "6194"
         captured: dict[str, object] = {}
 
         def fake_run(command, **kwargs):
@@ -542,6 +585,8 @@ class UTM7LoginRunnerTests(unittest.TestCase):
             runner, "api_from_env", return_value=api
         ), patch.object(
             runner.subprocess, "run", side_effect=fake_run
+        ), patch.object(
+            runner, "guest_password", return_value=guest_secret
         ):
             args = SimpleNamespace(
                 vm_user="test1",
@@ -560,6 +605,7 @@ class UTM7LoginRunnerTests(unittest.TestCase):
         payload = json.loads(bytes(captured["payload"]).decode("utf-8"))
         self.assertEqual(payload["APPLE_ACCOUNT_PASSWORD"], "initial-secret")
         self.assertEqual(payload["APPLE_ACCOUNT_EMAIL"], "account@example.test")
+        self.assertEqual(payload["SUBMISSION_GUEST_PASSWORD"], guest_secret)
         final_command = next(
             command
             for command in captured["commands"]
@@ -568,6 +614,11 @@ class UTM7LoginRunnerTests(unittest.TestCase):
         command_text = " ".join(final_command)
         self.assertNotIn("account@example.test", command_text)
         self.assertNotIn("initial-secret", command_text)
+        self.assertNotIn(guest_secret, command_text)
+        self.assertNotIn(guest_secret, stdout.getvalue())
+        for path in Path(self.shared_temp.name).rglob("*"):
+            if path.is_file():
+                self.assertNotIn(guest_secret.encode(), path.read_bytes())
         self.assertIn("APPLE_ACCOUNT=verified", stdout.getvalue())
         self.assertIn("UTM_7=verified", stdout.getvalue())
 

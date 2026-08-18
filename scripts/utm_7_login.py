@@ -73,17 +73,30 @@ ACCESSIBILITY_PROMPT_PROBE = (
     "raise SystemExit(0 if A.AXIsProcessTrustedWithOptions("
     "{A.kAXTrustedCheckOptionPrompt:True}) else 1)"
 )
-EXISTING_HELPER_BRIDGE = (
-    "import json,os,runpy,sys;"
-    "payload=json.load(sys.stdin);"
-    "allowed=('APPLE_ACCOUNT_EMAIL','APPLE_ACCOUNT_PASSWORD',"
-    "'APPLE_ACCOUNT_PHONE','APPLE_ACCOUNT_SMS_URL');"
-    "os.environ.update({key:str(payload[key]) for key in allowed});"
-    "script=sys.argv[1];"
-    "sys.path.insert(0,os.path.dirname(script));"
-    "sys.argv=[script];"
-    "runpy.run_path(script,run_name='__main__')"
+EXISTING_HELPER_BRIDGE = """\
+import json, os, runpy, sys
+payload = json.load(sys.stdin)
+allowed = (
+    "APPLE_ACCOUNT_EMAIL",
+    "APPLE_ACCOUNT_PASSWORD",
+    "APPLE_ACCOUNT_PHONE",
+    "APPLE_ACCOUNT_SMS_URL",
+    "SUBMISSION_GUEST_PASSWORD",
 )
+previous = {key: os.environ[key] for key in allowed if key in os.environ}
+try:
+    os.environ.update({key: str(payload[key]) for key in allowed})
+    script = sys.argv[1]
+    sys.path.insert(0, os.path.dirname(script))
+    sys.argv = [script]
+    runpy.run_path(script, run_name="__main__")
+finally:
+    for key in allowed:
+        if key in previous:
+            os.environ[key] = previous[key]
+        else:
+            os.environ.pop(key, None)
+"""
 
 
 def _read_field(api, page_title: str, label: str) -> str:
@@ -623,6 +636,7 @@ def run(args: argparse.Namespace) -> int:
         raise RuntimeError("vm-user must be a simple macOS account name")
     if not args.vm_ip or any(char not in "0123456789abcdefABCDEF:." for char in args.vm_ip):
         raise RuntimeError("vm-ip must be a literal IPv4/IPv6 address")
+    configured_guest_password = guest_password()
 
     api = api_from_env()
     api.verify_parent(args.parent_title)
@@ -646,6 +660,7 @@ def run(args: argparse.Namespace) -> int:
         "APPLE_ACCOUNT_PASSWORD": password,
         "APPLE_ACCOUNT_PHONE": phone,
         "APPLE_ACCOUNT_SMS_URL": sms_url,
+        "SUBMISSION_GUEST_PASSWORD": configured_guest_password,
     }
     remote_script = f"{guest_dir}/apple_account_login.py"
     login_command = _ssh_args(args.vm_user, args.vm_ip) + [
@@ -665,7 +680,7 @@ def run(args: argparse.Namespace) -> int:
         raw_detail = result.stderr or result.stdout or b""
         detail = _redacted_process_detail(
             raw_detail,
-            (email, password, phone, sms_url),
+            (email, password, phone, sms_url, configured_guest_password),
         )
         if attempt < 2:
             if "短信页面中未找到唯一可识别的六位验证码" in detail:

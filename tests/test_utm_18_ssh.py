@@ -53,7 +53,9 @@ def test_wrapper_builds_password_ssh_command_without_exposing_password(monkeypat
     assert "PubkeyAuthentication=no" in joined
     assert "PreferredAuthentications=password,keyboard-interactive" in joined
     assert synthetic_value not in joined
-    assert env["SUBMISSION_GUEST_PASSWORD"] == synthetic_value
+    assert "SUBMISSION_GUEST_PASSWORD" not in env
+    assert env["SUBMISSION_SSH_ASKPASS_SOCKET"]
+    assert env["SUBMISSION_SSH_ASKPASS_CAPABILITY"]
     assert env["SSH_ASKPASS_REQUIRE"] == "force"
 
 

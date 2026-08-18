@@ -4,19 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import sys
 import time
-from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, List, Optional
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from services.host_config import guest_password  # noqa: E402
-
-from find_system_settings_general import (  # noqa: E402
+from find_system_settings_general import (
     AX,
     LOGIN_CONTINUE_TEXT,
     MINIMUM_GUI_SETTLE_SECONDS,
@@ -43,6 +38,22 @@ MAC_PASSWORD_PROMPT_TEXTS = (
     MAC_PASSWORD_PROMPT_TEXT,
     APPLE_ACCOUNT_CHANGES_PROMPT_TEXT,
 )
+
+
+def guest_password(*, environ: Mapping[str, str] | None = None) -> str:
+    """Read the short-lived guest runtime password without host dependencies."""
+    runtime_environment = os.environ if environ is None else environ
+    value = str(runtime_environment.get("SUBMISSION_GUEST_PASSWORD", "")).strip()
+    if not value:
+        raise RuntimeError(
+            "missing required guest runtime setting: SUBMISSION_GUEST_PASSWORD"
+        )
+    if re.fullmatch(r"[0-9]{4}", value) is None:
+        raise RuntimeError(
+            "invalid guest runtime setting: SUBMISSION_GUEST_PASSWORD must be "
+            "exactly four ASCII digits"
+        )
+    return value
 
 
 def find_mac_password_field(roots: List[Any]) -> Optional[Any]:

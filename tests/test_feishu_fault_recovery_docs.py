@@ -35,7 +35,7 @@ def main() -> None:
         "OP-NATIVE-PASTE",
         "OP-BROWSER-URL-NO-SCHEME",
         "OP-APPLE-PHONE-OTP",
-        "OP-FIXED-PASSWORD-1234",
+        "OP-CONFIGURED-GUEST-PASSWORD",
         "OP-USER-CONFIRMATION",
         "scripts/shared_operations.py browser-url",
         "少于三轮时禁止调用 `notify-fault`",

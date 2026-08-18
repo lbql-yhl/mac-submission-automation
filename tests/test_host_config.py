@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 from pathlib import Path
+import stat
 
 import pytest
 
@@ -65,6 +66,27 @@ def test_dotenv_is_a_read_only_fallback(
 
     assert module.optional_setting(TEST_SETTING, env_path=env_path) == "from-file"
     assert dict(os.environ) == before
+
+
+def test_dotenv_symlink_is_rejected_without_reading_or_modifying_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_module()
+    synthetic_value = "9072"
+    external = tmp_path / "external.env"
+    external.write_text(f"{TEST_SETTING}={synthetic_value}\n", encoding="utf-8")
+    external.chmod(0o640)
+    env_path = tmp_path / ".env"
+    env_path.symlink_to(external)
+    monkeypatch.delenv(TEST_SETTING, raising=False)
+    before_mode = stat.S_IMODE(external.stat().st_mode)
+
+    with pytest.raises(module.ConfigurationError) as captured:
+        module.optional_setting(TEST_SETTING, env_path=env_path)
+
+    assert synthetic_value not in str(captured.value)
+    assert stat.S_IMODE(external.stat().st_mode) == before_mode
+    assert external.read_text(encoding="utf-8") == f"{TEST_SETTING}={synthetic_value}\n"
 
 
 def test_required_setting_fails_with_only_the_setting_name() -> None:

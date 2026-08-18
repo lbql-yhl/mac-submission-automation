@@ -2,13 +2,13 @@
 
 对应技能：`utm-21`。
 
-SSH 直接继承 `utm-p8` 已验证的同一 VM/IP/用户和固定密码身份。连接失效时只对同一精确 VM 自动刷新 IP、修复 Remote Login 并用固定 `1234` 恢复，不得向用户索取密码、SSH Key、IP 或等待 SSH 人工处理。仓库读取和克隆统一由 `scripts/utm_21_clone.py` 完成：代码链接由 Notion API 在脚本内读取，Codeup 凭据只从本机 `.env` 进入内存并通过 SSH stdin 使用，不出现在 URL、argv、日志或仓库配置中。
+SSH 直接继承 `utm-p8` 已验证的同一 VM/IP/用户和已配置密码身份。密码唯一来源是宿主 `.env` 的 `SUBMISSION_GUEST_PASSWORD`，仅通过项目密码封装使用，不得回显。连接失效时只对同一精确 VM 自动刷新 IP、修复 Remote Login 并用当次配置值恢复，不得向用户索取密码、SSH Key、IP 或等待 SSH 人工处理。仓库读取和克隆统一由 `scripts/utm_21_clone.py` 完成：代码链接由 Notion API 在脚本内读取，Codeup 凭据只从本机 `.env` 进入内存并通过 SSH stdin 使用，不出现在 URL、argv、日志或仓库配置中。
 
 ## 前置检查
 
 - [ ] `utm-p8` 已完成，沿用当前 `app_name`、`vm_name`、原 `chat_id` 和同一 UTM guest。
 - [ ] 在项目根目录先运行 `python3 scripts/notion_api.py verify-parent --title '<宿主机名称>'`，再通过 `read-field --copy` 从唯一 `<app_name>-<vm_name>` 页面实时读取 `代码链接：`、`APP_ID：`、`正式包名: `；不读取 `runtime/feishu-runs.json`，不用旧 run、`.env` 或对话缓存。
-- [ ] 复用 `utm-p8` 继承的 VM IP，只做一次固定密码 SSH 用户/home 检查；连接失效时按上面的 SSH 全自动约束恢复。
+- [ ] 复用 `utm-p8` 继承的 VM IP，只做一次宿主配置密码 SSH 用户/home 检查；连接失效时按上面的 SSH 全自动约束恢复。
 - [ ] 所有步骤自动继续；最终检查通过后记录 `UTM_21=verified`，由 `utm-22` 接手。
 
 ## 操作 Checklist

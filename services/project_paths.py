@@ -5,6 +5,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+try:
+    from services.host_config import optional_setting
+except ModuleNotFoundError:  # Support direct ``python services/feishu_bot.py`` use.
+    from host_config import optional_setting
+
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,11 +29,8 @@ def load_project_env(path: Path) -> None:
         os.environ.setdefault(key, value.strip().strip('"').strip("'"))
 
 
-load_project_env(SOURCE_ROOT / ".env")
-
-
 def configured_path(name: str, default: Path) -> Path:
-    raw = os.getenv(name, "").strip()
+    raw = optional_setting(name, env_path=SOURCE_ROOT / ".env")
     if not raw:
         return default.expanduser().resolve()
     return Path(os.path.expandvars(os.path.expanduser(raw))).resolve()

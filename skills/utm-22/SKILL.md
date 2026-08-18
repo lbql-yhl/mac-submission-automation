@@ -7,7 +7,7 @@ description: Use after utm-21 when the same UTM guest is ready for Xcode archive
 
 ## 全局自动恢复与最后故障卡规则
 
-本技能调用共享重复操作记忆中的 `OP-NATIVE-PASTE`、`OP-BROWSER-URL-NO-SCHEME`、`OP-APPLE-PHONE-OTP`、`OP-FIXED-PASSWORD-1234` 和 `OP-USER-CONFIRMATION`。故障按三轮“诊断→实际修复→独立复验”处理。
+本技能调用共享重复操作记忆中的 `OP-NATIVE-PASTE`、`OP-BROWSER-URL-NO-SCHEME`、`OP-APPLE-PHONE-OTP`、`OP-CONFIGURED-GUEST-PASSWORD` 和 `OP-USER-CONFIRMATION`。故障按三轮“诊断→实际修复→独立复验”处理。
 
 执行任何命令前，运行 `eval "$(python3 /Users/yehailin/Documents/mac提审自动化/scripts/preflight.py --project-only --emit-shell)"`，取得当前机器的动态路径。必须先完整遵守 [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md)：固定顺序是自动诊断、自动修复、自动复验，只有智能体确实无法修复时才允许发送飞书故障卡。
 
@@ -92,7 +92,7 @@ Xcode GUI 操作复用当前 Computer Use 的 `node_repl`/`sky` 驱动器；它�
 
 ## SSH 全自动约束
 
-- 只继承同一精确 VM/IP 与 `<vm_name>` 身份。所有 SSH/SCP 统一调用项目固定密码封装，固定密码 `1234`；不安装、生成、恢复或依赖 SSH Key，也不向用户索取密码、SSH Key 或 IP。
+- 只继承同一精确 VM/IP 与 `<vm_name>` 身份。所有 SSH/SCP 统一调用项目密码封装，密码只由宿主 `.env` 的 `SUBMISSION_GUEST_PASSWORD` 按 `OP-CONFIGURED-GUEST-PASSWORD` 提供；不安装、生成、恢复或依赖 SSH Key，也不向用户索取密码、SSH Key 或 IP。
 - SSH key 认证失败不是人工处理节点，入口直接使用密码 SSH。连接返回 `255` 时只探测同一 attempt 和同一远端进程：进程仍在则等待；attempt 已存在则按 ledger 恢复；两者都不存在且证明不可逆动作未开始才允许同参数重进。最多三轮，绝不创建第二个上传。
 - 恢复后重新验证用户/home；仍失败时记录 `SSH_AUTO_RECOVERY=blocked`，先按 `utm-22-ssh-auto-recovery` 执行本技能自动恢复矩阵；恢复穷尽后才发送最后故障卡；不选择其他 VM、workspace 或 Archive。
 
@@ -107,7 +107,7 @@ Xcode GUI 操作复用当前 Computer Use 的 `node_repl`/`sky` 驱动器；它�
 
 ### 一、继承 guest 并确认 Xcode
 
-1. 要求前序已明确记录 `UTM_21=verified`，直接继承其 `vm_name`、VM IP、SSH 用户/home 和 `REPO_PATH`。用 `/Users/yehailin/Documents/mac提审自动化/scripts/ssh_password.py` 提供的固定密码 SSH 封装做一次只读身份检查，并验证工作区唯一存在：
+1. 要求前序已明确记录 `UTM_21=verified`，直接继承其 `vm_name`、VM IP、SSH 用户/home 和 `REPO_PATH`。用 `/Users/yehailin/Documents/mac提审自动化/scripts/ssh_password.py` 提供的宿主配置密码 SSH 封装做一次只读身份检查，并验证工作区唯一存在：
 
    ```text
    /Users/<vm_name>/StudioProjects/<repo_name>/ios/Runner.xcworkspace
@@ -115,7 +115,7 @@ Xcode GUI 操作复用当前 Computer Use 的 `node_repl`/`sky` 驱动器；它�
 
    正常路径不得重新扫描 started VM、MAC 或 ARP。只有继承 IP 已不可达时，才允许按该 `<vm_name>.utm` 的精确配置 MAC 刷新一次 IP，再重复同一 SSH 身份/workspace 检查；禁止选择其他或“最新”VM。
 2. 通过正在运行的 Xcode PID 读取实际 `.app` bundle 路径、bundle identifier、`CFBundleShortVersionString` 和 `CFBundleVersion`；不能只检查 `/Applications/Xcode.app` 后就假定它是实际运行版本。若有多个 Xcode 进程，先只读关联窗口标题、前台 PID 和打开的 `Runner.xcworkspace` 路径，只接受唯一持有当前 workspace 的进程；仍不唯一时用第 3 步的精确 bundle/path 重新执行 `open` 并重读，不关闭其他 Xcode、不猜版本。这个可逆恢复完整执行三轮且每轮独立归属核对；三轮仍无法唯一归属才记录恢复证据并进入最后故障卡。
-3. 通过同一固定密码 SSH 封装执行远端参数 `open -a '<已验证的 Xcode.app 绝对路径>' '/Users/<vm_name>/StudioProjects/<repo_name>/ios/Runner.xcworkspace'`。`open -a` 使用的路径必须与上一步读取版本的 Xcode bundle 完全相同，禁止退回应用名让系统另选一个 Xcode。
+3. 通过同一宿主配置密码 SSH 封装执行远端参数 `open -a '<已验证的 Xcode.app 绝对路径>' '/Users/<vm_name>/StudioProjects/<repo_name>/ios/Runner.xcworkspace'`。`open -a` 使用的路径必须与上一步读取版本的 Xcode bundle 完全相同，禁止退回应用名让系统另选一个 Xcode。
 
 4. 等待至少 3 秒并确认 Xcode 显示 `Runner` 和 `Pods`，窗口标题/Recent 路径都指向当前 `Runner.xcworkspace`。出现 Downloads 权限弹窗时，确认弹窗进程、标题和当前 Xcode 一致后点击唯一 `Allow`，再等待至少 3 秒确认弹窗消失；误开菜单或错误弹窗时先按 `Escape`/`Cancel` 回到 workspace，作废旧坐标、重读最新截图并记录 `XCODE_GUI_RECOVERY=verified`。未知 TCC 或安全弹窗先独立只读识别三轮；只有三轮均证明系统明确要求无法自动取得的外部授权时才进入最后故障卡。
 
@@ -137,7 +137,7 @@ Xcode GUI 操作复用当前 Computer Use 的 `node_repl`/`sky` 驱动器；它�
 
 1. Archive 前生成稳定 UUID `ARCHIVE_ATTEMPT_ID`，在宿主 `${PROJECT_ROOT}/runtime/utm-22-attempts/<current-run-id>/archive-<id>.json` 用同目录 mode-600 临时文件、`fsync`、原子替换创建 ledger；父目录 mode 700。固定 schema 包含 run/VM/IP/REPO_PATH、App/Bundle ID、四层一致的版本/构建号、Team、Xcode bundle 路径及版本、`prepared_at`、Organizer 前置清单 manifest hash 和 `state=prepared`，不得含账号或签名密钥。独立回读内容、权限和 ID 后记录 `ARCHIVE_LEDGER_MODE=600`。再次确认 scheme 为 `Runner`、目标为 `Any iOS Device (arm64)`、签名页无警告。
 2. 点击前把同一 ledger 原子更新为 `state=clicking`。点击 `Product` 后等待至少 3 秒，读取最新菜单；只有 `Archive` 本身蓝色高亮且可用时点击一次，并立即把 ledger 更新为 `state=clicked_result_unknown`。若误点其他菜单项或菜单关闭且 ledger 尚未进入 clicking，先按 `Escape` 回到 Runner workspace、重读全部锚点并重做当前最小动作；一旦进入 clicking，任何结果不明都只读恢复。构建只能由这次 Xcode GUI 点击触发，不使用命令行构建器。
-3. 出现 Xcode Cloud 弹窗时，核对进程/标题属于当前 Archive attempt 后点击唯一 `Don't Ask Again`；出现 Keychain/codesign 授权弹窗时使用固定 guest 密码并点击唯一 `Always Allow`。每次点击后等待至少 3 秒并确认对应弹窗消失，错误弹窗用 `Cancel`/`Escape` 回滚后重新定位。
+3. 出现 Xcode Cloud 弹窗时，核对进程/标题属于当前 Archive attempt 后点击唯一 `Don't Ask Again`；出现 Keychain/codesign 授权弹窗时使用当次宿主配置的 guest 密码并点击唯一 `Always Allow`。每次点击后等待至少 3 秒并确认对应弹窗消失，错误弹窗用 `Cancel`/`Escape` 回滚后重新定位。
 4. 只读观察当前 attempt 的 Xcode 构建活动、Report Navigator、派生日志和 Organizer。成功必须以 Organizer `Archives` 页面出现新 `Runner` Archive 为准，不能只凭进度条消失或日志无红字判断。结果不明时在 15/30/60/120 秒窗口继续只读核对同一 attempt；只有构建活动、日志和 Archive 清单三者共同证明点击未启动且没有新 Archive，才允许返回第 2 步再点击一次。任何已启动、已生成或仍 ambiguous 状态都禁止第二次 Archive。
 5. 在 Organizer 中只选择同时匹配当前 App、Bundle ID、版本、构建号、Team、`ARCHIVE_ATTEMPT_ID` 时间窗且不在前置清单中的唯一新 Archive；不得仅按“修改时间最新”选择。实际 Archive Info.plist 的 marketing/build 必须与第二区块账本一致，否则本轮失败，不得修改 Archive。
 
@@ -230,7 +230,7 @@ You must add the com.apple.developer.game-center key in Xcode.
 
 ## 已固化错误与安全恢复
 
-- SSH key 失败或未安装 key：不修 key，始终切到固定密码 `1234` 的统一封装；`SSH_EXIT=255` 只恢复同一 attempt，最多三轮。
+- SSH key 失败或未安装 key：不修 key，始终切到 `OP-CONFIGURED-GUEST-PASSWORD` 的统一封装；`SSH_EXIT=255` 只恢复同一 attempt，最多三轮。
 - `private_key_path` 为相对路径：以 `apple-store-bm` 项目根解析，不以 `config/` 子目录重复拼接；P8 文件名必须精确为 `AuthKey_<Key ID>.p8`，且为非符号链接普通非空文件。
 - 同一应用/Bundle ID 匹配零个或多个 Archive：记录 `ARCHIVE_MATCH_COUNT` 并停止；绝不按“最新”或修改时间猜测。人工 `--target` 现场只有已独立验证的精确绝对路径可通过 `--archive-path` 把候选缩小为一个。
 - `.xcarchive/Info.plist` 合法包含 `CreationDate` 日期对象，`plutil -lint` 可通过但整份 `plutil -convert json` 会报 `invalid object in plist for destination format`。Archive 发现阶段只验证该顶层文件存在，不把它整体转成 JSON；应用名、Bundle ID、版本和构建号只从唯一 `.app/Info.plist` 读取。命中该旧 helper 错误时，先证明顶层 plist lint 成功且 `.app/Info.plist` 可解析，再更新固定 distributor helper 并重跑同一入口；因为失败发生在 upload attempt 和任何 Apple 创建请求之前，不得改 Archive 或另建 Archive。

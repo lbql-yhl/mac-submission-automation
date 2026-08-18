@@ -9,7 +9,7 @@ Xcode GUI：打开 workspace → 签名/Profile → Product > Archive
 
 Archive 成功后不点击 Xcode 的 `Distribute App`，也不改用 Transporter；上传对外只走 `/Users/yehailin/Documents/mac提审自动化/scripts/utm_22_upload.py`，内部复用 `/Users/yehailin/Documents/mac提审自动化/scripts/utm_22_distribute.mjs`。
 
-SSH 直接继承 `utm-21` 已验证的同一 VM/IP/用户，统一使用固定密码 `1234`，明确禁用 SSH key 依赖。连接失效时只恢复同一精确 VM 和同一 upload attempt，不向用户索取密码、SSH Key 或 IP。
+SSH 直接继承 `utm-21` 已验证的同一 VM/IP/用户，统一使用宿主 `.env` 的 `SUBMISSION_GUEST_PASSWORD` 和项目密码封装，明确禁用 SSH key 依赖。连接失效时只恢复同一精确 VM 和同一 upload attempt，不向用户索取密码、SSH Key 或 IP，不得回显配置值。
 
 ## 一条命令入口
 
@@ -39,9 +39,9 @@ SSH 直接继承 `utm-21` 已验证的同一 VM/IP/用户，统一使用固定�
 
 ## 操作步骤
 
-1. 确认 `UTM_21=verified`，直接继承其 `vm_name`、VM IP、SSH 用户/home 和 `REPO_PATH`；用 `/Users/yehailin/Documents/mac提审自动化/scripts/ssh_password.py` 的固定密码封装做一次只读 SSH，验证身份与唯一工作区 `/Users/<vm_name>/StudioProjects/<repo_name>/ios/Runner.xcworkspace`。正常路径不扫描 VM/MAC/ARP；连接失效时按上面的 SSH 全自动约束恢复。
+1. 确认 `UTM_21=verified`，直接继承其 `vm_name`、VM IP、SSH 用户/home 和 `REPO_PATH`；用 `/Users/yehailin/Documents/mac提审自动化/scripts/ssh_password.py` 的宿主配置密码封装做一次只读 SSH，验证身份与唯一工作区 `/Users/<vm_name>/StudioProjects/<repo_name>/ios/Runner.xcworkspace`。正常路径不扫描 VM/MAC/ARP；连接失效时按上面的 SSH 全自动约束恢复。
 2. 从实际运行的 Xcode 进程读取 `.app` bundle 路径和版本/build；不能只看 `/Applications/Xcode.app`。
-3. 通过同一固定密码 guest SSH 封装执行 `open -a '<已验证的 Xcode.app 绝对路径>' '<workspace>'`；应用路径必须与上一步读取版本的 bundle 完全相同，禁止只写应用名让系统另选 Xcode。等待 Xcode 稳定显示 `Runner` 和 `Pods`；Downloads 权限弹窗确认归属后点击 `Allow`。
+3. 通过同一宿主配置密码 guest SSH 封装执行 `open -a '<已验证的 Xcode.app 绝对路径>' '<workspace>'`；应用路径必须与上一步读取版本的 bundle 完全相同，禁止只写应用名让系统另选 Xcode。等待 Xcode 稳定显示 `Runner` 和 `Pods`；Downloads 权限弹窗确认归属后点击 `Allow`。
 4. 点击 `Runner` → `Signing & Capabilities`，确认目标为 `Any iOS Device (arm64)`。版本/构建号必须四层一致：`pubspec.yaml` 的 `version:`、Flutter 生成配置中的 `FLUTTER_BUILD_NAME/NUMBER`、Runner target 的 `MARKETING_VERSION/CURRENT_PROJECT_VERSION`、Xcode 界面当前值。把非敏感值与各来源文件 SHA-256 写入 ledger，独立回读后记录 `VERSION_BUILD_SOURCE=verified`；不一致时不得猜值或只改 Xcode 显示值。
 5. `Provisioning Profile=None` 时点击 `None`，只在 `Download Profile...` 自身蓝色高亮后确认；如需账号，使用当前匹配 `<应用名>-<vm_name>` 的账号登录。
 6. 选择当前应用和 bundle ID 唯一匹配的 App Store Profile，确认 `Team`、`Signing Certificate=Apple Distribution` 属于同一当前 Team，且无红黄警告；不得照抄任何旧运行的应用、人员、证书或 Team 值。
@@ -79,7 +79,7 @@ SSH 直接继承 `utm-21` 已验证的同一 VM/IP/用户，统一使用固定�
 
 ## 脚本自动恢复范围
 
-- SSH key 不可用时直接使用固定密码 `1234`；`SSH_EXIT=255` 只检查同一进程和同一 attempt，最多三轮，绝不重复创建上传。
+- SSH key 不可用时直接使用当次宿主配置的 guest 密码；`SSH_EXIT=255` 只检查同一进程和同一 attempt，最多三轮，绝不重复创建上传。
 - `prod.yml` 的相对 `private_key_path` 按 `apple-store-bm` 根目录解析；P8 必须精确匹配 `AuthKey_<Key ID>.p8`，且是普通、非空、非符号链接文件。
 - Archive 或 App 匹配为零/多个时停止，不按“最新”、第一条或修改时间猜测。人工 `--target` 现场只有已独立验证的精确绝对路径可通过 `--archive-path` 缩小候选。
 - `.xcarchive/Info.plist` 的合法 `CreationDate` 是日期对象：允许 `plutil -lint` 成功但整份 JSON 转换失败。发现 Archive 时只验证顶层 plist 存在；应用名、Bundle ID、版本和构建号只从唯一 `.app/Info.plist` 读取，禁止为了绕过 `invalid object in plist for destination format` 修改 Archive。旧 helper 在 upload attempt 创建前命中该错误时，独立验证顶层 lint 和 App plist 后更新固定 helper，再复用同一入口。

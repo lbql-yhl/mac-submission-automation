@@ -1,13 +1,75 @@
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import mac_password_prompt as prompt  # noqa: E402
+
+
+def test_flat_guest_deployment_imports_without_services(
+    tmp_path: Path,
+) -> None:
+    deployed_script = tmp_path / "mac_password_prompt.py"
+    shutil.copy2(ROOT / "scripts" / "mac_password_prompt.py", deployed_script)
+    guest_secret = "6194"
+    probe = """
+import runpy
+import sys
+import types
+
+class FlatDependency(types.ModuleType):
+    def __getattr__(self, name):
+        return None
+
+sys.modules["find_system_settings_general"] = FlatDependency(
+    "find_system_settings_general"
+)
+namespace = runpy.run_path(sys.argv[1])
+print(namespace["guest_password"]())
+"""
+    child_environment = os.environ.copy()
+    child_environment["SUBMISSION_GUEST_PASSWORD"] = guest_secret
+
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", probe, str(deployed_script)],
+        cwd=tmp_path,
+        env=child_environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == guest_secret
+    assert "ModuleNotFoundError" not in result.stderr
+    assert not (tmp_path / "services").exists()
+
+
+def test_guest_password_fails_closed_when_runtime_value_is_missing(
+    monkeypatch,
+    capsys,
+) -> None:
+    unrelated_secret = "must-not-be-echoed"
+    monkeypatch.delenv("SUBMISSION_GUEST_PASSWORD", raising=False)
+    monkeypatch.setenv("UNRELATED_SECRET", unrelated_secret)
+
+    with pytest.raises(RuntimeError) as raised:
+        prompt.guest_password()
+
+    captured = capsys.readouterr()
+    assert "SUBMISSION_GUEST_PASSWORD" in str(raised.value)
+    assert unrelated_secret not in str(raised.value)
+    assert unrelated_secret not in captured.out
+    assert unrelated_secret not in captured.err
 
 
 def test_secure_field_accepts_exact_length_when_macos_uses_private_mask_glyphs(
