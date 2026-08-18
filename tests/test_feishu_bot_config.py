@@ -174,6 +174,33 @@ def test_integer_parser_redacts_type_errors(feishu_bot: ModuleType) -> None:
     )
 
 
+@pytest.mark.parametrize("invalid_value", ("0", "sensitive-not-an-integer"))
+def test_send_retries_rejects_zero_or_invalid_without_network_or_value_leak(
+    feishu_bot: ModuleType,
+    invalid_value: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        feishu_bot.request,
+        "urlopen",
+        lambda *_args, **_kwargs: pytest.fail(
+            "invalid FEISHU_SEND_RETRIES must fail before network"
+        ),
+    )
+
+    with pytest.raises(ConfigurationError) as captured:
+        feishu_bot.load_config(
+            environ={
+                "FEISHU_DAILY_REPORT_CHAT_ID": "report-chat",
+                "FEISHU_SEND_RETRIES": invalid_value,
+            }
+        )
+
+    assert str(captured.value) == (
+        "invalid host setting: FEISHU_SEND_RETRIES must be an integer between 1 and 100"
+    )
+
+
 def test_main_help_parses_before_loading_host_configuration(
     feishu_bot: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
@@ -283,6 +310,54 @@ def test_serve_ws_registers_message_and_card_handlers_with_same_config_snapshot(
 
     assert observed["message_config"] is config_v1
     assert observed["card_route"] == ("host-v1", "report-v1")
+
+
+def test_serve_registers_http_handler_with_startup_config_snapshot(
+    feishu_bot: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "FEISHU_DAILY_REPORT_CHAT_ID=report-v1\n"
+        "SUBMISSION_HOST_MACHINE=host-v1\n",
+        encoding="utf-8",
+    )
+    config_v1 = feishu_bot.load_config(environ={}, env_path=env_path)
+    env_path.write_text(
+        "FEISHU_DAILY_REPORT_CHAT_ID=report-v2\n"
+        "SUBMISSION_HOST_MACHINE=host-v2\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    class FakeServer:
+        def __init__(self, address: tuple[str, int], handler: type) -> None:
+            captured["address"] = address
+            captured["handler"] = handler
+
+        def serve_forever(self) -> None:
+            pass
+
+        def server_close(self) -> None:
+            pass
+
+    monkeypatch.setattr(feishu_bot, "RUNTIME_DIR", tmp_path / "runtime")
+    monkeypatch.setattr(feishu_bot, "ReusableThreadingHTTPServer", FakeServer)
+    monkeypatch.setattr(
+        feishu_bot,
+        "load_config",
+        lambda **_kwargs: pytest.fail("serve must not reload configuration"),
+    )
+
+    args = SimpleNamespace(host="127.0.0.1", port=18787)
+    assert feishu_bot.serve(args, config_v1) == 0
+
+    handler = captured["handler"]
+    assert handler.config is config_v1  # type: ignore[union-attr]
+    assert handler.client.config is config_v1  # type: ignore[union-attr]
+    assert handler.config.daily_report_chat_id == "report-v1"  # type: ignore[union-attr]
+    assert handler.config.submission_host_machine == "host-v1"  # type: ignore[union-attr]
 
 
 def test_daily_report_chat_is_loaded_and_used_by_routing_guards(

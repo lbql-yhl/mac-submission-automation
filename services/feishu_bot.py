@@ -196,7 +196,7 @@ def load_config(
             settings,
             "FEISHU_SEND_RETRIES",
             default=3,
-            minimum=0,
+            minimum=1,
             maximum=100,
         ),
         send_timeout_seconds=integer_setting(

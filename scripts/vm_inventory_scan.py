@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 import re
 import sys
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,14 +21,14 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from services.feishu_gateway import FeishuSendError, read_env_file, send_text_message  # noqa: E402
-from services.host_config import required_setting  # noqa: E402
-from services.project_paths import PROJECT_ROOT, VM_IMAGES_DIR  # noqa: E402
-from scripts.utm_clone_macos import read_identity  # noqa: E402
+from services.feishu_gateway import FeishuSendError, send_text_message  # noqa: E402
+from services.host_config import (  # noqa: E402
+    ConfigurationError,
+    host_settings_snapshot,
+)
 from scripts.vm_inventory import InventoryError, register_existing, scan_inventory  # noqa: E402
 
 
-DEFAULT_DATABASE = PROJECT_ROOT / "runtime" / "vm-inventory.sqlite3"
 VM_NAME_RE = re.compile(r"^[a-z]{4}$")
 
 
@@ -76,10 +76,6 @@ def report_sha256(report: str) -> str:
     return hashlib.sha256(report.encode("utf-8")).hexdigest()
 
 
-def _setting(name: str, env_file: dict[str, str]) -> str:
-    return os.environ.get(name, "").strip() or env_file.get(name, "").strip()
-
-
 def _bundle_created_at(bundle: Path) -> str:
     stat_result = bundle.stat()
     timestamp = getattr(stat_result, "st_birthtime", stat_result.st_ctime)
@@ -95,6 +91,8 @@ def _register_confirmed_bundles(
     """Register only explicitly approved existing bundles; never discover-and-add."""
     if not names:
         return []
+    from scripts.utm_clone_macos import read_identity
+
     registered: list[str] = []
     for name in names:
         if not VM_NAME_RE.fullmatch(name):
@@ -123,28 +121,38 @@ def _register_confirmed_bundles(
     return registered
 
 
-def _send_report(report: str, digest: str, approval_sha256: str | None) -> None:
+def _send_report(
+    report: str,
+    digest: str,
+    approval_sha256: str | None,
+    *,
+    environ: Mapping[str, str] | None = None,
+    env_path: Path | None = None,
+) -> None:
     if not approval_sha256 or approval_sha256.strip().lower() != digest:
         raise RuntimeError(
             "refusing Feishu delivery: --approval-sha256 must exactly match the preview REPORT_SHA256"
         )
-    env_file = read_env_file(PROJECT_ROOT / ".env")
-    app_id = _setting("FEISHU_APP_ID", env_file)
-    app_secret = _setting("FEISHU_APP_SECRET", env_file)
-    if not app_id or not app_secret:
-        raise RuntimeError("FEISHU_APP_ID/FEISHU_APP_SECRET are required for delivery")
-    daily_report_chat_id = required_setting(
-        "FEISHU_DAILY_REPORT_CHAT_ID",
-        env_path=PROJECT_ROOT / ".env",
-    )
+    settings_path = ROOT / ".env" if env_path is None and environ is None else env_path
+    settings = host_settings_snapshot(environ=environ, env_path=settings_path)
+
+    def required(name: str) -> str:
+        value = str(settings.get(name, "")).strip()
+        if not value:
+            raise ConfigurationError(f"missing required host setting: {name}")
+        return value
+
+    app_id = required("FEISHU_APP_ID")
+    app_secret = required("FEISHU_APP_SECRET")
+    daily_report_chat_id = required("FEISHU_DAILY_REPORT_CHAT_ID")
     # Never accept a command-line chat id, which could bypass the red-line guard.
     send_text_message(app_id, app_secret, daily_report_chat_id, report)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Scan and report the standalone UTM VM inventory")
-    parser.add_argument("--images-dir", type=Path, default=VM_IMAGES_DIR)
-    parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
+    parser.add_argument("--images-dir", type=Path)
+    parser.add_argument("--database", type=Path)
     parser.add_argument(
         "--register-existing",
         nargs="+",
@@ -165,17 +173,25 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        images_dir = args.images_dir.expanduser()
+        if args.images_dir is None or args.database is None:
+            from services.project_paths import PROJECT_ROOT, VM_IMAGES_DIR
+
+            images_dir = args.images_dir or VM_IMAGES_DIR
+            database = args.database or PROJECT_ROOT / "runtime" / "vm-inventory.sqlite3"
+        else:
+            images_dir = args.images_dir
+            database = args.database
+        images_dir = images_dir.expanduser()
         if images_dir.is_symlink():
             raise InventoryError("images directory must be an existing non-symlink directory")
         images_dir = images_dir.resolve()
         _register_confirmed_bundles(
-            args.database,
+            database,
             images_dir,
             list(args.register_existing or []),
             args.application_name,
         )
-        result = scan_inventory(args.database, images_dir)
+        result = scan_inventory(database, images_dir)
         report = build_report(result)
         digest = report_sha256(report)
         print(report, end="")
