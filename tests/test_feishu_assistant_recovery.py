@@ -87,7 +87,7 @@ def test_websocket_and_poller_reply_once() -> None:
             patch.object(feishu_bot, "fetch_chat_messages", return_value=[history_item]),
             patch.object(feishu_bot.threading, "Thread", ImmediateThread),
         ):
-            feishu_bot.handle_ws_message_receive(event)
+            feishu_bot.handle_ws_message_receive(event, config)
             assert feishu_bot.poll_once(config, ["oc_allowed"]) == 0
 
     assert sent == [("oc_allowed", "测试回复")]

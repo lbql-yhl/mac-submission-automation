@@ -7,7 +7,7 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
-from types import ModuleType
+from types import MappingProxyType, ModuleType, SimpleNamespace
 
 import pytest
 
@@ -89,6 +89,200 @@ def test_load_config_reads_without_mutating_process_environment(
     assert config.daily_report_chat_id == "configured-report-chat"
     assert config.submission_host_machine == "Configured Host"
     assert dict(os.environ) == before
+
+
+def test_load_config_uses_one_immutable_snapshot_without_cross_version_splicing(
+    feishu_bot: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshots = iter(
+        (
+            MappingProxyType(
+                {
+                    "FEISHU_DAILY_REPORT_CHAT_ID": "report-v1",
+                    "SUBMISSION_HOST_MACHINE": "host-v1",
+                }
+            ),
+            MappingProxyType(
+                {
+                    "FEISHU_DAILY_REPORT_CHAT_ID": "report-v2",
+                    "SUBMISSION_HOST_MACHINE": "host-v2",
+                }
+            ),
+        )
+    )
+    calls = 0
+
+    def next_snapshot(**_kwargs: object):
+        nonlocal calls
+        calls += 1
+        return next(snapshots)
+
+    monkeypatch.setattr(feishu_bot, "host_settings_snapshot", next_snapshot)
+
+    config = feishu_bot.load_config(environ={})
+
+    assert calls == 1
+    assert config.daily_report_chat_id == "report-v1"
+    assert config.submission_host_machine == "host-v1"
+
+
+@pytest.mark.parametrize(
+    "key",
+    (
+        "FEISHU_BOT_PORT",
+        "FEISHU_SEND_RETRIES",
+        "FEISHU_SEND_TIMEOUT_SECONDS",
+        "FEISHU_POLL_INTERVAL_SECONDS",
+        "FEISHU_ASSISTANT_MAX_OUTPUT_TOKENS",
+        "FEISHU_CODEX_TIMEOUT_SECONDS",
+        "USER_CONFIRM_API_TIMEOUT_SECONDS",
+    ),
+)
+def test_numeric_config_errors_name_only_the_key_and_range(
+    feishu_bot: ModuleType,
+    key: str,
+) -> None:
+    sentinel = f"sensitive-invalid-value-for-{key.lower()}"
+
+    with pytest.raises(ConfigurationError) as captured:
+        feishu_bot.load_config(
+            environ={
+                "FEISHU_DAILY_REPORT_CHAT_ID": "report-chat",
+                key: sentinel,
+            }
+        )
+
+    message = str(captured.value)
+    assert key in message
+    assert "between" in message
+    assert sentinel not in message
+
+
+def test_integer_parser_redacts_type_errors(feishu_bot: ModuleType) -> None:
+    with pytest.raises(ConfigurationError) as captured:
+        feishu_bot.integer_setting(
+            {"NUMERIC_KEY": object()},
+            "NUMERIC_KEY",
+            default=1,
+            minimum=1,
+            maximum=10,
+        )
+
+    assert str(captured.value) == (
+        "invalid host setting: NUMERIC_KEY must be an integer between 1 and 10"
+    )
+
+
+def test_main_help_parses_before_loading_host_configuration(
+    feishu_bot: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        feishu_bot,
+        "load_config",
+        lambda **_kwargs: pytest.fail("--help must not load host configuration"),
+    )
+    monkeypatch.setattr(sys, "argv", ["feishu_bot", "--help"])
+
+    with pytest.raises(SystemExit) as captured:
+        feishu_bot.main()
+
+    assert captured.value.code == 0
+    assert "Run the Feishu submission bot" in capsys.readouterr().out
+
+
+def test_serve_ws_registers_message_and_card_handlers_with_same_config_snapshot(
+    feishu_bot: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registered: dict[str, object] = {}
+    observed: dict[str, object] = {}
+    config_v1 = feishu_bot.load_config(
+        environ={
+            "FEISHU_APP_ID": "app-v1",
+            "FEISHU_APP_SECRET": "secret-v1",
+            "FEISHU_DAILY_REPORT_CHAT_ID": "report-v1",
+            "SUBMISSION_HOST_MACHINE": "host-v1",
+        }
+    )
+    config_v2 = replace(
+        config_v1,
+        daily_report_chat_id="report-v2",
+        submission_host_machine="host-v2",
+    )
+
+    class ImmediateThread:
+        def __init__(self, target, **_kwargs: object) -> None:
+            self.target = target
+
+        def start(self) -> None:
+            self.target()
+
+    class FakeBuilder:
+        def register_p2_im_message_receive_v1(self, callback):
+            registered["message"] = callback
+            return self
+
+        def register_p2_card_action_trigger(self, callback):
+            registered["card"] = callback
+            return self
+
+        def build(self) -> object:
+            return object()
+
+    class FakeEventDispatcherHandler:
+        @staticmethod
+        def builder(_encrypt_key: str, _verification_token: str) -> FakeBuilder:
+            return FakeBuilder()
+
+    class FakeWSClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+    fake_lark = ModuleType("lark_oapi")
+    fake_lark.EventDispatcherHandler = FakeEventDispatcherHandler
+    fake_lark.LogLevel = SimpleNamespace(INFO="INFO")
+    fake_lark.ws = SimpleNamespace(Client=FakeWSClient)
+    monkeypatch.setitem(sys.modules, "lark_oapi", fake_lark)
+    monkeypatch.setattr(feishu_bot, "patch_lark_ws_card_dispatch", lambda: None)
+    monkeypatch.setattr(feishu_bot, "RUNTIME_DIR", tmp_path / "runtime")
+    monkeypatch.setattr(feishu_bot, "claim_message", lambda _message_id: True)
+    monkeypatch.setattr(feishu_bot.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(feishu_bot, "load_config", lambda: config_v2)
+
+    def incoming(config, *_args: object, **_kwargs: object) -> str:
+        observed["message_config"] = config
+        return ""
+
+    def card(_data: object, host: str, report_chat: str) -> dict[str, bool]:
+        observed["card_route"] = (host, report_chat)
+        return {"ok": True}
+
+    monkeypatch.setattr(feishu_bot, "handle_incoming_text", incoming)
+    monkeypatch.setattr(feishu_bot, "handle_ws_card_action", card)
+
+    assert feishu_bot.serve_ws(SimpleNamespace(), config_v1) == 0
+
+    message_event = SimpleNamespace(
+        event=SimpleNamespace(
+            message=SimpleNamespace(
+                message_id="message-v1",
+                chat_id="chat-v1",
+                content='{"text":"hello"}',
+            )
+        )
+    )
+    registered["message"](message_event)  # type: ignore[operator]
+    assert registered["card"](object()) == {"ok": True}  # type: ignore[operator]
+
+    assert observed["message_config"] is config_v1
+    assert observed["card_route"] == ("host-v1", "report-v1")
 
 
 def test_daily_report_chat_is_loaded_and_used_by_routing_guards(

@@ -29,11 +29,11 @@ from typing import Any
 from urllib import error, parse, request
 
 try:
-    from host_config import optional_setting, required_setting
+    from host_config import ConfigurationError, host_settings_snapshot
 except ModuleNotFoundError:
     from services.host_config import (
-        optional_setting,
-        required_setting,
+        ConfigurationError,
+        host_settings_snapshot,
     )
 
 
@@ -101,7 +101,7 @@ SUBMISSION_SKILL_ORDER = (
 )
 
 
-@dataclass
+@dataclass(frozen=True)
 class Config:
     app_id: str
     app_secret: str
@@ -131,16 +131,49 @@ class Config:
     user_confirm_timeout_seconds: int
 
 
+def integer_setting(
+    settings: Mapping[str, object],
+    key: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    value = settings.get(key, default)
+    if value == "":
+        value = default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = minimum - 1
+    if not minimum <= parsed <= maximum:
+        raise ConfigurationError(
+            f"invalid host setting: {key} must be an integer between "
+            f"{minimum} and {maximum}"
+        )
+    return parsed
+
+
 def load_config(
     *,
     environ: Mapping[str, str] | None = None,
     env_path: Path | None = None,
 ) -> Config:
-    settings_path = PROJECT_ROOT / ".env" if env_path is None else Path(env_path)
+    if env_path is None:
+        settings_path = None if environ is not None else PROJECT_ROOT / ".env"
+    else:
+        settings_path = Path(env_path)
+    settings = host_settings_snapshot(environ=environ, env_path=settings_path)
 
     def setting(name: str, default: str = "") -> str:
-        value = optional_setting(name, environ=environ, env_path=settings_path)
+        value = str(settings.get(name, "")).strip()
         return value if value else default
+
+    daily_report_chat_id = setting("FEISHU_DAILY_REPORT_CHAT_ID")
+    if not daily_report_chat_id:
+        raise ConfigurationError(
+            "missing required host setting: FEISHU_DAILY_REPORT_CHAT_ID"
+        )
 
     return Config(
         app_id=setting("FEISHU_APP_ID"),
@@ -148,23 +181,43 @@ def load_config(
         verification_token=setting("FEISHU_VERIFICATION_TOKEN"),
         encrypt_key=setting("FEISHU_ENCRYPT_KEY"),
         allowed_chat_id=setting("FEISHU_ALLOWED_CHAT_ID"),
-        daily_report_chat_id=required_setting(
-            "FEISHU_DAILY_REPORT_CHAT_ID",
-            environ=environ,
-            env_path=settings_path,
-        ),
+        daily_report_chat_id=daily_report_chat_id,
         runner_command=setting("SUBMISSION_RUNNER_COMMAND"),
         submission_host_machine=setting("SUBMISSION_HOST_MACHINE"),
         host=setting("FEISHU_BOT_HOST", "0.0.0.0"),
-        port=int(setting("FEISHU_BOT_PORT", "8787")),
-        send_retries=int(setting("FEISHU_SEND_RETRIES", "3")),
-        send_timeout_seconds=int(setting("FEISHU_SEND_TIMEOUT_SECONDS", "20")),
+        port=integer_setting(
+            settings,
+            "FEISHU_BOT_PORT",
+            default=8787,
+            minimum=1,
+            maximum=65535,
+        ),
+        send_retries=integer_setting(
+            settings,
+            "FEISHU_SEND_RETRIES",
+            default=3,
+            minimum=0,
+            maximum=100,
+        ),
+        send_timeout_seconds=integer_setting(
+            settings,
+            "FEISHU_SEND_TIMEOUT_SECONDS",
+            default=20,
+            minimum=1,
+            maximum=86400,
+        ),
         poll_chat_ids=tuple(
             item.strip()
             for item in setting("FEISHU_POLL_CHAT_IDS").replace(";", ",").split(",")
             if item.strip()
         ),
-        poll_interval_seconds=int(setting("FEISHU_POLL_INTERVAL_SECONDS", "15")),
+        poll_interval_seconds=integer_setting(
+            settings,
+            "FEISHU_POLL_INTERVAL_SECONDS",
+            default=15,
+            minimum=1,
+            maximum=86400,
+        ),
         openai_api_key=setting("OPENAI_API_KEY"),
         openai_model=setting("OPENAI_MODEL", "gpt-5.6"),
         assistant_provider=setting("FEISHU_ASSISTANT_PROVIDER", "codex").lower(),
@@ -174,19 +227,33 @@ def load_config(
             "FEISHU_ASSISTANT_REQUIRE_MENTION", "1"
         ).lower()
         in {"1", "true", "yes"},
-        assistant_max_output_tokens=int(
-            setting("FEISHU_ASSISTANT_MAX_OUTPUT_TOKENS", "800")
+        assistant_max_output_tokens=integer_setting(
+            settings,
+            "FEISHU_ASSISTANT_MAX_OUTPUT_TOKENS",
+            default=800,
+            minimum=1,
+            maximum=1000000,
         ),
         codex_command=setting("FEISHU_CODEX_COMMAND", "codex"),
         codex_model=setting("FEISHU_CODEX_MODEL", "gpt-5.6-sol"),
-        codex_timeout_seconds=int(setting("FEISHU_CODEX_TIMEOUT_SECONDS", "180")),
+        codex_timeout_seconds=integer_setting(
+            settings,
+            "FEISHU_CODEX_TIMEOUT_SECONDS",
+            default=180,
+            minimum=1,
+            maximum=86400,
+        ),
         verify_delivery=setting("FEISHU_VERIFY_DELIVERY", "1").lower()
         in {"1", "true", "yes"},
         user_confirm_api_url=setting(
             "USER_CONFIRM_API_URL", "http://127.0.0.1:8000/confirm"
         ),
-        user_confirm_timeout_seconds=int(
-            setting("USER_CONFIRM_API_TIMEOUT_SECONDS", "20")
+        user_confirm_timeout_seconds=integer_setting(
+            settings,
+            "USER_CONFIRM_API_TIMEOUT_SECONDS",
+            default=20,
+            minimum=1,
+            maximum=86400,
         ),
     )
 
@@ -1725,7 +1792,7 @@ def patch_lark_ws_card_dispatch() -> None:
     ws_client.Client._handle_data_frame = _handle_data_frame
 
 
-def handle_ws_message_receive(data: Any) -> None:
+def handle_ws_message_receive(data: Any, config: Config) -> None:
     event = getattr(data, "event", None)
     message = getattr(event, "message", None)
     message_id = str(getattr(message, "message_id", "") or "")
@@ -1739,7 +1806,6 @@ def handle_ws_message_receive(data: Any) -> None:
 
     def send_reply() -> None:
         try:
-            config = load_config()
             reply = handle_incoming_text(config, text, chat_id, source="feishu-ws")
             if reply and chat_id:
                 FeishuClient(config).send_text(chat_id, reply)
@@ -1750,6 +1816,28 @@ def handle_ws_message_receive(data: Any) -> None:
 
     safe_print(f"ws message received chat_id={chat_id} text={strip_feishu_markdown(text)[:80]}")
     threading.Thread(target=send_reply, daemon=True).start()
+
+
+def configured_ws_message_handler(config: Config):
+    """Bind one startup configuration snapshot to WS message callbacks."""
+
+    def handle(data: Any) -> None:
+        handle_ws_message_receive(data, config)
+
+    return handle
+
+
+def configured_ws_card_handler(config: Config):
+    """Bind the same startup configuration snapshot to WS card callbacks."""
+
+    def handle(data: Any) -> Any:
+        return handle_ws_card_action(
+            data,
+            config.submission_host_machine,
+            config.daily_report_chat_id,
+        )
+
+    return handle
 
 
 class FeishuHandler(BaseHTTPRequestHandler):
@@ -3157,14 +3245,8 @@ def serve_ws(_args: argparse.Namespace, config: Config) -> int:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     handler = (
         EventDispatcherHandler.builder(config.encrypt_key, config.verification_token)
-        .register_p2_im_message_receive_v1(handle_ws_message_receive)
-        .register_p2_card_action_trigger(
-            lambda data: handle_ws_card_action(
-                data,
-                config.submission_host_machine,
-                config.daily_report_chat_id,
-            )
-        )
+        .register_p2_im_message_receive_v1(configured_ws_message_handler(config))
+        .register_p2_card_action_trigger(configured_ws_card_handler(config))
         .build()
     )
     safe_print("Feishu bot websocket listening for im.message.receive_v1 and card.action.trigger")
@@ -3186,7 +3268,6 @@ def safe_print(*args: Any, file: Any = sys.stdout) -> None:
 
 
 def main() -> int:
-    config = load_config()
     parser = argparse.ArgumentParser(description="Run the Feishu submission bot.")
     parser.add_argument(
         "mode",
@@ -3205,8 +3286,8 @@ def main() -> int:
         ),
         help="serve starts the HTTP bot; ws starts Feishu SDK long-connection callbacks; poll reads Feishu history as a control fallback; notify-fault sends a last-resort fault card; notify-confirmation asks the user API first and falls back to a user-decision card only when needed; notify-review keeps the optional legacy review card; record-auto-review-approval persists the unattended self-check authorization; record-review-submit-attempt persists the single submit click state; wait-decision waits for the selected decision.",
     )
-    parser.add_argument("--host", default=config.host)
-    parser.add_argument("--port", type=int, default=config.port)
+    parser.add_argument("--host")
+    parser.add_argument("--port", type=int)
     parser.add_argument("--run-id", default=os.getenv("SUBMISSION_RUN_ID", ""))
     parser.add_argument("--chat-id", default=os.getenv("SUBMISSION_CHAT_ID", ""))
     parser.add_argument("--stage", default="未知阶段")
@@ -3247,10 +3328,16 @@ def main() -> int:
     parser.add_argument(
         "--poll-interval-seconds",
         type=int,
-        default=config.poll_interval_seconds,
     )
     parser.add_argument("--poll-chat-id", action="append", default=[])
     args = parser.parse_args()
+    config = load_config()
+    if args.host is None:
+        args.host = config.host
+    if args.port is None:
+        args.port = config.port
+    if args.poll_interval_seconds is None:
+        args.poll_interval_seconds = config.poll_interval_seconds
 
     if args.mode == "notify-fault":
         return notify_fault(args, config)
