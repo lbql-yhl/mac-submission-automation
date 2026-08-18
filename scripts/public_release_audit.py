@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
-from fnmatch import fnmatchcase
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 
 
 REQUIRED_SENSITIVE_EXAMPLE_KEYS = (
@@ -179,37 +179,56 @@ def _is_dotenv_path(relative_path: str) -> bool:
     return name == ".env" or ".env." in name or name.endswith(".env")
 
 
-def _ignore_pattern_matches(pattern: str, relative_path: str) -> bool:
-    directory_only = pattern.endswith("/")
-    pattern = pattern.removeprefix("/").removesuffix("/")
-    if not pattern:
-        return False
-
-    path_parts = relative_path.split("/")
-    if "/" not in pattern:
-        candidates = path_parts[:-1] if directory_only else path_parts
-        return any(fnmatchcase(part, pattern) for part in candidates)
-
-    if directory_only:
-        directories = (
-            "/".join(path_parts[:index]) for index in range(1, len(path_parts))
+def _ignored_paths_with_git(
+    ignore_content: bytes, relative_paths: tuple[str, ...]
+) -> set[str]:
+    if b"\0" in ignore_content:
+        ignore_content = b""
+    with tempfile.TemporaryDirectory(prefix="public-release-audit-") as temp_dir:
+        temp_root = Path(temp_dir)
+        subprocess.run(
+            ["git", "init", "-q"],
+            cwd=temp_root,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-        return any(fnmatchcase(directory, pattern) for directory in directories)
-    return fnmatchcase(relative_path, pattern)
-
-
-def _is_ignored(ignore_text: str, relative_path: str) -> bool:
-    ignored = False
-    for line in ignore_text.splitlines():
-        pattern = line.strip()
-        if not pattern or pattern.startswith("#"):
-            continue
-        negated = pattern.startswith("!")
-        if negated:
-            pattern = pattern[1:]
-        if _ignore_pattern_matches(pattern, relative_path):
-            ignored = not negated
-    return ignored
+        (temp_root / ".gitignore").write_bytes(ignore_content)
+        subprocess.run(
+            ["git", "add", "-f", "--", ".gitignore"],
+            cwd=temp_root,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        completed = subprocess.run(
+            [
+                "git",
+                "-c",
+                "core.excludesFile=/dev/null",
+                "check-ignore",
+                "--no-index",
+                "-z",
+                "--stdin",
+            ],
+            cwd=temp_root,
+            check=False,
+            input=b"\0".join(path.encode() for path in relative_paths) + b"\0",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if completed.returncode not in {0, 1}:
+            raise subprocess.CalledProcessError(
+                completed.returncode,
+                completed.args,
+                output=completed.stdout,
+                stderr=completed.stderr,
+            )
+    return {
+        path.decode("utf-8", errors="surrogateescape")
+        for path in completed.stdout.split(b"\0")
+        if path
+    }
 
 
 def audit_repository(root: Path) -> list[tuple[str, str]]:
@@ -281,16 +300,16 @@ def audit_repository(root: Path) -> list[tuple[str, str]]:
     ignore_object_id = tracked_blobs.get(".gitignore")
     if ignore_object_id is not None:
         ignore_content = blob_content(ignore_object_id)
-    ignore_text = (
-        ""
-        if b"\0" in ignore_content
-        else ignore_content.decode("utf-8", errors="replace")
+    probe_paths = _IGNORE_PROBES + _ALLOWED_EXAMPLE_PROBES
+    ignored_paths = _ignored_paths_with_git(
+        ignore_content,
+        probe_paths,
     )
     for relative_path in _IGNORE_PROBES:
-        if not _is_ignored(ignore_text, relative_path):
+        if relative_path not in ignored_paths:
             findings.add(("IGNORE_RULE_MISSING", relative_path))
     for relative_path in _ALLOWED_EXAMPLE_PROBES:
-        if _is_ignored(ignore_text, relative_path):
+        if relative_path in ignored_paths:
             findings.add(("EXAMPLE_FILE_IGNORED", relative_path))
     if ".env.example" not in tracked_blobs:
         findings.add(("EXAMPLE_FILE_NOT_TRACKED", ".env.example"))
