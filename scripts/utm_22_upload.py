@@ -127,9 +127,11 @@ def choose_archive(
     matches = [
         dict(candidate)
         for candidate in candidates
-        if candidate.get("app_name") == app_name
-        and candidate.get("bundle_id") == bundle_id
-        and (archive_path is None or candidate.get("path") == archive_path)
+        if candidate.get("bundle_id") == bundle_id
+        and (
+            (archive_path is None and candidate.get("app_name") == app_name)
+            or (archive_path is not None and candidate.get("path") == archive_path)
+        )
     ]
     if len(matches) != 1:
         raise UploadTargetError(f"ARCHIVE_MATCH_COUNT={len(matches)}")
@@ -318,6 +320,8 @@ def _run_upload(
 ) -> None:
     output_path, attempt_path = _attempt_paths(target, archive)
     remote_args = [
+        "/usr/bin/env",
+        "NODE_USE_ENV_PROXY=1",
         "/usr/local/bin/node",
         distributor,
         "upload-config",

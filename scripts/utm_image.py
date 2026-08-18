@@ -26,10 +26,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts.notion_api import api_from_env  # noqa: E402
 from scripts.clean_cli import run_clean_cli  # noqa: E402
 from scripts.ssh_password import password_environment, ssh_args  # noqa: E402
-from scripts.utm_env_download_assets import DEFAULT_BASE_URL, FeishuClient, load_credentials  # noqa: E402
+from scripts.utm_env_download_assets import FeishuClient, load_credentials  # noqa: E402
 from scripts.utm_image_source import MANIFEST_NAME, prepare_screenshot_source  # noqa: E402
 from scripts.utm_image_delivery import sync_utm_image_guest_file  # noqa: E402
 from scripts.utm_direct_context import resolve_direct_context  # noqa: E402
+from scripts.utm_notion import resolve_feishu_source  # noqa: E402
+from services.feishu_gateway import get_tenant_access_token  # noqa: E402
 from services.feishu_bot import find_run, load_config, run_host_machine  # noqa: E402
 from services.project_paths import SHARED_DIR  # noqa: E402
 
@@ -257,9 +259,12 @@ def run_guest_script(
         GUEST_DIAGNOSTIC_PATH.chmod(0o600)
         match = re.search(rb"(?m)^UTM_19_ERROR=([^\r\n]+)", diagnostic)
         if match:
-            raise UTMImageError(match.group(1).decode("utf-8", errors="replace"))
+            detail = match.group(1).decode("utf-8", errors="replace")
+            raise UTMImageError(f"GUEST_EXECUTION_FAILED:{detail}")
         raise UTMImageError("GUEST_EXECUTION_FAILED")
-    return _guest_markers(execution.stdout)
+    markers = _guest_markers(execution.stdout)
+    GUEST_DIAGNOSTIC_PATH.unlink(missing_ok=True)
+    return markers
 
 
 def _secure_source_manifest(path: Path, app_name: str) -> dict[str, Any] | None:
@@ -288,8 +293,14 @@ def _source_result(app_name: str, run_id: str) -> dict[str, Any]:
     if existing is not None:
         return existing
     credentials = load_credentials(PROJECT_ROOT / ".env")
+    token = get_tenant_access_token(*credentials)
+    app_token, table_id, view_id = resolve_feishu_source(token)
+    base_url = (
+        f"https://qv0zc1dq6qy.feishu.cn/base/{app_token}"
+        f"?table={table_id}&view={view_id}"
+    )
     return prepare_screenshot_source(
-        base_url=DEFAULT_BASE_URL,
+        base_url=base_url,
         app_name=app_name,
         output_dir=source_dir,
         client=FeishuClient(*credentials),

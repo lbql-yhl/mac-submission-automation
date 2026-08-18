@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -76,6 +77,41 @@ def _field_is_truly_empty(value: Any) -> bool:
     return False
 
 
+def _beauty_share_url(value: Any) -> str | None:
+    if _field_is_truly_empty(value):
+        return None
+    if isinstance(value, (list, tuple)):
+        items = [item for item in value if not _field_is_truly_empty(item)]
+        if len(items) != 1:
+            raise ValueError(
+                f"{BEAUTY_FIELD} must contain exactly one Wenshushu link"
+            )
+        value = items[0]
+    candidate = _text_value(value)
+    if candidate is None:
+        raise ValueError(f"{BEAUTY_FIELD} must contain one Wenshushu link")
+    try:
+        parsed = urllib.parse.urlsplit(candidate)
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError(f"{BEAUTY_FIELD} must contain one valid Wenshushu link") from error
+    hostname = (parsed.hostname or "").casefold()
+    allowed_host = hostname == "c.wss.ink" or (
+        hostname == "wenshushu.cn" or hostname.endswith(".wenshushu.cn")
+    )
+    if (
+        parsed.scheme.casefold() != "https"
+        or not allowed_host
+        or port not in (None, 443)
+        or parsed.username is not None
+        or parsed.password is not None
+        or not parsed.path.startswith("/f/")
+        or not parsed.path.removeprefix("/f/").strip("/")
+    ):
+        raise ValueError(f"{BEAUTY_FIELD} must contain one valid Wenshushu link")
+    return candidate
+
+
 def _development_attachment(value: Any) -> tuple[str, str]:
     items = value if isinstance(value, list) else ([] if value in (None, "", {}) else [value])
     items = [item for item in items if item not in (None, "", {})]
@@ -108,7 +144,7 @@ def _development_attachment(value: Any) -> tuple[str, str]:
 
 def select_screenshot_source(fields: dict[str, Any]) -> ScreenshotSelection:
     raw_beauty = fields.get(BEAUTY_FIELD)
-    beauty = _text_value(raw_beauty)
+    beauty = _beauty_share_url(raw_beauty)
     if beauty is not None:
         return ScreenshotSelection(
             source_field=BEAUTY_FIELD,

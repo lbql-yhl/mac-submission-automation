@@ -194,6 +194,66 @@ def notion_api_from_config(config: UtmNotionRuntimeConfig) -> NotionAPI:
     )
 
 
+def parse_feishu_wiki_url(value: str) -> tuple[str, str, str]:
+    parsed = urllib.parse.urlsplit(str(value).strip())
+    hostname = (parsed.hostname or "").lower()
+    path_parts = [part for part in parsed.path.split("/") if part]
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    table_values = query.get("table", [])
+    view_values = query.get("view", [])
+    valid_host = hostname == "feishu.cn" or hostname.endswith(".feishu.cn")
+    if (
+        parsed.scheme != "https"
+        or not valid_host
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port is not None
+        or len(path_parts) != 2
+        or path_parts[0] != "wiki"
+        or not re.fullmatch(r"[A-Za-z0-9]+", path_parts[1])
+        or len(table_values) != 1
+        or len(view_values) != 1
+        or not re.fullmatch(r"tbl[A-Za-z0-9]+", table_values[0])
+        or not re.fullmatch(r"vew[A-Za-z0-9]+", view_values[0])
+    ):
+        raise RuntimeError("Feishu Wiki URL must identify one exact Base table and view")
+    return path_parts[1], table_values[0], view_values[0]
+
+
+def resolve_bitable_app_token(token: str, wiki_node_token: str) -> str:
+    url = API_BASE + "/wiki/v2/spaces/get_node?" + urllib.parse.urlencode(
+        {"token": wiki_node_token}
+    )
+    request = urllib.request.Request(
+        url,
+        method="GET",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as error:
+        try:
+            result = json.load(error)
+        except Exception:
+            result = {}
+        raise RuntimeError(
+            f"Feishu Wiki API HTTP {error.code}: code={result.get('code', 'unknown')} "
+            f"msg={result.get('msg', 'request failed')}"
+        ) from None
+    if result.get("code") != 0:
+        raise RuntimeError(
+            f"Feishu Wiki API failed: code={result.get('code')} msg={result.get('msg')}"
+        )
+    node = dict((result.get("data") or {}).get("node") or {})
+    app_token = str(node.get("obj_token") or "").strip()
+    if node.get("obj_type") != "bitable" or not re.fullmatch(
+        r"[A-Za-z0-9]+", app_token
+    ):
+        raise RuntimeError("Feishu Wiki node does not resolve to one Base")
+    return app_token
+
+
 def _cell_text(value: object) -> str:
     if value is None:
         return ""
@@ -254,13 +314,14 @@ def _normalize_us_phone(value: str) -> str:
         return "+1" + digits
     if len(digits) == 11 and digits.startswith("1"):
         return "+" + digits
+    if 11 <= len(digits) <= 15:
+        return "+" + digits
     raise RuntimeError("Feishu 账号信息 phone must contain 10 US digits")
 
 
 def parse_account_info(cell: object) -> dict[str, str]:
-    if not isinstance(cell, dict):
-        raise RuntimeError("Feishu 账号信息 must be a URL cell")
-    text = str(cell.get("text") or "").strip()
+    text = _cell_text(cell)
+    cell_link = str(cell.get("link") or "").strip() if isinstance(cell, dict) else ""
 
     compact_prefix = (
         rf"(?P<phone>\+\d{{10,11}})-{{4}}"
@@ -303,11 +364,25 @@ def parse_account_info(cell: object) -> dict[str, str]:
             text[: url_match.start()].rstrip() + text[url_match.end() :].lstrip()
         ).strip()
     else:
-        sms_url = str(cell.get("link") or "").strip()
+        sms_url = cell_link
         identity_text = text
     parsed_sms_url = urllib.parse.urlsplit(sms_url)
     if not parsed_sms_url.netloc:
         raise RuntimeError("Feishu 账号信息 must contain an inline or cell-link HTTP(S) URL")
+    space_separated = re.fullmatch(
+        r"(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63})\s+"
+        r"(?P<password>\S+)\s+"
+        r"(?P<phone>\+?\d{10,15})",
+        identity_text,
+        flags=re.IGNORECASE,
+    )
+    if space_separated and identity_text.count("@") == 1:
+        return {
+            "email": space_separated.group("email"),
+            "initial_password": space_separated.group("password"),
+            "phone": _normalize_us_phone(space_separated.group("phone")),
+            "sms_url": sms_url,
+        }
     labelled_pattern = re.compile(
         rf".*?账号\s*[：:]\s*"
         rf"(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+?\.{EMAIL_SUFFIX_PATTERN})\s*"
@@ -352,6 +427,39 @@ def parse_account_info(cell: object) -> dict[str, str]:
             "phone": _normalize_us_phone(provider_first_match.group("phone")),
             "sms_url": sms_url,
         }
+
+    plain_email_matches = list(
+        re.finditer(
+            rf"[A-Z0-9._%+-]+@[A-Z0-9.-]+?\.{EMAIL_SUFFIX_PATTERN}",
+            identity_text,
+            flags=re.IGNORECASE,
+        )
+    )
+    if len(plain_email_matches) == 1 and identity_text.count("@") == 1:
+        plain_email = plain_email_matches[0]
+        tail = identity_text[plain_email.end() :]
+        candidates: list[tuple[str, str]] = []
+        for phone_length in (10, 11):
+            if len(tail) <= phone_length:
+                continue
+            initial_password = tail[:-phone_length]
+            phone = tail[-phone_length:]
+            if (
+                phone.isdigit()
+                and (phone_length == 10 or phone.startswith("1"))
+                and re.fullmatch(r"[A-Za-z0-9]+", initial_password)
+                and re.search(r"[A-Za-z]", initial_password)
+                and re.search(r"\d", initial_password)
+            ):
+                candidates.append((initial_password, phone))
+        if len(candidates) == 1:
+            initial_password, phone = candidates[0]
+            return {
+                "email": plain_email.group(0),
+                "initial_password": initial_password,
+                "phone": _normalize_us_phone(phone),
+                "sms_url": sms_url,
+            }
 
     email_match = re.match(
         rf"^(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+?\.{EMAIL_SUFFIX_PATTERN})(?P<tail>.+)$",
@@ -512,6 +620,20 @@ def build_registration_fields(
             fill_missing_with_test=fill_missing_with_test,
         )
 
+    top_level_domain = _cell_text(fields.get("顶级域名"))
+    if not top_level_domain:
+        top_level_domain = text("待购买域名")
+    formal_domains = _cell_text(fields.get("正式域名(app/h5/im/log)"))
+    if not formal_domains:
+        formal_domains = (
+            TEST_MISSING_VALUE
+            if fill_missing_with_test or top_level_domain == TEST_MISSING_VALUE
+            else "\n".join(
+                f"{prefix}.{top_level_domain}"
+                for prefix in ("app", "h5", "im", "log")
+            )
+        )
+
     account = {
         "邮箱：": account_info["email"],
         "初始密码：": account_info["initial_password"],
@@ -532,9 +654,9 @@ def build_registration_fields(
     application = {
         "应用名: ": app_name,
         "团队: ": "灵光",
-        "顶级域名: ": text("顶级域名"),
+        "顶级域名: ": top_level_domain,
         "正式包名: ": text("正式包名"),
-        "正式域名: ": text("正式域名(app/h5/im/log)"),
+        "正式域名: ": formal_domains,
         "隐私协议: ": _http_url(
             fields,
             "隐私协议",
@@ -717,6 +839,37 @@ class FeishuBitableClient:
             raise RuntimeError("Feishu record readback is missing")
         return record
 
+    def preflight_vm_write(self, record: dict[str, Any]) -> None:
+        record_id = str(record.get("record_id") or "")
+        if not record_id:
+            raise RuntimeError("Feishu record_id is missing")
+        before = self.get_record(record_id)
+        before_fields = dict(before.get("fields") or {})
+        current = _cell_text(before_fields.get("虚拟机"))
+        if current:
+            record["fields"] = before_fields
+            return
+        before_digest = _fields_digest(before_fields, omit={"虚拟机"})
+        try:
+            self._request(
+                "PUT",
+                f"{self._records_path}/{record_id}",
+                payload={"fields": {"虚拟机": None}},
+            )
+        except RuntimeError as error:
+            if "code=91403" in str(error):
+                raise RuntimeError(
+                    "Feishu app identity lacks record-write permission: code=91403"
+                ) from None
+            raise
+        after = self.get_record(record_id)
+        after_fields = dict(after.get("fields") or {})
+        if _cell_text(after_fields.get("虚拟机")) != "":
+            raise RuntimeError("Feishu VM write preflight readback mismatch")
+        if _fields_digest(after_fields, omit={"虚拟机"}) != before_digest:
+            raise RuntimeError("Feishu VM write preflight changed another field")
+        record["fields"] = after_fields
+
     def ensure_vm(self, record: dict[str, Any], vm_name: str) -> bool:
         if not re.fullmatch(r"[a-z]{4}", vm_name):
             raise RuntimeError("VM name must be four lowercase letters")
@@ -796,6 +949,7 @@ def execute(
     fill_missing_with_test: bool = False,
     rename_from: str = "",
 ) -> dict[str, object]:
+    explicit_vm_name = bool(vm_name)
     runtime_config = load_runtime_config(env_path=PROJECT_ROOT / ".env")
     token = get_tenant_access_token(
         runtime_config.feishu_app_id,
@@ -817,6 +971,10 @@ def execute(
         fill_missing_with_test=fill_missing_with_test,
     )
     exact_app_name = application_replacements["应用名: "]
+    if not explicit_vm_name:
+        client.preflight_vm_write(record)
+    notion = notion_api_from_config(runtime_config)
+    notion.verify_parent(runtime_config.host_title)
     vm_name = _bind_vm(
         fields,
         exact_app_name,
@@ -825,10 +983,9 @@ def execute(
         expected_vm_name=vm_name,
         rename_from=rename_from,
     )
-    feishu_changed = client.ensure_vm(record, vm_name)
-
-    notion = notion_api_from_config(runtime_config)
-    notion.verify_parent(runtime_config.host_title)
+    feishu_changed = (
+        False if explicit_vm_name else client.ensure_vm(record, vm_name)
+    )
     page_title = f"{exact_app_name}-{vm_name}"
     page_id, page_created = notion.create_registration_copy(page_title)
 

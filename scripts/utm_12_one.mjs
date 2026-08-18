@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -11,6 +11,7 @@ import { connectLocalBrowser } from "./session.mjs";
 const TIMEOUT = 30_000;
 const SHORT_TIMEOUT = 5_000;
 const APP_DETAIL_TIMEOUT = 30_000;
+const REGISTER_TRANSITION_TIMEOUT = 90_000;
 const CREATE_TRANSITION_TIMEOUT = 3_000;
 const DEVELOPER_ACCOUNT_URL = "https://developer.apple.com/account/";
 const IDENTIFIERS_URL = "https://developer.apple.com/account/resources/identifiers/list";
@@ -118,22 +119,87 @@ async function findVerifiedUtm11Run(sessionId) {
     const run = await readJson(candidate);
     if (run?.state === "verified" && run?.sessionId === sessionId) return run;
   }
-  throw new Error("UTM_11 is not verified for the live browser session");
+  return null;
 }
 
-async function connectExistingUtm11Session() {
+async function findPriorVerifiedUtm11Run() {
+  const root = path.join(PROJECT_ROOT, "runtime", "utm-11");
+  const legacy = await readJson(path.join(root, "run.json"));
+  if (legacy?.state === "verified" && legacy?.sessionId) return legacy;
+  const entries = await readdir(root, { withFileTypes: true }).catch((error) => {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const candidate = await readJson(path.join(root, entry.name, "run.json"));
+    if (candidate?.state === "verified" && candidate?.sessionId) return candidate;
+  }
+  return null;
+}
+
+async function adoptCurrentAuthenticatedSession(context, sessionId) {
+  const prior = await findPriorVerifiedUtm11Run();
+  if (!prior) throw new Error("current-session adoption requires a prior verified UTM-11 run");
+  const identifierPages = context.pages().filter((page) => {
+    try {
+      const url = new URL(page.url());
+      return url.protocol === "https:"
+        && url.hostname === "developer.apple.com"
+        && url.pathname.startsWith("/account/resources/identifiers");
+    } catch {
+      return false;
+    }
+  });
+  if (identifierPages.length !== 1) {
+    throw new Error(`current-session adoption requires exactly one Identifiers page; found ${identifierPages.length}`);
+  }
+  const page = identifierPages[0];
+  await waitForSafePage(page, "developer.apple.com");
+  const loginFields = await visibleInFrames(page, (frame) => frame.locator(
+    "input#account_name_text_field, input[autocomplete~='username'], input[type='password']",
+  ));
+  if (loginFields.length) throw new Error("current-session adoption found an Apple login form");
+  const title = await page.title();
+  if (!/Certificates, Identifiers\s*&\s*Profiles/i.test(title)) {
+    throw new Error("current-session adoption could not verify the authenticated Identifiers page");
+  }
+  const now = new Date().toISOString();
+  const adopted = {
+    runId: randomUUID(),
+    sessionId,
+    createdAt: now,
+    completedAt: now,
+    state: "verified",
+    adoptedFor: "utm-12-identifiers-recovery",
+    priorVerifiedSessionHash: sha256(prior.sessionId),
+    pages: { identifiers: safeUrl(page.url()) },
+  };
+  await writeSecureJson(
+    path.join(PROJECT_ROOT, "runtime", "utm-11", sessionId, "run.json"),
+    adopted,
+  );
+  return adopted;
+}
+
+async function connectExistingUtm11Session({ adoptCurrentSession = false } = {}) {
   const [info, state] = await Promise.all([browserVersion(), readJson(STATE_PATH)]);
   const liveSessionId = sessionIdFromVersion(info);
   if (!info || !state || !liveSessionId) {
     throw new Error("utm-11 browser is not running; refusing to start another browser");
   }
   if (state.sessionId !== liveSessionId) throw new Error("utm-11 browser session changed");
-  await findVerifiedUtm11Run(liveSessionId);
 
   const connected = await connectLocalBrowser();
   if (connected.sessionId !== liveSessionId) {
     throw new Error("connected browser session does not match utm-11");
   }
+
+  let verifiedUtm11 = await findVerifiedUtm11Run(liveSessionId);
+  if (!verifiedUtm11 && adoptCurrentSession) {
+    verifiedUtm11 = await adoptCurrentAuthenticatedSession(connected.context, liveSessionId);
+  }
+  if (!verifiedUtm11) throw new Error("UTM_11 is not verified for the live browser session");
 
   const existingRun = await readJson(runPath(liveSessionId));
   const run = existingRun || {
@@ -953,24 +1019,47 @@ async function exactIdentifierNameMatches(page, appName) {
   return await visibleInFrames(page, (frame) => frame.getByText(appName, { exact: true }));
 }
 
+async function identifierListIsStableEmpty(page) {
+  let url;
+  try { url = new URL(page.url()); } catch { return false; }
+  if (url.hostname !== "developer.apple.com"
+    || !url.pathname.startsWith("/account/resources/identifiers/list")) return false;
+  const bodyText = (await page.locator("body").innerText()).replace(/\s+/g, " ");
+  return /Getting Started with App IDs/i.test(bodyText)
+    && /Register an App ID/i.test(bodyText);
+}
+
 async function filterListByExactValue(page, value, label) {
-  const controls = await visibleInFrames(page, (frame) => frame.locator(
-    "main input[type='search'], main input[placeholder*='Search' i], input[type='search']",
-  ));
-  const unique = [];
-  for (const control of controls) {
-    if (!unique.some((item) => item === control)) unique.push(control);
+  if (await identifierListIsStableEmpty(page)) return;
+  const selector = "main input[type='search'], input[placeholder*='Search' i], input[type='search']";
+  const deadline = Date.now() + TIMEOUT;
+  let controls = [];
+  do {
+    if (await identifierListIsStableEmpty(page)) return;
+    controls = [];
+    for (const frame of page.frames()) {
+      const candidates = frame.locator(selector);
+      for (let index = 0; index < await candidates.count(); index += 1) {
+        const candidate = candidates.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        if (!await candidate.isEditable().catch(() => false)) continue;
+        if (!await candidate.isEnabled().catch(() => false)) continue;
+        if (!await candidate.boundingBox().catch(() => null)) continue;
+        controls.push(candidate);
+      }
+    }
+    if (controls.length === 1) break;
+    if (controls.length > 1) {
+      throw new Error(`${label} search control must be unique; found ${controls.length}`);
+    }
+    await page.waitForTimeout(20);
+  } while (Date.now() < deadline);
+  if (controls.length !== 1) {
+    throw new Error(`${label} search control must be uniquely editable; found ${controls.length}`);
   }
-  if (!unique.length) {
-    const empty = await visibleInFrames(page, (frame) => frame.getByText(
-      /No (Apps|Identifiers|Results)|You haven['’]t added|Getting Started with App IDs/i,
-    ));
-    if (empty.length === 1) return;
-    throw new Error(`${label} search control is not visible; refusing incomplete classification`);
-  }
-  if (unique.length !== 1) throw new Error(`${label} search control must be unique; found ${unique.length}`);
-  await unique[0].fill(value);
-  if ((await unique[0].inputValue()).trim() !== value) throw new Error(`${label} search readback failed`);
+  const control = controls[0];
+  await control.fill(value);
+  if ((await control.inputValue()).trim() !== value) throw new Error(`${label} search readback failed`);
   await page.waitForLoadState("networkidle", { timeout: TIMEOUT }).catch(() => {});
   const busy = page.locator("[aria-busy='true'], [role='progressbar']");
   await busy.first().waitFor({ state: "hidden", timeout: TIMEOUT }).catch(() => {});
@@ -1019,11 +1108,17 @@ async function fillIdentifierForm(page, config) {
   if ((await bundle.inputValue()).trim() !== config.bundleId) throw new Error("Bundle ID readback failed");
 }
 
-async function recoverIdentifier(page, config) {
+async function recoverIdentifier(page, config, { reload = false } = {}) {
   if (comparableUrl(page.url()) !== comparableUrl(IDENTIFIERS_URL)) {
     await page.goto(IDENTIFIERS_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+  } else if (reload) {
+    await page.reload({ waitUntil: "domcontentloaded", timeout: TIMEOUT });
   }
   await waitForSafePage(page, "developer.apple.com");
+  if (reload) {
+    await page.waitForLoadState("networkidle", { timeout: TIMEOUT }).catch(() => {});
+  }
+  await filterListByExactValue(page, config.bundleId, "App ID");
   await page.locator("[aria-busy='true'], [role='progressbar']").first()
     .waitFor({ state: "hidden", timeout: TIMEOUT }).catch(() => {});
   await page.getByText(config.bundleId, { exact: true }).first()
@@ -1044,13 +1139,28 @@ async function registerIdentifierFromForm(page, run, config) {
     await waitForSafePage(page, "developer.apple.com");
     return await registerIdentifierFromForm(page, run, config);
   }
-  const existingLedger = await readJson(ledgerPath(run, "app-id-register"));
+  let existingLedger = await readJson(ledgerPath(run, "app-id-register"));
   if (existingLedger && existingLedger.state !== "planned") {
-    if (await recoverIdentifier(page, config)) {
+    if (await recoverIdentifier(page, config, { reload: true })) {
       if (existingLedger.state !== "submitted") await updateLedger(run, existingLedger, "submitted");
       return existingLedger.attemptId;
     }
-    throw new Error(`App ID registration attempt is ${existingLedger.state}; refusing to click Register again`);
+    const mayRetryConfirmedAbsence = ["clicking", "unknown"].includes(existingLedger.state)
+      && Number(existingLedger.confirmedAbsenceRetryCount || 0) === 0
+      && await identifierListIsStableEmpty(page);
+    if (!mayRetryConfirmedAbsence) {
+      throw new Error(`App ID registration attempt is ${existingLedger.state}; refusing to click Register again`);
+    }
+    existingLedger = {
+      ...existingLedger,
+      state: "planned",
+      confirmedAbsenceRetryCount: 1,
+      recoveryEvidence: "stable-empty-identifiers-list-after-premature-navigation",
+      updatedAt: new Date().toISOString(),
+    };
+    await writeSecureJson(ledgerPath(run, "app-id-register"), existingLedger);
+    await page.goto(BUNDLE_ID_ADD_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+    await waitForSafePage(page, "developer.apple.com");
   }
   let registerCandidates = await visibleInFrames(
     page,
@@ -1101,7 +1211,17 @@ async function registerIdentifierFromForm(page, run, config) {
     await updateLedger(run, ledger, "unknown");
     throw new Error(`Register click result is unknown: ${error.message}`);
   }
-  if (!await recoverIdentifier(page, config)) {
+  const reachedList = await page.waitForURL((url) => (
+    url.hostname === "developer.apple.com"
+      && url.pathname.startsWith("/account/resources/identifiers/list")
+  ), { waitUntil: "domcontentloaded", timeout: REGISTER_TRANSITION_TIMEOUT })
+    .then(() => true)
+    .catch(() => false);
+  if (!reachedList) {
+    await updateLedger(run, ledger, "unknown");
+    throw new Error("Register was clicked once but Apple did not return to the Identifiers list");
+  }
+  if (!await recoverIdentifier(page, config, { reload: true })) {
     await updateLedger(run, ledger, "unknown");
     throw new Error("Register was clicked once but the exact App ID was not found");
   }
@@ -1705,9 +1825,9 @@ export async function recoverUtm12NotionFields() {
   };
 }
 
-export async function runUtm12() {
+export async function runUtm12({ adoptCurrentSession = false } = {}) {
   // 1. Preflight: reuse the verified UTM-11 session and require one Apple tab.
-  const { context, run } = await connectExistingUtm11Session();
+  const { context, run } = await connectExistingUtm11Session({ adoptCurrentSession });
   const replay = await replayVerifiedUtm12(context, run);
   if (replay) return replay;
   const approvedPages = context.pages().filter(isApprovedApplePage);
@@ -1846,12 +1966,12 @@ export async function runUtm12() {
 
 async function main() {
   const [command, ...extra] = process.argv.slice(2);
-  if (extra.length || (command && command !== "notion-fields")) {
-    throw new Error("Usage: node scripts/utm_12_one.mjs [notion-fields]");
+  if (extra.length || (command && !["notion-fields", "adopt-current-session"].includes(command))) {
+    throw new Error("Usage: node scripts/utm_12_one.mjs [notion-fields|adopt-current-session]");
   }
   const result = command === "notion-fields"
     ? await recoverUtm12NotionFields()
-    : await runUtm12();
+    : await runUtm12({ adoptCurrentSession: command === "adopt-current-session" });
   process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(0));
 }
 

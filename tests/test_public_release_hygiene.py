@@ -357,10 +357,11 @@ def test_personal_home_paths_include_root_and_escaped_windows_source(
     tmp_path: Path,
 ) -> None:
     root = _tracked_fixture_repository(tmp_path)
+    escaped_windows_home = "C:" + "\\\\" + "Users" + "\\\\alice\\\\project"
     sources = {
         "root-home.txt": "/" + "root" + "/private/project\n",
-        "windows-source.py": 'PATH = "C:\\\\Users\\\\alice\\\\project"\n',
-        "windows.json": '{"path": "C:\\\\Users\\\\alice\\\\project"}\n',
+        "windows-source.py": f'PATH = "{escaped_windows_home}"\n',
+        "windows.json": f'{{"path": "{escaped_windows_home}"}}\n',
     }
     for relative_path, content in sources.items():
         (root / relative_path).write_text(content, encoding="utf-8")

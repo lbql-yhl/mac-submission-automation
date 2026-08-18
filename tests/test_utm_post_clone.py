@@ -180,6 +180,22 @@ def test_clash_bootstrap_preserves_launchservices_error_detail() -> None:
     assert "CLASH_APP_BOOTSTRAP=launch_failed:" in source
 
 
+def test_clash_bootstrap_restarts_stalled_hidden_app_before_initialization() -> None:
+    source = inspect.getsource(post_clone.bootstrap_clash_app_data)
+
+    assert "stalled_pids" in source
+    assert "os.kill(pid, signal.SIGTERM)" in source
+    assert "['/usr/bin/open',str(app)]" in source
+    assert "['/usr/bin/open','-g',str(app)]" not in source
+    assert "['/usr/bin/open','-gja',str(app)]" not in source
+    assert "for _ in range(20):" in source
+    assert "seed_payloads" in source
+    assert "enable_tun_mode: false" in source
+    assert "ipv6: false" in source
+    assert "current: null" in source
+    assert "os.replace(temporary,path)" in source
+
+
 def test_choose_unique_ip_requires_exact_intersection() -> None:
     assert choose_unique_ip(["192.0.2.10"], ["192.0.2.10"]) == "192.0.2.10"
     for utm, arp in (([], ["192.0.2.10"]), (["192.0.2.10", "192.0.2.11"], ["192.0.2.10", "192.0.2.11"])):

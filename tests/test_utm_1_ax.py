@@ -5,6 +5,8 @@ import plistlib
 import tempfile
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -31,11 +33,11 @@ from scripts.utm_1_ax import (  # noqa: E402
 )
 
 
-def test_directory_picker_prefers_new_row_button_over_new_menu(monkeypatch) -> None:
+def test_directory_picker_prefers_exact_shared_control_over_global_new(monkeypatch) -> None:
     from scripts import utm_1_ax
 
-    assert hasattr(utm_1_ax, "unique_directory_picker_control")
-    row_button = object()
+    shared_button = object()
+    global_button = object()
     calls: list[tuple[tuple[str, ...], set[str] | None]] = []
 
     def fake_live_labeled_nodes(_ax, _root, labels, *, exact=True, roles=None):
@@ -43,17 +45,61 @@ def test_directory_picker_prefers_new_row_button_over_new_menu(monkeypatch) -> N
         calls.append((normalized, roles))
         if normalized == utm_1_ax.CHOOSE_DIRECTORY_LABELS:
             return []
+        if normalized == utm_1_ax.ADD_SHARED_LABELS:
+            return [shared_button]
         if normalized == ("新建…", "New…") and roles == {"AXButton"}:
-            return [row_button]
+            return [global_button]
         raise AssertionError((normalized, roles, exact))
 
     monkeypatch.setattr(utm_1_ax, "live_labeled_nodes", fake_live_labeled_nodes)
 
-    assert utm_1_ax.unique_directory_picker_control(object(), object()) is row_button
+    assert utm_1_ax.unique_directory_picker_control(object(), object()) is shared_button
     assert calls == [
         (utm_1_ax.CHOOSE_DIRECTORY_LABELS, {"AXButton", "AXMenuButton"}),
-        (("新建…", "New…"), {"AXButton"}),
+        (utm_1_ax.ADD_SHARED_LABELS, {"AXButton"}),
     ]
+
+
+def test_directory_picker_rejects_global_new_without_shared_control(monkeypatch) -> None:
+    from scripts import utm_1_ax
+
+    global_button = object()
+
+    def fake_live_labeled_nodes(_ax, _root, labels, *, exact=True, roles=None):
+        normalized = tuple(labels)
+        if normalized == utm_1_ax.CHOOSE_DIRECTORY_LABELS:
+            return []
+        if normalized == utm_1_ax.ADD_SHARED_LABELS:
+            return []
+        if normalized == ("新建…", "New…") and roles == {"AXButton"}:
+            return [global_button]
+        raise AssertionError((normalized, roles, exact))
+
+    monkeypatch.setattr(utm_1_ax, "live_labeled_nodes", fake_live_labeled_nodes)
+
+    with pytest.raises(AXTargetError, match="shared control count=0"):
+        utm_1_ax.unique_directory_picker_control(object(), object())
+
+
+def test_utm_path_paste_waits_before_clearing_clipboard(monkeypatch) -> None:
+    from scripts import utm_1_ax
+
+    events: list[str] = []
+
+    def fake_run(command, *, input=None, check):
+        if command == ["pbcopy"] and input:
+            events.append("copy")
+        elif command == ["pbcopy"]:
+            events.append("clear")
+        else:
+            events.append("paste")
+
+    monkeypatch.setattr(utm_1_ax.subprocess, "run", fake_run)
+    monkeypatch.setattr(utm_1_ax, "wait_and_reacquire", lambda: events.append("wait"))
+
+    utm_1_ax.paste_path_into_utm_panel(Path("/tmp/shared"))
+
+    assert events == ["copy", "paste", "wait", "clear"]
 
 
 def main() -> None:

@@ -69,7 +69,7 @@ STAGE_LABELS: Mapping[str, str] = {
     "utm-13": "UTM-13证书步骤和Profile步骤",
 }
 STAGE_TIMEOUT_SECONDS: Mapping[str, int] = {
-    "utm-10": 60,
+    "utm-10": 180,
     "utm-11": 60,
     "utm-12": 180,
     "utm-13": 60,
@@ -180,7 +180,9 @@ def guest_preflight_command(vm_user: str) -> str:
 guest_verification_command = guest_preflight_command
 
 
-def guest_execution_command(vm_user: str, stage: str) -> str:
+def guest_execution_command(
+    vm_user: str, stage: str, *, adopt_current_session: bool = False
+) -> str:
     target = guest_stage_path(vm_user, stage)
     base = str(Path(target).parent)
     stage_code = stage.upper().replace("-", "_")
@@ -191,12 +193,15 @@ def guest_execution_command(vm_user: str, stage: str) -> str:
         f"{json.dumps(f'file://{base}/session.mjs')};"
         "console.log(JSON.stringify(await currentSessionIdentity()))"
     )
+    node_args = ["node", target]
+    if stage == "utm-12" and adopt_current_session:
+        node_args.append("adopt-current-session")
     node_stage = "\n".join(
         (
             "set -euo pipefail",
             f"/usr/bin/pkill -f {shlex.quote(exact_process)} 2>/dev/null || true",
             "set +e",
-            shlex.join(("/usr/bin/perl", "-e", "alarm shift; exec @ARGV", str(timeout_seconds), "node", target)),
+            shlex.join(("/usr/bin/perl", "-e", "alarm shift; exec @ARGV", str(timeout_seconds), *node_args)),
             "stage_status=$?",
             "set -e",
             f'if [[ "$stage_status" -eq 142 ]]; then print -u2 -- {shlex.quote(f"{stage_code}_ERROR=TIMEOUT_{timeout_seconds}_SECONDS")}; fi',
@@ -545,7 +550,13 @@ def run_guest_stage(
     completed = _ssh_run(
         vm_user,
         vm_ip,
-        guest_execution_command(vm_user, stage),
+        guest_execution_command(
+            vm_user,
+            stage,
+            adopt_current_session=(
+                stage == "utm-12" and payload.get("ADOPT_CURRENT_SESSION") is True
+            ),
+        ),
         input_bytes=_stage_stdin(stage, payload),
         timeout=STAGE_TIMEOUT_SECONDS[stage] + 5,
         runner=runner,
@@ -839,8 +850,8 @@ def run(
     password_env: Mapping[str, str] | None = None,
 ) -> int:
     validate_target(args.vm_name, args.vm_ip, args.vm_user)
-    direct_mode, context_id, parent_title, page_title, expected_app_name = _resolve_context(args)
     notion = api if api is not None else api_from_env()
+    direct_mode, context_id, parent_title, page_title, expected_app_name = _resolve_context(args)
     notion.verify_parent(parent_title)
     requested_stage = str(getattr(args, "stage", "all") or "all")
     if requested_stage == "notion-fields":
@@ -884,12 +895,15 @@ def run(
         "utm-12",
         "utm-12-onward",
         "utm-12-identifiers-onward",
+        "utm-12-adopt-current",
     }:
         _print_stage_start("utm-12")
         registered_utm12 = _registered_utm12_fields(notion, page_title)
         stage_payload = dict(payload)
         if requested_stage == "utm-12-identifiers-onward":
             stage_payload["RESET_FROM_IDENTIFIERS"] = True
+        if requested_stage == "utm-12-adopt-current":
+            stage_payload["ADOPT_CURRENT_SESSION"] = True
         stage_12 = run_guest_stage(
             stage="utm-12",
             vm_name=args.vm_name,
@@ -922,7 +936,7 @@ def run(
             "utm-12",
             skipped_existing=bool(stage_12.data.get("existing")) and app_id_status == "equal",
         )
-        if requested_stage == "utm-12":
+        if requested_stage in {"utm-12", "utm-12-adopt-current"}:
             return 0
         edge_session = _session_from_result(stage_12)
         _print_stage_start("utm-13")
@@ -1060,6 +1074,7 @@ def build_parser() -> argparse.ArgumentParser:
             "utm-12",
             "utm-12-onward",
             "utm-12-identifiers-onward",
+            "utm-12-adopt-current",
             "utm-13",
             "notion-fields",
         ),

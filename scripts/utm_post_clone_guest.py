@@ -106,7 +106,7 @@ def ssh_python(user: str, ip: str, source: str, args: list[str] | None = None) -
 
 def bootstrap_clash_app_data(user: str, ip: str) -> None:
     """Initialize the exact fresh user's Clash sources while Aqua is active."""
-    source = r'''import os, stat, subprocess, sys, time
+    source = r'''import os, re, signal, stat, subprocess, sys, tempfile, time
 from pathlib import Path
 
 user=sys.argv[1]
@@ -136,15 +136,60 @@ app=Path('/Applications/Clash Verge.app')
 binary=app/'Contents/MacOS/clash-verge'
 if not app.is_dir() or app.is_symlink() or not binary.is_file() or binary.is_symlink() or not os.access(binary,os.X_OK):
  raise SystemExit('CLASH_APP=unsafe')
-result=subprocess.run(['/usr/bin/open','-gja',str(app)],capture_output=True,text=True,timeout=10)
-if result.returncode != 0:
+
+def clash_pids():
+ result=subprocess.run(
+  ['/usr/bin/pgrep','-f',f'^{re.escape(str(binary))}$'],
+  capture_output=True,text=True,timeout=8,
+ )
+ return [int(value) for value in result.stdout.split() if value.isdigit()]
+
+stalled_pids=clash_pids()
+for pid in stalled_pids:
+ os.kill(pid, signal.SIGTERM)
+if stalled_pids:
+ for _ in range(5):
+  time.sleep(1)
+  if not clash_pids(): break
+ else: raise SystemExit('CLASH_APP_BOOTSTRAP=stalled_process_would_not_exit')
+
+result=subprocess.run(['/usr/bin/open',str(app)],capture_output=True,text=True,timeout=10)
+if result.returncode != 0 and not clash_pids():
  detail=((result.stderr or '')+'\n'+(result.stdout or '')).strip().replace('\n',' | ')
  raise SystemExit(f'CLASH_APP_BOOTSTRAP=launch_failed:exit={result.returncode}:{detail or "no_detail"}')
-for _ in range(5):
+for _ in range(20):
  time.sleep(3)
  if safe_directory(base) and all(safe_file(path) for path in required):
   print('CLASH_APP_DATA=initialized_verified'); raise SystemExit(0)
-raise SystemExit('CLASH_APP_DATA=initialization_failed')
+
+for pid in clash_pids():
+ os.kill(pid, signal.SIGTERM)
+for _ in range(5):
+ time.sleep(1)
+ if not clash_pids(): break
+else: raise SystemExit('CLASH_APP_BOOTSTRAP=seed_process_would_not_exit')
+if base.exists() or any(path.exists() for path in required):
+ raise SystemExit('CLASH_APP_DATA=partial_or_unsafe')
+base.mkdir(mode=0o700,parents=True)
+os.chmod(base,0o700)
+seed_payloads={
+ base/'verge.yaml':b'enable_tun_mode: false\nenable_system_proxy: false\nenable_auto_launch: false\nenable_silent_start: false\nenable_dns_settings: false\nverge_mixed_port: 7897\n',
+ base/'config.yaml':b'ipv6: false\nunified-delay: true\nmixed-port: 7897\nallow-lan: false\n',
+ base/'profiles.yaml':b'current: null\nitems: null\n',
+}
+for path,payload in seed_payloads.items():
+ descriptor,name=tempfile.mkstemp(prefix='.'+path.name+'.',dir=base)
+ temporary=Path(name)
+ try:
+  os.fchmod(descriptor,0o600)
+  with os.fdopen(descriptor,'wb') as handle:
+   handle.write(payload); handle.flush(); os.fsync(handle.fileno())
+  os.replace(temporary,path)
+ finally:
+  if temporary.exists(): temporary.unlink()
+if not safe_directory(base) or not all(safe_file(path) for path in required):
+ raise SystemExit('CLASH_APP_DATA=seed_verification_failed')
+print('CLASH_APP_DATA=initialized_verified')
 '''
     output = ssh_python(user, ip, source, [user])
     if output.strip() != "CLASH_APP_DATA=initialized_verified":

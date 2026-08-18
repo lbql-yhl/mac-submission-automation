@@ -28,10 +28,10 @@ from scripts.utm_18_attempt import (  # noqa: E402
     classify_attempt,
     create_attempt,
     inspect_remote,
+    is_retryable_finished_attempt,
     load_single_attempt,
     mark_attempt,
     precommit_remote,
-    preview_terminal_command,
     run_remote,
 )
 from scripts.utm_18_edge import UTM18EdgeError, prepare_edge  # noqa: E402
@@ -154,6 +154,7 @@ def verify_or_login_apple(
         or not result["edge_websocket"].startswith("ws://127.0.0.1:9222/")
     ):
         raise UTM18Error("APPLE_DEVELOPER_RESULT_INVALID")
+    APPLE_LOGIN_DIAGNOSTIC.unlink(missing_ok=True)
     return result
 
 
@@ -260,10 +261,6 @@ def _attempt_failure_message(result: AttemptResult) -> str:
 def run(args: argparse.Namespace) -> int:
     if args.vm_user != args.vm_name:
         raise UTM18Error("VM_USER_MISMATCH")
-    if getattr(args, "prepare_terminal_only", False):
-        preview_terminal_command(args.vm_name, args.vm_ip)
-        print("UTM_18_TERMINAL_COMMAND_READY=verified")
-        return 0
     attempts_root = Path(args.attempts_root)
     supplied_run_id = getattr(args, "run_id", None)
     direct_mode = not supplied_run_id
@@ -317,20 +314,12 @@ def run(args: argparse.Namespace) -> int:
                 not previous_running
                 and "RUN_STATE=prepared" in previous_status
             )
-            interrupted_transport = (
-                not previous_running
-                and "RUN_STATE=finished" in previous_status
-                and "REMOTE_TEE_EXIT=141" in previous_status
-            )
-            legacy_finished = (
-                attempt.mode == "legacy_hidden_ssh"
-                and not previous_running
-                and "RUN_STATE=finished" in previous_status
-            )
-            if (
-                not previous_running
-                and "Error: 找不到可点击的inflight 页面保存按钮" in previous_log
-            ) or interrupted_transport or legacy_finished:
+            if is_retryable_finished_attempt(
+                attempt,
+                log=previous_log,
+                status=previous_status,
+                process_running=previous_running,
+            ):
                 archive_retryable_attempt(
                     attempt,
                     log=previous_log,
@@ -342,6 +331,14 @@ def run(args: argparse.Namespace) -> int:
                 attempt = mark_attempt(attempt, state="precommitted")
 
     if attempt is None:
+        verify_or_login_apple(
+            api,
+            parent_title=parent_title,
+            page_title=page_title,
+            vm_name=args.vm_name,
+            vm_ip=args.vm_ip,
+            vm_user=args.vm_user,
+        )
         attempt = create_attempt(
             attempts_root,
             run_id=context_id,
@@ -385,7 +382,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vm-name", required=True)
     parser.add_argument("--vm-ip", required=True)
     parser.add_argument("--vm-user", required=True)
-    parser.add_argument("--prepare-terminal-only", action="store_true")
     parser.add_argument(
         "--attempts-root",
         type=Path,
@@ -404,14 +400,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"UTM_18_ELAPSED_SECONDS={round(time.monotonic() - started_at)}")
         return status
 
-    success_marker = (
-        "UTM_18_TERMINAL_COMMAND_READY=verified"
-        if args.prepare_terminal_only
-        else "UTM_18=verified"
-    )
     return run_clean_cli(
         skill_name="utm-script",
-        success_marker=success_marker,
+        success_marker="UTM_18=verified",
         operation=operation,
         preserve_error_detail=True,
     )

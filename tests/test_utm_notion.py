@@ -28,6 +28,18 @@ from scripts.utm_notion import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TARGET_FEISHU_WIKI_URL = (
+    "https://qv0zc1dq6qy.feishu.cn/wiki/C70TwyJevipDZakMTWYcusTwnhh"
+    "?table=tbl5OOyYst8BqZ6x&view=vewjQVBVeu"
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_utm_notion_feishu_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in utm_notion.UTM_NOTION_FEISHU_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
 
 
 def test_account_template_keeps_one_explicit_year_month_day_birthday_label() -> None:
@@ -128,6 +140,78 @@ def test_absolute_script_entry_starts_outside_project_directory(tmp_path: Path) 
     assert "--run-id RUN_ID" in result.stdout
     assert "--app-name APP_NAME" in result.stdout
     assert "--vm-name VM_NAME" in result.stdout
+
+
+def test_parse_feishu_wiki_url_returns_exact_node_table_and_view() -> None:
+    assert utm_notion.parse_feishu_wiki_url(TARGET_FEISHU_WIKI_URL) == (
+        "C70TwyJevipDZakMTWYcusTwnhh",
+        "tbl5OOyYst8BqZ6x",
+        "vewjQVBVeu",
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        (
+            "https://example.test/wiki/C70TwyJevipDZakMTWYcusTwnhh"
+            "?table=tbl5OOyYst8BqZ6x&view=vewjQVBVeu"
+        ),
+        (
+            "https://qv0zc1dq6qy.feishu.cn/base/C70TwyJevipDZakMTWYcusTwnhh"
+            "?table=tbl5OOyYst8BqZ6x&view=vewjQVBVeu"
+        ),
+        (
+            "https://qv0zc1dq6qy.feishu.cn/wiki/C70TwyJevipDZakMTWYcusTwnhh"
+            "?table=tbl5OOyYst8BqZ6x"
+        ),
+        (
+            "https://qv0zc1dq6qy.feishu.cn/wiki/C70TwyJevipDZakMTWYcusTwnhh"
+            "?table=tbl5OOyYst8BqZ6x&table=tblOther&view=vewjQVBVeu"
+        ),
+    ],
+)
+def test_parse_feishu_wiki_url_rejects_ambiguous_or_non_wiki_sources(url: str) -> None:
+    with pytest.raises(RuntimeError, match="Feishu Wiki URL"):
+        utm_notion.parse_feishu_wiki_url(url)
+
+
+def test_resolve_bitable_app_token_uses_wiki_node_obj_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return (
+                b'{"code":0,"msg":"success","data":{"node":{'
+                b'"obj_type":"bitable",'
+                b'"obj_token":"XW2DbRbx7aG1URs8KfTcN0nlnhb"}}}'
+            )
+
+    def fake_urlopen(request: object, *, timeout: int):
+        assert timeout == 30
+        requested_urls.append(str(getattr(request, "full_url")))
+        return FakeResponse()
+
+    monkeypatch.setattr(utm_notion.urllib.request, "urlopen", fake_urlopen)
+
+    app_token = utm_notion.resolve_bitable_app_token(
+        "tenant-token",
+        "C70TwyJevipDZakMTWYcusTwnhh",
+    )
+
+    assert app_token == "XW2DbRbx7aG1URs8KfTcN0nlnhb"
+    assert requested_urls == [
+        "https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node"
+        "?token=C70TwyJevipDZakMTWYcusTwnhh"
+    ]
 
 
 def test_execute_prefers_project_env_for_utm_notion_feishu_source(
@@ -251,6 +335,56 @@ def test_build_registration_fields_uses_url_cell_link_when_sms_url_is_not_inline
     account, _ = build_registration_fields(fields)
 
     assert account["电话短信接收平台："] == "https://sms.example.test/?code=authoritative"
+
+
+@pytest.mark.parametrize(
+    "account_cell",
+    [
+        (
+            "stringbed@example.comAbc1D2ef🇩🇪德国2025550123"
+            "https://sms-display.example.test/?code=visible"
+        ),
+        [
+            {
+                "text": (
+                    "stringbed@example.comAbc1D2ef🇩🇪德国2025550123"
+                    "https://sms-display.example.test/?code=visible"
+                )
+            }
+        ],
+    ],
+)
+def test_build_registration_fields_accepts_textual_account_cell_with_inline_url(
+    account_cell: object,
+) -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = account_cell
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["邮箱："] == "stringbed@example.com"
+    assert account["初始密码："] == "Abc1D2ef"
+    assert account["电话："] == "+12025550123"
+    assert account["电话短信接收平台："] == (
+        "https://sms-display.example.test/?code=visible"
+    )
+
+
+def test_build_registration_fields_accepts_space_separated_international_account() -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = (
+        "stringbed@example.xyz Letters 441234567890 "
+        "https://sms-display.example.test/?code=visible"
+    )
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["邮箱："] == "stringbed@example.xyz"
+    assert account["初始密码："] == "Letters"
+    assert account["电话："] == "+441234567890"
+    assert account["电话短信接收平台："] == (
+        "https://sms-display.example.test/?code=visible"
+    )
 
 
 def test_build_registration_fields_accepts_labelled_account_info_with_prefix() -> None:
@@ -385,6 +519,40 @@ def test_build_registration_fields_accepts_provider_country_email_password_dolla
     assert account["电话："] == "+12025550123"
     assert account["电话短信接收平台："] == (
         "https://sms-display.example.test/?code=visible"
+    )
+
+
+def test_build_registration_fields_accepts_provider_email_password_and_plain_phone() -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = {
+        "text": (
+            "Outlook 🇫🇮stringbed@example.comAbcdefg12"
+            "2025550123https://sms-display.example.test/?code=visible"
+        ),
+        "link": "https://sms.example.test/?code=authoritative",
+    }
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["邮箱："] == "stringbed@example.com"
+    assert account["初始密码："] == "Abcdefg12"
+    assert account["电话："] == "+12025550123"
+    assert account["电话短信接收平台："] == (
+        "https://sms-display.example.test/?code=visible"
+    )
+
+
+def test_build_registration_fields_uses_pending_domain_when_legacy_domain_fields_are_empty() -> None:
+    fields = stringbed_fields()
+    fields["顶级域名"] = ""
+    fields["正式域名(app/h5/im/log)"] = ""
+    fields["待购买域名"] = "example.com"
+
+    _, application = build_registration_fields(fields)
+
+    assert application["顶级域名: "] == "example.com"
+    assert application["正式域名: "] == (
+        "app.example.com\nh5.example.com\nim.example.com\nlog.example.com"
     )
 
 
@@ -546,6 +714,150 @@ class FakeFeishu(FeishuBitableClient):
             record["fields"].update(payload["fields"])
             return {"record": record}
         raise AssertionError((method, path, query, payload))
+
+
+def test_execute_preflights_vm_write_before_binding_and_notion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    record = {"record_id": "rec-stringbed", "fields": stringbed_fields()}
+
+    class ForbiddenClient:
+        def __init__(
+            self,
+            _token: str,
+            _app_token: str,
+            _table_id: str,
+            _view_id: str,
+        ) -> None:
+            pass
+
+        def find_exact_record(self, **_kwargs: str) -> dict[str, object]:
+            return record
+
+        def preflight_vm_write(self, _record: dict[str, object]) -> None:
+            events.append("preflight")
+            raise RuntimeError("Feishu API HTTP 403: code=91403 msg=Forbidden")
+
+        def ensure_vm(self, _record: dict[str, object], _vm_name: str) -> bool:
+            events.append("ensure")
+            raise RuntimeError("Feishu API HTTP 403: code=91403 msg=Forbidden")
+
+    def unexpected_bind(*_args: object, **_kwargs: object) -> str:
+        events.append("bind")
+        return "gvby"
+
+    def unexpected_notion() -> object:
+        events.append("notion")
+        raise AssertionError("Notion must not be called after Feishu write preflight fails")
+
+    monkeypatch.setattr(utm_notion, "read_env_file", lambda _path: {})
+    monkeypatch.setattr(utm_notion, "get_tenant_access_token", lambda *_args: "token")
+    monkeypatch.setattr(
+        utm_notion,
+        "resolve_utm_notion_source",
+        lambda *_args: ("app", "tbl5OOyYst8BqZ6x", "vewjQVBVeu"),
+    )
+    monkeypatch.setattr(utm_notion, "FeishuBitableClient", ForbiddenClient)
+    monkeypatch.setattr(utm_notion, "_bind_vm", unexpected_bind)
+    monkeypatch.setattr(utm_notion, "notion_api_from_settings", lambda _settings: unexpected_notion())
+    monkeypatch.setenv("FEISHU_APP_ID", "app-id")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
+    monkeypatch.setenv("UTM_NOTION_FEISHU_WIKI_URL", TARGET_FEISHU_WIKI_URL)
+    monkeypatch.setenv("SUBMISSION_VM_IMAGES_DIR", str(tmp_path))
+    monkeypatch.setenv("SUBMISSION_HOST_MACHINE", "Mac Studio")
+
+    with pytest.raises(RuntimeError, match="91403"):
+        utm_notion.execute(app_name="StringBed")
+
+    assert events == ["preflight"]
+
+
+def test_execute_with_explicit_vm_does_not_require_feishu_record_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    record = {"record_id": "rec-stringbed", "fields": stringbed_fields()}
+
+    class ReadOnlyClient:
+        def __init__(self, *_args: str) -> None:
+            pass
+
+        def find_exact_record(self, **_kwargs: str) -> dict[str, object]:
+            return record
+
+        def preflight_vm_write(self, _record: dict[str, object]) -> None:
+            raise AssertionError("explicit VM must not require Feishu write preflight")
+
+        def ensure_vm(self, _record: dict[str, object], _vm_name: str) -> bool:
+            raise AssertionError("explicit VM must not require Feishu record update")
+
+    class StopAfterExplicitBinding(RuntimeError):
+        pass
+
+    class ReadOnlyNotion:
+        def verify_parent(self, _host: str) -> None:
+            events.append("notion-verify")
+
+        def create_registration_copy(self, _title: str) -> tuple[str, bool]:
+            events.append("notion-create")
+            raise StopAfterExplicitBinding
+
+    def bind_exact(*_args: object, **_kwargs: object) -> str:
+        events.append("bind")
+        return "gvby"
+
+    monkeypatch.setattr(utm_notion, "read_env_file", lambda _path: {})
+    monkeypatch.setattr(utm_notion, "get_tenant_access_token", lambda *_args: "token")
+    monkeypatch.setattr(
+        utm_notion,
+        "resolve_utm_notion_source",
+        lambda *_args: ("app", "tbl5OOyYst8BqZ6x", "vewjQVBVeu"),
+    )
+    monkeypatch.setattr(utm_notion, "FeishuBitableClient", ReadOnlyClient)
+    monkeypatch.setattr(utm_notion, "_bind_vm", bind_exact)
+    monkeypatch.setattr(
+        utm_notion,
+        "notion_api_from_settings",
+        lambda _settings: ReadOnlyNotion(),
+    )
+    monkeypatch.setenv("FEISHU_APP_ID", "app-id")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
+    monkeypatch.setenv("UTM_NOTION_FEISHU_WIKI_URL", TARGET_FEISHU_WIKI_URL)
+    monkeypatch.setenv("SUBMISSION_VM_IMAGES_DIR", str(tmp_path))
+    monkeypatch.setenv("SUBMISSION_HOST_MACHINE", "Mac Studio")
+
+    with pytest.raises(StopAfterExplicitBinding):
+        utm_notion.execute(app_name="StringBed", vm_name="gvby")
+
+    assert events == ["notion-verify", "bind", "notion-create"]
+
+
+def test_empty_vm_write_preflight_is_same_value_write_with_independent_readback() -> None:
+    fields = stringbed_fields()
+    before_digest = utm_notion._fields_digest(fields, omit={"虚拟机"})
+
+    class TrackingFeishu(FakeFeishu):
+        def __init__(self, records: list[dict]) -> None:
+            super().__init__(records)
+            self.request_methods: list[str] = []
+
+        def _request(self, method: str, path: str, *, query=None, payload=None):
+            self.request_methods.append(method)
+            return super()._request(method, path, query=query, payload=payload)
+
+    client = TrackingFeishu([{"record_id": "rec-stringbed", "fields": fields}])
+    record = client.find_exact_record(app_name="StringBed")
+    client.request_methods.clear()
+
+    client.preflight_vm_write(record)
+
+    assert client.request_methods == ["GET", "PUT", "GET"]
+    assert client.patches == [("rec-stringbed", {"fields": {"虚拟机": None}})]
+    assert utm_notion._cell_text(record["fields"]["虚拟机"]) == ""
+    assert utm_notion._fields_digest(record["fields"], omit={"虚拟机"}) == before_digest
 
 
 def test_fields_digest_ignores_only_volatile_attachment_urls() -> None:

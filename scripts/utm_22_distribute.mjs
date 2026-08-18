@@ -456,8 +456,27 @@ function apiError(status, body) {
   return new Error(details?.join('; ') || `App Store Connect API HTTP ${status}`);
 }
 
+export async function fetchWithGetRecovery(method, url, options, dependencies = {}) {
+  const fetcher = dependencies.fetcher || fetch;
+  const sleeper = dependencies.sleeper || ((delay) => new Promise((resolveDelay) => setTimeout(resolveDelay, delay)));
+  const delays = method === 'GET' ? [0, 2_000, 5_000, 10_000] : [0];
+  let lastError;
+  for (let index = 0; index < delays.length; index += 1) {
+    if (delays[index]) await sleeper(delays[index]);
+    try {
+      const response = await fetcher(url, options);
+      const transientStatus = [408, 429].includes(response.status) || response.status >= 500;
+      if (!transientStatus || index === delays.length - 1) return response;
+    } catch (error) {
+      lastError = error;
+      if (index === delays.length - 1) throw error;
+    }
+  }
+  throw lastError || new Error('GET recovery exhausted');
+}
+
 async function apiRequest(method, path, credentials, body) {
-  const response = await fetch(`${API}${path}`, {
+  const response = await fetchWithGetRecovery(method, `${API}${path}`, {
     method,
     headers: {
       Authorization: apiAuthorization(credentials),

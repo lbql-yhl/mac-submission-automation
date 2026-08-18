@@ -210,13 +210,42 @@ def test_utm12_stage_execution_uses_180_second_guest_timeout() -> None:
     assert "UTM_12_ERROR=TIMEOUT_180_SECONDS" in command
 
 
-@pytest.mark.parametrize("stage", ("utm-10", "utm-11", "utm-13"))
+@pytest.mark.parametrize("stage", ("utm-11", "utm-13"))
 def test_non_utm12_stage_execution_keeps_60_second_guest_timeout(stage: str) -> None:
     command = utm_apps.guest_execution_command("igec", stage)
 
     stage_code = stage.upper().replace("-", "_")
     assert f"{stage_code}_ERROR=TIMEOUT_60_SECONDS" in command
     assert f"{stage_code}_ERROR=TIMEOUT_180_SECONDS" not in command
+
+
+def test_utm10_guest_stage_uses_180_second_timeout_with_transport_grace() -> None:
+    observed = {}
+
+    def runner(command, **kwargs):
+        observed["command"] = command[-1]
+        observed["timeout"] = kwargs["timeout"]
+        raise RuntimeError("stop after capturing utm-10 timeouts")
+
+    with pytest.raises(RuntimeError, match="stop after capturing utm-10 timeouts"):
+        utm_apps.run_guest_stage(
+            stage="utm-10",
+            vm_name="abcd",
+            vm_ip="192.0.2.10",
+            vm_user="abcd",
+            payload={
+                "APPLE_ACCOUNT_EMAIL": "mail@example.test",
+                "APPLE_ACCOUNT_PASSWORD": "secret",
+                "APPLE_ACCOUNT_PHONE": "+15550100",
+                "APPLE_ACCOUNT_SMS_URL": "https://sms.example.test/",
+                "APPLE_ACCOUNT_USER_NAME": "Marius Engel",
+            },
+            runner=runner,
+            password_env={},
+        )
+
+    assert "UTM_10_ERROR=TIMEOUT_180_SECONDS" in observed["command"]
+    assert observed["timeout"] == 185
 
 
 def test_utm13_authorization_uses_the_runtime_guest_value(monkeypatch) -> None:
@@ -1498,6 +1527,13 @@ def test_utm10_otp_page_uses_the_current_code_without_resend() -> None:
     assert phone_branch.index("choosePhoneText") < phone_branch.index(
         "waitForTimeout(10_000)"
     ) < phone_branch.index("openSms")
+    direct_otp_branch = main_source.split(
+        '} else if (state === "otp") {', 1
+    )[1].split("\n    }", 1)[0]
+    assert "await page.waitForTimeout(10_000);" in direct_otp_branch
+    assert direct_otp_branch.index("waitForTimeout(10_000)") < direct_otp_branch.index(
+        "openSms"
+    )
     assert (
         "latest = await waitNewestSms(smsPage, credentials.smsUrl);"
         in main_source

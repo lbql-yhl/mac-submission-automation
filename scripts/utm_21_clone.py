@@ -12,6 +12,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, Callable
 from urllib.parse import unquote, urlsplit
 
 
@@ -24,10 +25,12 @@ from scripts.ssh_password import (  # noqa: E402
     password_environment,
     ssh_args as configured_guest_password_ssh_args,
 )
+from scripts.utm_direct_context import resolve_direct_context
 from services.project_paths import PROJECT_ROOT
 
 
 RUNS_FILE = PROJECT_ROOT / "runtime" / "feishu-runs.json"
+DIRECT_RUN_RE = re.compile(r"direct-v1-[a-z]{4}-[0-9a-f]{24}")
 REMOTE_CLONE_SCRIPT = r'''
 set +x
 setopt NO_XTRACE
@@ -130,6 +133,39 @@ def exact_owned_run(run_id: str, vm_name: str) -> dict:
     return run
 
 
+def verify_execution_context(
+    *,
+    run_id: str,
+    parent_title: str,
+    page_title: str,
+    vm_name: str,
+    vm_ip: str,
+    vm_user: str,
+    direct_resolver: Callable[..., Any] = resolve_direct_context,
+) -> None:
+    if run_id.startswith("direct-"):
+        if not DIRECT_RUN_RE.fullmatch(run_id):
+            raise RuntimeError("DIRECT_RUN_ID_INVALID")
+        context = direct_resolver(
+            parent_title=parent_title,
+            page_title=page_title,
+            vm_name=vm_name,
+            vm_ip=vm_ip,
+            vm_user=vm_user,
+        )
+        if (
+            context.context_id != run_id
+            or context.parent_title != parent_title
+            or context.page_title != page_title
+            or context.vm_name != vm_name
+            or context.vm_ip != vm_ip
+            or context.vm_user != vm_user
+        ):
+            raise RuntimeError("DIRECT_CONTEXT_MISMATCH")
+        return
+    exact_owned_run(run_id, vm_name)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", required=True)
@@ -140,8 +176,15 @@ def main() -> int:
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     args = parser.parse_args()
 
-    exact_owned_run(args.run_id, args.vm_name)
     ipaddress.ip_address(args.vm_ip)
+    verify_execution_context(
+        run_id=args.run_id,
+        parent_title=args.parent_title,
+        page_title=args.page_title,
+        vm_name=args.vm_name,
+        vm_ip=args.vm_ip,
+        vm_user=args.vm_name,
+    )
     username = os.getenv("CODEUP_USERNAME", "")
     password = os.getenv("CODEUP_PASSWORD", "")
     if not username or not password:

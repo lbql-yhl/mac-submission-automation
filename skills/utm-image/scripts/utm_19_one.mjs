@@ -428,6 +428,7 @@ async function validateImages(root) {
   const images = [];
   const identities = new Set();
   for (const file of files) {
+    if (path.basename(file).startsWith("._")) continue;
     const extension = path.extname(file).toLowerCase();
     if (![".jpg", ".jpeg", ".png"].includes(extension)) continue;
     const info = await lstat(file);

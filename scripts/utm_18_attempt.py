@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import subprocess
 import uuid
 from dataclasses import asdict, dataclass, replace
@@ -27,6 +26,10 @@ BUSINESS_ERROR_SIGNATURES = (
     "error calling the App Store Connect API",
     "status 500",
     "UNEXPECTED_ERROR",
+)
+RETRYABLE_PRESAVE_SIGNATURES = (
+    "Error: 找不到可点击的inflight 页面保存按钮",
+    "browserType.connectOverCDP: connect ECONNREFUSED 127.0.0.1:9222",
 )
 ERROR_DETAIL_START_RE = re.compile(
     r'^(?:\{|[A-Za-z]*Error\b|Error:|❌|.*(?:无法|找不到|失败|缺少|无效)|\s*["\']errors["\']\s*:)',
@@ -211,20 +214,24 @@ def mark_attempt(attempt: Attempt, *, state: str, mode: str = "") -> Attempt:
     return updated
 
 
-def archive_retryable_attempt(
+def is_retryable_finished_attempt(
     attempt: Attempt,
     *,
     log: str,
     status: str,
     process_running: bool,
-) -> Path:
-    """Archive a finished attempt whose replay is proven safe."""
-    values = _parse_status(status, attempt.attempt_id)
-    expected = "Error: 找不到可点击的inflight 页面保存按钮"
+) -> bool:
+    """Return whether replay is proven safe before any business mutation."""
+    if process_running:
+        return False
+    try:
+        values = _parse_status(status, attempt.attempt_id)
+    except UTM18AttemptError:
+        return False
     known_presave_failure = (
         values.get("REMOTE_NPM_EXIT") == "1"
         and values.get("REMOTE_TEE_EXIT") == "0"
-        and log.count(expected) == 1
+        and any(log.count(signature) == 1 for signature in RETRYABLE_PRESAVE_SIGNATURES)
     )
     interrupted_transport = (
         values.get("REMOTE_NPM_EXIT") == "1"
@@ -234,17 +241,33 @@ def archive_retryable_attempt(
         attempt.mode == "legacy_hidden_ssh"
         and values.get("RUN_STATE") == "finished"
     )
-    if (
-        process_running
-        or values.get("RUN_STATE") != "finished"
-        or not (known_presave_failure or interrupted_transport or legacy_finished)
-        or (
-            not legacy_finished
-            and any(
+    return (
+        not process_running
+        and values.get("RUN_STATE") == "finished"
+        and (known_presave_failure or interrupted_transport or legacy_finished)
+        and (
+            legacy_finished
+            or not any(
                 signature.casefold() in log.casefold()
                 for signature in BUSINESS_ERROR_SIGNATURES
             )
         )
+    )
+
+
+def archive_retryable_attempt(
+    attempt: Attempt,
+    *,
+    log: str,
+    status: str,
+    process_running: bool,
+) -> Path:
+    """Archive a finished attempt whose replay is proven safe."""
+    if not is_retryable_finished_attempt(
+        attempt,
+        log=log,
+        status=status,
+        process_running=process_running,
     ):
         raise UTM18AttemptError("ATTEMPT_NOT_SAFE_TO_ARCHIVE")
     archive_dir = attempt.ledger_path.parent.parent / "archive"
@@ -337,58 +360,6 @@ for path,payload,mode in payloads:
 '''
 
 
-TERMINAL_PREVIEW_WRITE = r'''import os,pathlib,sys
-path=pathlib.Path(sys.argv[1]); content=sys.argv[2]
-if path.is_symlink(): raise SystemExit(71)
-fd=os.open(path,os.O_CREAT|os.O_TRUNC|os.O_WRONLY,0o700)
-with os.fdopen(fd,"w",encoding="utf-8") as handle:
-    handle.write(content); handle.flush(); os.fsync(handle.fileno())
-os.chmod(path,0o700)
-'''
-
-
-def preview_terminal_command(
-    vm_name: str,
-    vm_ip: str,
-    *,
-    runner: Callable[..., Any] = subprocess.run,
-) -> None:
-    command_text = "cd Downloads/Fire_One_en1.3 && npm run fill:description"
-    preview_path = f"/Users/{vm_name}/Downloads/utm-script-command-preview.command"
-    preview_content = (
-        "#!/bin/zsh -l\n"
-        f"printf '\\n%s\\n\\n' {shlex.quote(command_text)}\n"
-        "exec /bin/zsh -l\n"
-    )
-    writer = shlex.join(
-        ["python3", "-B", "-c", TERMINAL_PREVIEW_WRITE, preview_path, preview_content]
-    )
-    opener = shlex.join(["/usr/bin/open", "-na", "Terminal", preview_path])
-    command, environment = build_invocation(
-        vm_name,
-        vm_ip,
-        ["/bin/zsh", "-lc", f"{writer} && {opener}"],
-        connect_timeout=8,
-    )
-    try:
-        result = runner(
-            command,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as error:
-        raise UTM18AttemptError("TERMINAL_PREVIEW_TIMEOUT_SECONDS=30") from error
-    if result.returncode != 0:
-        detail = str(result.stderr or "").strip()
-        suffix = f";{detail}" if detail else ""
-        raise UTM18AttemptError(
-            f"TERMINAL_PREVIEW_EXIT={result.returncode}{suffix}"
-        )
-
-
 def precommit_remote(
     attempt: Attempt,
     *,
@@ -447,7 +418,7 @@ def run_remote(
     command, environment = build_invocation(
         attempt.vm_name,
         attempt.vm_ip,
-        ["/usr/bin/open", "-na", "Terminal", attempt.command_path],
+        ["/usr/bin/open", "-a", "Terminal", attempt.command_path],
         connect_timeout=8,
     )
     try:

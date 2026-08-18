@@ -433,6 +433,7 @@ async function main() {
         smsPage = await openSms(context, credentials.smsUrl);
       }
     } else if (state === "otp") {
+      await page.waitForTimeout(10_000);
       smsPage = await openSms(context, credentials.smsUrl);
       await page.bringToFront();
     }

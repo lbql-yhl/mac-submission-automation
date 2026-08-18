@@ -559,6 +559,7 @@ def run(args: argparse.Namespace) -> int:
     if args.vm_user != args.vm_name:
         raise UTM9Error("VM_USER_NAME_MISMATCH")
     ipaddress.ip_address(args.vm_ip)
+    api = api_from_env()
     local_host = os.getenv("SUBMISSION_HOST_MACHINE", "").strip()
     supplied_run_id = getattr(args, "run_id", None)
     supplied_page_title = getattr(args, "page_title", None)
@@ -593,8 +594,6 @@ def run(args: argparse.Namespace) -> int:
         )
         digest = hashlib.sha256(page_title.encode("utf-8")).hexdigest()[:12]
         run_id = _safe_run_id(f"independent-utm-9-{args.vm_name}-{digest}")
-    api = api_from_env()
-
     def read_notion_subject() -> tuple[str, str]:
         api.verify_parent(local_host)
         current_email = api.read_field(page_title, "账号信息", "邮箱：").strip()

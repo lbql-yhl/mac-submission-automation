@@ -2,17 +2,58 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from scripts import utm_22_upload
 from scripts.utm_22_upload import (
+    UploadTarget,
     UploadTargetError,
     _parse_args,
+    _run_upload,
     choose_archive,
     resolve_manual_target,
     resolve_run_target,
     ssh_recovery_action,
 )
+
+
+def test_upload_node_process_uses_environment_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    def runner(command, **kwargs):
+        observed["command"] = command
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "BUILD_UPLOAD_FINAL_STATE=COMPLETE\n"
+                "BUILD_PROCESSING_STATE=VALID\n"
+            ),
+        )
+
+    monkeypatch.setattr(utm_22_upload.subprocess, "run", runner)
+    monkeypatch.setattr(utm_22_upload, "password_environment", lambda: {})
+
+    _run_upload(
+        UploadTarget("SlopeRight", "gvby", "manual:SlopeRight-gvby"),
+        "192.168.64.68",
+        "/Users/example/Downloads/utm_22_distribute.mjs",
+        {
+            "path": "/Archives/SlopeRight.xcarchive",
+            "version": "1.0",
+            "build": "1",
+        },
+        "/Users/example/Downloads/apple-store-bm/config/prod.yml",
+        1800,
+    )
+
+    remote_command = observed["command"][-1]
+    assert remote_command.startswith(
+        "/usr/bin/env NODE_USE_ENV_PROXY=1 /usr/local/bin/node "
+    )
 
 
 def test_resolve_run_target_requires_one_owned_exact_binding() -> None:

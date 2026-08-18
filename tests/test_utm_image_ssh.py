@@ -14,6 +14,41 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_SCRIPT = ROOT / "skills" / "utm-image" / "scripts" / "utm_19_one.mjs"
 
 
+def test_source_result_uses_configured_feishu_wiki_base(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    client = object()
+    monkeypatch.setattr(utm_image, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(utm_image, "load_credentials", lambda path: ("app-id", "secret"))
+    monkeypatch.setattr(utm_image, "FeishuClient", lambda *args: client)
+    monkeypatch.setattr(
+        utm_image,
+        "get_tenant_access_token",
+        lambda app_id, secret: "tenant-token",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        utm_image,
+        "resolve_feishu_source",
+        lambda token: ("WikiBaseToken", "tblConfigured", "vewConfigured"),
+        raising=False,
+    )
+
+    def prepare(**kwargs):
+        captured.update(kwargs)
+        return {"status": "verified"}
+
+    monkeypatch.setattr(utm_image, "prepare_screenshot_source", prepare)
+
+    assert utm_image._source_result("PackWise-Enter the trip", "run-12345678") == {
+        "status": "verified"
+    }
+    assert captured["base_url"] == (
+        "https://qv0zc1dq6qy.feishu.cn/base/WikiBaseToken"
+        "?table=tblConfigured&view=vewConfigured"
+    )
+    assert captured["client"] is client
+
+
 def test_guest_script_path_is_fixed_in_downloads_backup() -> None:
     assert utm_image.guest_script_path("abcd") == (
         "/Users/example/Downloads/AppleAccountScriptsBackup/utm_19_one.mjs"
@@ -110,6 +145,54 @@ def test_guest_execution_uses_password_ssh_stdin_and_fixed_script() -> None:
     assert "UTM_19=verified" in markers
 
 
+def test_guest_execution_success_removes_stale_diagnostic(
+    monkeypatch, tmp_path
+) -> None:
+    diagnostic = tmp_path / "utm-image-guest.stderr"
+    diagnostic.write_text("stale failure", encoding="utf-8")
+    monkeypatch.setattr(utm_image, "GUEST_DIAGNOSTIC_PATH", diagnostic)
+    calls = 0
+
+    def runner(command, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "edge_pid": 123,
+                        "edge_websocket": "ws://127.0.0.1:9222/devtools/browser/session",
+                    }
+                ).encode(),
+                stderr=b"",
+            )
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(
+                b"LOCAL_EDGE_SESSION=reused\n"
+                b"SCREENSHOT_SOURCE_FIELD=development_attachment\n"
+                b"SCREENSHOT_PACKAGE=verified\n"
+                b"APP_IDENTITY=verified\n"
+                b"IPHONE_69_DISPLAY=selected\n"
+                b"SCREENSHOT_UPLOAD=verified_3_of_10\n"
+                b"UTM_19=verified\n"
+            ),
+            stderr=b"",
+        )
+
+    utm_image.run_guest_script(
+        vm_name="abcd",
+        vm_ip="192.0.2.10",
+        vm_user="abcd",
+        payload={"source": {}},
+        runner=runner,
+        password_env={"SSH_ASKPASS_REQUIRE": "force"},
+    )
+
+    assert not diagnostic.exists()
+
+
 def test_host_entry_contains_no_browser_automation() -> None:
     source = (ROOT / "scripts" / "utm_image.py").read_text(encoding="utf-8")
     for forbidden in (
@@ -145,6 +228,15 @@ def test_guest_script_uses_guest_dependency_and_not_host_source_helper() -> None
         assert forbidden not in source
 
 
+def test_guest_ignores_appledouble_metadata_before_image_validation() -> None:
+    source = GUEST_SCRIPT.read_text(encoding="utf-8")
+    skip_metadata = 'if (path.basename(file).startsWith("._")) continue;'
+    extension_check = "const extension = path.extname(file).toLowerCase();"
+
+    assert skip_metadata in source
+    assert source.index(skip_metadata) < source.index(extension_check)
+
+
 def test_guest_gui_actions_use_three_second_settle_and_fresh_state_readback() -> None:
     source = GUEST_SCRIPT.read_text(encoding="utf-8")
     assert "async function settleAfterGuiAction" in source
@@ -169,7 +261,7 @@ def test_guest_reuses_existing_exact_app_page_before_apps_list_lookup() -> None:
 def test_skill_contract_has_only_host_ssh_entry() -> None:
     skill = (ROOT / "skills" / "utm-image" / "SKILL.md").read_text(encoding="utf-8")
     assert "$PROJECT_ROOT/scripts/utm_image.py" in skill
-    assert "/Users/<vm_name>/Downloads/AppleAccountScriptsBackup/utm_19_one.mjs" not in skill
+    assert "/Users/example/Downloads/AppleAccountScriptsBackup/utm_19_one.mjs" not in skill
     assert "不读取或解释脚本内容" in skill
     assert "printf '%s\\n' '{}' | /usr/bin/node" not in skill
 
@@ -184,7 +276,14 @@ def test_host_cli_accepts_mutually_exclusive_run_or_direct_page_identity() -> No
     action_names = {
         action.dest for action in parser._actions if action.dest != "help"  # noqa: SLF001
     }
-    assert action_names == {"run_id", "page_title", "vm_name", "vm_ip", "vm_user"}
+    assert action_names == {
+        "run_id",
+        "page_title",
+        "vm_name",
+        "vm_ip",
+        "vm_user",
+        "asset_app_name",
+    }
     selector_sets = {
         frozenset(action.dest for action in group._group_actions)  # noqa: SLF001
         for group in parser._mutually_exclusive_groups  # noqa: SLF001
@@ -412,6 +511,11 @@ def test_direct_mode_uses_shared_context_id_without_feishu_run_session_or_card(
         raising=False,
     )
     monkeypatch.setattr(utm_image, "_verify_vm_started", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        utm_image,
+        "sync_utm_image_guest_file",
+        lambda *args, **kwargs: None,
+    )
 
     def forbidden(*args, **kwargs):
         pytest.fail("direct context must not read/create a Feishu run/session/card")
@@ -427,7 +531,7 @@ def test_direct_mode_uses_shared_context_id_without_feishu_run_session_or_card(
     monkeypatch.setattr(
         utm_image,
         "guest_source_payload",
-        lambda source, app_name, context_id: {
+        lambda source, app_name, context_id, **kwargs: {
             "kind": "share_url",
             "sourceField": "美女截图 链接",
             "contextId": context_id,
@@ -471,6 +575,11 @@ def test_run_mode_preserves_owned_feishu_run_id_as_the_existing_namespace(
     monkeypatch.setattr(utm_image, "_verify_vm_started", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         utm_image,
+        "sync_utm_image_guest_file",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        utm_image,
         "_run_context",
         lambda run_id, vm_name: ("Host", "Demo"),
     )
@@ -483,7 +592,7 @@ def test_run_mode_preserves_owned_feishu_run_id_as_the_existing_namespace(
     monkeypatch.setattr(
         utm_image,
         "guest_source_payload",
-        lambda source, app_name, context_id: {
+        lambda source, app_name, context_id, **kwargs: {
             "kind": "share_url",
             "sourceField": "美女截图 链接",
         },

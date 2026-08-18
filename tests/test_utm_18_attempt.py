@@ -303,6 +303,11 @@ def test_mark_attempt_updates_same_ledger_without_changing_binding(tmp_path: Pat
     (
         ("Error: 找不到可点击的inflight 页面保存按钮", "1", "0"),
         ("已点击inflight 页面保存按钮", "1", "141"),
+        (
+            "browserType.connectOverCDP: connect ECONNREFUSED 127.0.0.1:9222",
+            "1",
+            "0",
+        ),
     ),
 )
 def test_retryable_finished_attempt_is_archived_outside_active_ledger_directory(

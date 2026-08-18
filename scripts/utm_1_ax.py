@@ -323,18 +323,18 @@ def unique_directory_picker_control(ax: Any, root: Any) -> Any:
         )
     if len(choose_controls) == 1:
         return choose_controls[0]
-    new_row_controls = live_labeled_nodes(
+    shared_controls = live_labeled_nodes(
         ax,
         root,
-        ("新建…", "New…"),
+        ADD_SHARED_LABELS,
         exact=True,
         roles={"AXButton"},
     )
-    if len(new_row_controls) != 1:
+    if len(shared_controls) != 1:
         raise AXTargetError(
-            f"directory picker new-row count={len(new_row_controls)}"
+            f"directory picker shared control count={len(shared_controls)}"
         )
-    return new_row_controls[0]
+    return shared_controls[0]
 
 
 def reacquire_target(ax: Any, pid: int, vm_name: str) -> tuple[Any, list[Any]]:
@@ -768,6 +768,25 @@ def native_picker_open(ax: Any, pid: int) -> bool:
     return False
 
 
+def paste_path_into_utm_panel(share: Path) -> None:
+    """Paste a path and let UTM consume it before clearing the clipboard."""
+    subprocess.run(["pbcopy"], input=str(share).encode("utf-8"), check=True)
+    try:
+        subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'tell application "System Events" to tell process "UTM" to set frontmost to true',
+                "-e",
+                'tell application "System Events" to tell process "UTM" to keystroke "v" using command down',
+            ],
+            check=True,
+        )
+        wait_and_reacquire()
+    finally:
+        subprocess.run(["pbcopy"], input=b"", check=True)
+
+
 def choose_directory_in_panel(ax: Any, pid: int, share: Path) -> None:
     """Navigate the native UTM folder panel semantically and confirm Open."""
     share = share.expanduser().resolve()
@@ -825,21 +844,7 @@ def choose_directory_in_panel(ax: Any, pid: int, share: Path) -> None:
     # AXValue can update the accessibility cache without updating the visible
     # native text field. A real native paste keeps the field and Finder's
     # path resolver synchronized.
-    subprocess.run(["pbcopy"], input=str(share).encode("utf-8"), check=True)
-    try:
-        subprocess.run(
-            [
-                "osascript",
-                "-e",
-                'tell application "System Events" to tell process "UTM" to set frontmost to true',
-                "-e",
-                'tell application "System Events" to tell process "UTM" to keystroke "v" using command down',
-            ],
-            check=True,
-        )
-    finally:
-        subprocess.run(["pbcopy"], input=b"", check=True)
-    wait_and_reacquire()
+    paste_path_into_utm_panel(share)
     windows = app_windows(ax, pid)
     goto_sheets = [
         element
@@ -937,8 +942,11 @@ def configure_sharing(ax: Any, pid: int, vm_name: str, share: Path) -> tuple[Any
             press_ax(ax, read_only_add)
             window, _ = reacquire_target(ax, pid, vm_name)
         press_unique_live(ax, window, ADD_ROW_LABELS, exact=True, roles={"AXButton"})
-        window, _ = reacquire_target(ax, pid, vm_name)
-        if not native_picker_open(ax, pid):
+        for _ in range(3):
+            window, _ = reacquire_target(ax, pid, vm_name)
+            if native_picker_open(ax, pid):
+                break
+        else:
             press_ax(ax, unique_directory_picker_control(ax, window))
             wait_and_reacquire()
         choose_directory_in_panel(ax, pid, share)

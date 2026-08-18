@@ -424,7 +424,8 @@ def _args(tmp_path: Path) -> argparse.Namespace:
 
 def _attempt(tmp_path: Path, state: str = "prepared") -> Attempt:
     attempt_id = "a" * 32
-    log = f"/Users/example/Downloads/utm-18-fill-description-{attempt_id}.log"
+    base = f"/Users/example/Downloads/utm-18-fill-description-{attempt_id}"
+    log = f"{base}.log"
     return Attempt(
         attempt_id=attempt_id,
         run_id="run-12345678",
@@ -432,6 +433,7 @@ def _attempt(tmp_path: Path, state: str = "prepared") -> Attempt:
         vm_ip="192.168.64.20",
         log_path=log,
         status_path=f"{log}.status",
+        command_path=f"{base}.command",
         ledger_path=tmp_path / "run-12345678" / f"{attempt_id}.json",
         state=state,
         prepared_at="2026-08-07T00:00:00+00:00",
@@ -474,6 +476,37 @@ def test_apple_login_reads_notion_and_sends_secrets_only_in_ssh_stdin() -> None:
     assert "account@example.test" not in command_text
     assert result["edge_pid"] == 123
     assert ("verify-parent", "Host") in api.calls
+
+
+def test_apple_login_success_removes_stale_diagnostic(monkeypatch, tmp_path) -> None:
+    diagnostic = tmp_path / "utm-18-apple-login.stderr"
+    diagnostic.write_text("stale failure", encoding="utf-8")
+    monkeypatch.setattr(utm_18, "APPLE_LOGIN_DIAGNOSTIC", diagnostic)
+
+    def fake_run(command, **kwargs):
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "markers": ["APPLE_DEVELOPER_ACCOUNT=verified"],
+                    "edge_pid": 123,
+                    "edge_websocket": "ws://127.0.0.1:9222/devtools/browser/abc",
+                }
+            ).encode(),
+            stderr=b"",
+        )
+
+    utm_18.verify_or_login_apple(
+        FakeNotion(),
+        parent_title="Host",
+        page_title="Demo-abcd",
+        vm_name="abcd",
+        vm_ip="192.168.64.20",
+        vm_user="abcd",
+        runner=fake_run,
+    )
+
+    assert not diagnostic.exists()
 
 
 def test_apple_login_failure_preserves_exact_stderr_for_local_diagnosis(
@@ -531,8 +564,9 @@ def test_run_executes_all_stages_in_order_without_confirmation(monkeypatch, tmp_
     monkeypatch.setattr(
         utm_18,
         "prepare_edge",
-        lambda *args, **kwargs: events.append("prepare_edge")
-        or ["UTM_18_EDGE_PREPARE=verified"],
+        lambda *args, **kwargs: pytest.fail(
+            "the host entry must not replace the fixed Edge launch commands"
+        ),
     )
     monkeypatch.setattr(
         utm_18,
@@ -577,7 +611,6 @@ def test_run_executes_all_stages_in_order_without_confirmation(monkeypatch, tmp_
 
     assert utm_18.run(_args(tmp_path)) == 0
     assert events == [
-        "prepare_edge",
         "verify_or_login_apple",
         "create_attempt",
         "precommit_remote",
@@ -644,6 +677,10 @@ def test_existing_running_attempt_is_reconciled_and_never_rerun(monkeypatch, tmp
             "已点击inflight 页面保存按钮",
             "RUN_STATE=finished\nREMOTE_NPM_EXIT=1\nREMOTE_TEE_EXIT=141\n",
         ),
+        (
+            "browserType.connectOverCDP: connect ECONNREFUSED 127.0.0.1:9222",
+            "RUN_STATE=finished\nREMOTE_NPM_EXIT=1\nREMOTE_TEE_EXIT=0\n",
+        ),
     ),
 )
 def test_known_finished_retryable_attempt_is_archived_then_full_entry_replays(
@@ -688,7 +725,9 @@ def test_known_finished_retryable_attempt_is_archived_then_full_entry_replays(
     monkeypatch.setattr(
         utm_18,
         "prepare_edge",
-        lambda *args, **kwargs: events.append("prepare_edge") or [],
+        lambda *args, **kwargs: pytest.fail(
+            "the host entry must not replace the fixed Edge launch commands"
+        ),
     )
     monkeypatch.setattr(
         utm_18,
@@ -720,7 +759,7 @@ def test_known_finished_retryable_attempt_is_archived_then_full_entry_replays(
     )
 
     assert utm_18.run(_args(tmp_path)) == 0
-    assert events[:4] == ["archive", "prepare_edge", "login", "create"]
+    assert events[:3] == ["archive", "login", "create"]
 
 
 def test_completed_transport_stop_is_verified_only_after_three_stable_reads(
@@ -957,6 +996,7 @@ def test_direct_mode_reuses_shared_context_id_and_never_reads_or_cards_a_feishu_
         vm_ip="192.168.64.20",
         log_path=f"/Users/example/Downloads/utm-18-fill-description-{'a' * 32}.log",
         status_path=f"/Users/example/Downloads/utm-18-fill-description-{'a' * 32}.log.status",
+        command_path=f"/Users/example/Downloads/utm-18-fill-description-{'a' * 32}.command",
         ledger_path=tmp_path / DIRECT_CONTEXT_ID / f"{'a' * 32}.json",
         state="verified",
         prepared_at="2026-08-07T00:00:00+00:00",
@@ -1010,6 +1050,7 @@ def test_run_mode_still_resolves_owned_run_context_without_legacy_page_or_parent
             vm_ip="192.168.64.20",
             log_path=f"/Users/example/Downloads/utm-18-fill-description-{'b' * 32}.log",
             status_path=f"/Users/example/Downloads/utm-18-fill-description-{'b' * 32}.log.status",
+            command_path=f"/Users/example/Downloads/utm-18-fill-description-{'b' * 32}.command",
             ledger_path=tmp_path / "run-12345678" / f"{'b' * 32}.json",
             state="verified",
             prepared_at="2026-08-07T00:00:00+00:00",

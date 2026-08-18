@@ -40,6 +40,29 @@ import {
   writeAttempt,
 } from '../scripts/utm_22_distribute.mjs';
 
+test('retries transient GET transport failures with bounded delays', async () => {
+  assert.equal(typeof distribute.fetchWithGetRecovery, 'function');
+  let attempts = 0;
+  const sleeps = [];
+  const response = await distribute.fetchWithGetRecovery(
+    'GET',
+    'https://api.appstoreconnect.apple.com/v1/apps',
+    {},
+    {
+      fetcher: async () => {
+        attempts += 1;
+        if (attempts < 4) throw new Error('fetch failed');
+        return { ok: true, status: 200 };
+      },
+      sleeper: async (delay) => sleeps.push(delay),
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(attempts, 4);
+  assert.deepEqual(sleeps, [2_000, 5_000, 10_000]);
+});
+
 test('reads the upload configuration without reading project source files', () => {
   const root = mkdtempSync(join(tmpdir(), 'utm22-config-test-'));
   const configDirectory = join(root, 'config');
