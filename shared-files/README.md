@@ -1,15 +1,17 @@
-# 共享目录
+# 共享运行资产
 
-共享目录保存技能脚本生成或同步的运行资产。具体操作只运行对应 `skills/<skill>/SKILL.md` 的唯一宿主入口，不在本文重复脚本内容。
+## 用途
 
-## 规则
+`shared-files/` 保存可公开分发的工具包、占位符配置和技能交接结构。实际宿主/guest 共享目录位置由 `SUBMISSION_SHARED_DIR` 解析，不在文档中固定。
 
-- 共享目录路径从当前宿主机 `.env` 解析。
-- 不复制旧宿主机运行历史、凭据或第二份技能正文。
-- 不手工修改由技能入口管理的运行资产。
-- 迁移后先执行项目预检和技能安装检查。
+## 来源与校验
 
-```bash
-/Users/yehailin/.venvs/py312-common/bin/python3 /Users/yehailin/Documents/mac提审自动化/scripts/preflight.py --project-only
-/bin/zsh /Users/yehailin/Documents/mac提审自动化/scripts/install_project_skills.sh --check
-```
+- 单个资产的来源、平台/架构、文件结构与哈希写在它自己的 README 中。
+- 使用前核对文件类型、架构、可执行权限和文档公布的摘要；不以文件名代替内容校验。
+- 具体运行操作以对应 [`SKILL.md`](../skills/) 为准，共享目录文档不复制技能 runbook。
+
+## 安全边界
+
+- 仓库只保留可公开资产与无值占位符。真实凭据、资源 ID、签名私钥/证书/profile、主机路径、运行记录与应用导出物不得进入 Git。
+- 不从旧宿主复制运行历史、浏览器会话、VM 绑定或第二份技能正文。
+- 不手工改写由技能入口管理的运行资产；删除或覆盖只能在用户对精确对象明确授权后进行。
