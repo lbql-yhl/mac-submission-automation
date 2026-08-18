@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 
@@ -37,7 +39,7 @@ def test_execute_rejects_missing_partial_or_mixed_source_before_network(
     configured: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(utm_notion, "load_dotenv", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(utm_notion, "read_env_file", lambda _path: {})
     for key, value in configured.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(
@@ -50,6 +52,14 @@ def test_execute_rejects_missing_partial_or_mixed_source_before_network(
         "urlopen",
         lambda *_args, **_kwargs: pytest.fail("configuration must fail before Wiki network"),
     )
+    monkeypatch.setattr(
+        utm_notion,
+        "FeishuBitableClient",
+        lambda *_args, **_kwargs: pytest.fail(
+            "configuration must fail before Base client construction"
+        ),
+    )
+    before = dict(os.environ)
 
     with pytest.raises(RuntimeError) as captured:
         utm_notion.execute(app_name="PackWise")
@@ -57,6 +67,7 @@ def test_execute_rejects_missing_partial_or_mixed_source_before_network(
     message = str(captured.value)
     assert "UTM_NOTION_FEISHU" in message
     assert all(value not in message for value in configured.values())
+    assert dict(os.environ) == before
 
 
 def test_complete_direct_source_needs_no_wiki_request(
@@ -123,3 +134,63 @@ def test_source_has_no_fixed_bitable_identifier_defaults() -> None:
     assert not hasattr(utm_notion, "DEFAULT_APP_TOKEN")
     assert not hasattr(utm_notion, "DEFAULT_TABLE_ID")
     assert not hasattr(utm_notion, "DEFAULT_VIEW_ID")
+
+
+def test_execute_reads_project_source_without_mutating_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / ".env").write_text(
+        "UTM_NOTION_FEISHU_APP_TOKEN=project-app\n"
+        "UTM_NOTION_FEISHU_TABLE_ID=project-table\n"
+        "UTM_NOTION_FEISHU_VIEW_ID=project-view\n"
+        "FEISHU_APP_ID=project-feishu-app\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(utm_notion, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setenv("UTM_NOTION_FEISHU_APP_TOKEN", "process-app")
+    monkeypatch.setenv("UTM_NOTION_FEISHU_TABLE_ID", "process-table")
+    monkeypatch.setenv("UTM_NOTION_FEISHU_VIEW_ID", "process-view")
+    monkeypatch.delenv("FEISHU_APP_ID", raising=False)
+    before = dict(os.environ)
+    captured: dict[str, str] = {}
+
+    class StopAfterClient(RuntimeError):
+        pass
+
+    class CapturingClient:
+        def __init__(
+            self,
+            token: str,
+            app_token: str,
+            table_id: str,
+            view_id: str,
+        ) -> None:
+            captured.update(
+                token=token,
+                app_token=app_token,
+                table_id=table_id,
+                view_id=view_id,
+            )
+
+        def find_exact_record(self, **_kwargs: str) -> dict[str, object]:
+            raise StopAfterClient
+
+    def tenant_token(app_id: str, _secret: str) -> str:
+        captured["app_id"] = app_id
+        return "token"
+
+    monkeypatch.setattr(utm_notion, "get_tenant_access_token", tenant_token)
+    monkeypatch.setattr(utm_notion, "FeishuBitableClient", CapturingClient)
+
+    with pytest.raises(StopAfterClient):
+        utm_notion.execute(app_name="PackWise")
+
+    assert captured == {
+        "app_id": "project-feishu-app",
+        "token": "token",
+        "app_token": "project-app",
+        "table_id": "project-table",
+        "view_id": "project-view",
+    }
+    assert dict(os.environ) == before

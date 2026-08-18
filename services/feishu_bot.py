@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,9 +29,12 @@ from typing import Any
 from urllib import error, parse, request
 
 try:
-    from project_paths import SHARED_DIR, VM_IMAGES_DIR
+    from host_config import optional_setting, required_setting
 except ModuleNotFoundError:
-    from services.project_paths import SHARED_DIR, VM_IMAGES_DIR
+    from services.host_config import (
+        optional_setting,
+        required_setting,
+    )
 
 
 try:
@@ -52,6 +56,8 @@ except ModuleNotFoundError:
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = ROOT
+VM_IMAGES_DIR = PROJECT_ROOT / "host-assets" / "vm-images"
 RUNTIME_DIR = ROOT / "runtime"
 RUNS_FILE = RUNTIME_DIR / "feishu-runs.json"
 PROMPTS_DIR = RUNTIME_DIR / "prompts"
@@ -125,52 +131,63 @@ class Config:
     user_confirm_timeout_seconds: int
 
 
-def load_dotenv(path: Path) -> None:
-    if not path.exists():
-        return
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        os.environ.setdefault(key, value)
+def load_config(
+    *,
+    environ: Mapping[str, str] | None = None,
+    env_path: Path | None = None,
+) -> Config:
+    settings_path = PROJECT_ROOT / ".env" if env_path is None else Path(env_path)
 
+    def setting(name: str, default: str = "") -> str:
+        value = optional_setting(name, environ=environ, env_path=settings_path)
+        return value if value else default
 
-def load_config() -> Config:
-    load_dotenv(ROOT / ".env")
     return Config(
-        app_id=os.getenv("FEISHU_APP_ID", ""),
-        app_secret=os.getenv("FEISHU_APP_SECRET", ""),
-        verification_token=os.getenv("FEISHU_VERIFICATION_TOKEN", ""),
-        encrypt_key=os.getenv("FEISHU_ENCRYPT_KEY", ""),
-        allowed_chat_id=os.getenv("FEISHU_ALLOWED_CHAT_ID", ""),
-        daily_report_chat_id=os.getenv("FEISHU_DAILY_REPORT_CHAT_ID", "").strip(),
-        runner_command=os.getenv("SUBMISSION_RUNNER_COMMAND", ""),
-        submission_host_machine=os.getenv("SUBMISSION_HOST_MACHINE", "").strip(),
-        host=os.getenv("FEISHU_BOT_HOST", "0.0.0.0"),
-        port=int(os.getenv("FEISHU_BOT_PORT", "8787")),
-        send_retries=int(os.getenv("FEISHU_SEND_RETRIES", "3")),
-        send_timeout_seconds=int(os.getenv("FEISHU_SEND_TIMEOUT_SECONDS", "20")),
+        app_id=setting("FEISHU_APP_ID"),
+        app_secret=setting("FEISHU_APP_SECRET"),
+        verification_token=setting("FEISHU_VERIFICATION_TOKEN"),
+        encrypt_key=setting("FEISHU_ENCRYPT_KEY"),
+        allowed_chat_id=setting("FEISHU_ALLOWED_CHAT_ID"),
+        daily_report_chat_id=required_setting(
+            "FEISHU_DAILY_REPORT_CHAT_ID",
+            environ=environ,
+            env_path=settings_path,
+        ),
+        runner_command=setting("SUBMISSION_RUNNER_COMMAND"),
+        submission_host_machine=setting("SUBMISSION_HOST_MACHINE"),
+        host=setting("FEISHU_BOT_HOST", "0.0.0.0"),
+        port=int(setting("FEISHU_BOT_PORT", "8787")),
+        send_retries=int(setting("FEISHU_SEND_RETRIES", "3")),
+        send_timeout_seconds=int(setting("FEISHU_SEND_TIMEOUT_SECONDS", "20")),
         poll_chat_ids=tuple(
             item.strip()
-            for item in os.getenv("FEISHU_POLL_CHAT_IDS", "").replace(";", ",").split(",")
+            for item in setting("FEISHU_POLL_CHAT_IDS").replace(";", ",").split(",")
             if item.strip()
         ),
-        poll_interval_seconds=int(os.getenv("FEISHU_POLL_INTERVAL_SECONDS", "15")),
-        openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-5.6"),
-        assistant_provider=os.getenv("FEISHU_ASSISTANT_PROVIDER", "codex").lower(),
-        assistant_enabled=os.getenv("FEISHU_ASSISTANT_ENABLED", "1").lower() in {"1", "true", "yes"},
-        assistant_require_mention=os.getenv("FEISHU_ASSISTANT_REQUIRE_MENTION", "1").lower() in {"1", "true", "yes"},
-        assistant_max_output_tokens=int(os.getenv("FEISHU_ASSISTANT_MAX_OUTPUT_TOKENS", "800")),
-        codex_command=os.getenv("FEISHU_CODEX_COMMAND", "codex"),
-        codex_model=os.getenv("FEISHU_CODEX_MODEL", "gpt-5.6-sol"),
-        codex_timeout_seconds=int(os.getenv("FEISHU_CODEX_TIMEOUT_SECONDS", "180")),
-        verify_delivery=os.getenv("FEISHU_VERIFY_DELIVERY", "1").lower() in {"1", "true", "yes"},
-        user_confirm_api_url=os.getenv("USER_CONFIRM_API_URL", "http://127.0.0.1:8000/confirm"),
-        user_confirm_timeout_seconds=int(os.getenv("USER_CONFIRM_API_TIMEOUT_SECONDS", "20")),
+        poll_interval_seconds=int(setting("FEISHU_POLL_INTERVAL_SECONDS", "15")),
+        openai_api_key=setting("OPENAI_API_KEY"),
+        openai_model=setting("OPENAI_MODEL", "gpt-5.6"),
+        assistant_provider=setting("FEISHU_ASSISTANT_PROVIDER", "codex").lower(),
+        assistant_enabled=setting("FEISHU_ASSISTANT_ENABLED", "1").lower()
+        in {"1", "true", "yes"},
+        assistant_require_mention=setting(
+            "FEISHU_ASSISTANT_REQUIRE_MENTION", "1"
+        ).lower()
+        in {"1", "true", "yes"},
+        assistant_max_output_tokens=int(
+            setting("FEISHU_ASSISTANT_MAX_OUTPUT_TOKENS", "800")
+        ),
+        codex_command=setting("FEISHU_CODEX_COMMAND", "codex"),
+        codex_model=setting("FEISHU_CODEX_MODEL", "gpt-5.6-sol"),
+        codex_timeout_seconds=int(setting("FEISHU_CODEX_TIMEOUT_SECONDS", "180")),
+        verify_delivery=setting("FEISHU_VERIFY_DELIVERY", "1").lower()
+        in {"1", "true", "yes"},
+        user_confirm_api_url=setting(
+            "USER_CONFIRM_API_URL", "http://127.0.0.1:8000/confirm"
+        ),
+        user_confirm_timeout_seconds=int(
+            setting("USER_CONFIRM_API_TIMEOUT_SECONDS", "20")
+        ),
     )
 
 
@@ -1333,7 +1350,7 @@ def reject_nonlocal_card_callback(
     run_id: str,
     run: dict[str, Any] | None,
     submission_host_machine: str,
-    daily_report_chat_id: str = "",
+    daily_report_chat_id: str,
 ) -> dict[str, Any] | None:
     local_host = str(submission_host_machine or "").strip()
     card_host = run_host_machine(run or {})
@@ -1366,7 +1383,7 @@ def handle_review_card_action(
     value: dict[str, Any],
     operator_id: str,
     submission_host_machine: str,
-    daily_report_chat_id: str = "",
+    daily_report_chat_id: str,
 ) -> dict[str, Any]:
     run_id = str(value.get("run_id") or "")
     decision = str(value.get("decision") or "")
@@ -1447,7 +1464,7 @@ def handle_confirmation_card_action(
     value: dict[str, Any],
     operator_id: str,
     submission_host_machine: str,
-    daily_report_chat_id: str = "",
+    daily_report_chat_id: str,
 ) -> dict[str, Any]:
     run_id = str(value.get("run_id") or "")
     decision = str(value.get("decision") or "")
@@ -1518,7 +1535,7 @@ def handle_confirmation_card_action(
 def handle_card_action(
     payload: dict[str, Any],
     submission_host_machine: str,
-    daily_report_chat_id: str = "",
+    daily_report_chat_id: str,
 ) -> dict[str, Any]:
     value, operator_id = card_callback_value(payload)
     action = str(value.get("action") or "")
@@ -1632,7 +1649,7 @@ def handle_card_action(
 def handle_ws_card_action(
     data: Any,
     submission_host_machine: str,
-    daily_report_chat_id: str = "",
+    daily_report_chat_id: str,
 ) -> Any:
     event = getattr(data, "event", None)
     action = getattr(event, "action", None)
@@ -1736,8 +1753,8 @@ def handle_ws_message_receive(data: Any) -> None:
 
 
 class FeishuHandler(BaseHTTPRequestHandler):
-    config = load_config()
-    client = FeishuClient(config)
+    config: Config
+    client: FeishuClient
 
     def _json_response(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -1854,6 +1871,17 @@ class FeishuHandler(BaseHTTPRequestHandler):
 
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
+
+
+def configured_http_handler(config: Config) -> type[FeishuHandler]:
+    """Bind validated call-time configuration to an HTTP handler class."""
+
+    class ConfiguredFeishuHandler(FeishuHandler):
+        pass
+
+    ConfiguredFeishuHandler.config = config
+    ConfiguredFeishuHandler.client = FeishuClient(config)
+    return ConfiguredFeishuHandler
 
 
 def validate_fault_recovery_evidence(args: Any) -> tuple[bool, str]:
@@ -2883,6 +2911,8 @@ def stop_run_after_decision_timeout(
         if not message_id:
             raise RuntimeError("Timeout card sent without a message_id")
     except Exception as exc:  # noqa: BLE001 - timeout is terminal even when notification fails.
+        failure_type = type(exc).__name__
+
         def apply_timeout_failure(item: dict[str, Any]) -> None:
             current = item.setdefault("pending_decision", {})
             failed_at = utc_now()
@@ -2891,7 +2921,7 @@ def stop_run_after_decision_timeout(
                 {
                     "at": failed_at,
                     "status": "decision_timeout_notification_failed",
-                    "note": f"等待回复超时卡片发送失败，流程保持停止：{type(exc).__name__}",
+                    "note": f"等待回复超时卡片发送失败，流程保持停止：{failure_type}",
                 }
             )
 
@@ -3096,9 +3126,11 @@ def poll_messages(args: argparse.Namespace, config: Config) -> int:
         time.sleep(args.poll_interval_seconds)
 
 
-def serve(args: argparse.Namespace) -> int:
+def serve(args: argparse.Namespace, config: Config) -> int:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    server = ReusableThreadingHTTPServer((args.host, args.port), FeishuHandler)
+    server = ReusableThreadingHTTPServer(
+        (args.host, args.port), configured_http_handler(config)
+    )
     safe_print(f"Feishu bot listening on http://{args.host}:{args.port}/feishu/events")
     safe_print("Health check: /health")
     try:
@@ -3154,6 +3186,7 @@ def safe_print(*args: Any, file: Any = sys.stdout) -> None:
 
 
 def main() -> int:
+    config = load_config()
     parser = argparse.ArgumentParser(description="Run the Feishu submission bot.")
     parser.add_argument(
         "mode",
@@ -3172,8 +3205,8 @@ def main() -> int:
         ),
         help="serve starts the HTTP bot; ws starts Feishu SDK long-connection callbacks; poll reads Feishu history as a control fallback; notify-fault sends a last-resort fault card; notify-confirmation asks the user API first and falls back to a user-decision card only when needed; notify-review keeps the optional legacy review card; record-auto-review-approval persists the unattended self-check authorization; record-review-submit-attempt persists the single submit click state; wait-decision waits for the selected decision.",
     )
-    parser.add_argument("--host", default=FeishuHandler.config.host)
-    parser.add_argument("--port", type=int, default=FeishuHandler.config.port)
+    parser.add_argument("--host", default=config.host)
+    parser.add_argument("--port", type=int, default=config.port)
     parser.add_argument("--run-id", default=os.getenv("SUBMISSION_RUN_ID", ""))
     parser.add_argument("--chat-id", default=os.getenv("SUBMISSION_CHAT_ID", ""))
     parser.add_argument("--stage", default="未知阶段")
@@ -3211,27 +3244,31 @@ def main() -> int:
     parser.add_argument("--timeout-seconds", type=int, default=DECISION_TIMEOUT_SECONDS)
     parser.add_argument("--poll-seconds", type=int, default=5)
     parser.add_argument("--once", action="store_true")
-    parser.add_argument("--poll-interval-seconds", type=int, default=FeishuHandler.config.poll_interval_seconds)
+    parser.add_argument(
+        "--poll-interval-seconds",
+        type=int,
+        default=config.poll_interval_seconds,
+    )
     parser.add_argument("--poll-chat-id", action="append", default=[])
     args = parser.parse_args()
 
     if args.mode == "notify-fault":
-        return notify_fault(args, FeishuHandler.config)
+        return notify_fault(args, config)
     if args.mode == "notify-confirmation":
-        return notify_confirmation(args, FeishuHandler.config)
+        return notify_confirmation(args, config)
     if args.mode == "notify-review":
-        return notify_review(args, FeishuHandler.config)
+        return notify_review(args, config)
     if args.mode == "record-auto-review-approval":
-        return record_auto_review_approval_cli(args, FeishuHandler.config)
+        return record_auto_review_approval_cli(args, config)
     if args.mode == "record-review-submit-attempt":
-        return record_review_submit_attempt_cli(args, FeishuHandler.config)
+        return record_review_submit_attempt_cli(args, config)
     if args.mode == "wait-decision":
-        return wait_decision(args, FeishuHandler.config)
+        return wait_decision(args, config)
     if args.mode == "poll":
-        return poll_messages(args, FeishuHandler.config)
+        return poll_messages(args, config)
     if args.mode == "ws":
-        return serve_ws(args, FeishuHandler.config)
-    return serve(args)
+        return serve_ws(args, config)
+    return serve(args, config)
 
 
 if __name__ == "__main__":

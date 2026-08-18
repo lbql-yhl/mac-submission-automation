@@ -26,7 +26,9 @@ def main() -> None:
 
     report_only_chat = "-".join(("daily", "report", "chat"))
     config = replace(
-        feishu_bot.load_config(),
+        feishu_bot.load_config(
+            environ={"FEISHU_DAILY_REPORT_CHAT_ID": report_only_chat}
+        ),
         allowed_chat_id="oc_allowed",
         daily_report_chat_id=report_only_chat,
     )

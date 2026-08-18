@@ -22,7 +22,9 @@ class ImmediateThread:
 
 def assistant_config():
     return replace(
-        feishu_bot.load_config(),
+        feishu_bot.load_config(
+            environ={"FEISHU_DAILY_REPORT_CHAT_ID": "test-report-chat"}
+        ),
         allowed_chat_id="oc_allowed",
         assistant_provider="codex",
         assistant_enabled=True,

@@ -20,7 +20,7 @@ from typing import Any, Iterable
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.notion_api import api_from_env, load_dotenv
+from scripts.notion_api import NotionAPI
 from scripts.clean_cli import run_clean_cli
 from scripts.vm_inventory import (
     InventoryError,
@@ -31,22 +31,16 @@ from scripts.vm_inventory import (
     rebind_application_name,
     scan_inventory,
 )
-from services.feishu_gateway import get_tenant_access_token
+from services.feishu_gateway import get_tenant_access_token, read_env_file
 from services.utm_notion_source import (
+    SOURCE_ENV_KEYS,
     configured_feishu_source as configured_utm_notion_source,
     resolve_feishu_source as resolve_utm_notion_source,
 )
 
 
 DEFAULT_DATABASE = PROJECT_ROOT / "runtime" / "vm-inventory.sqlite3"
-UTM_NOTION_FEISHU_ENV_KEYS = frozenset(
-    {
-        "UTM_NOTION_FEISHU_WIKI_URL",
-        "UTM_NOTION_FEISHU_APP_TOKEN",
-        "UTM_NOTION_FEISHU_TABLE_ID",
-        "UTM_NOTION_FEISHU_VIEW_ID",
-    }
-)
+UTM_NOTION_FEISHU_ENV_KEYS = SOURCE_ENV_KEYS
 API_BASE = "https://open.feishu.cn/open-apis"
 
 ACCOUNT_LABELS = (
@@ -121,6 +115,28 @@ EMAIL_SUFFIX_PATTERN = (
 )
 GENERATED_PASSWORD_LENGTH = 16
 TEST_MISSING_VALUE = "test"
+
+
+def runtime_settings(
+    env_path: Path,
+    *,
+    environ: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Build call-local settings without modifying the process environment."""
+    values = dict(os.environ if environ is None else environ)
+    project_values = read_env_file(env_path)
+    for key, value in project_values.items():
+        if key in UTM_NOTION_FEISHU_ENV_KEYS or key not in values:
+            values[key] = value
+    return values
+
+
+def notion_api_from_settings(settings: dict[str, str]) -> NotionAPI:
+    return NotionAPI(
+        settings.get("NOTION_TOKEN", ""),
+        settings.get("NOTION_ROOT_PAGE_ID", ""),
+        settings.get("NOTION_TEMPLATE_TITLE", "模板"),
+    )
 
 
 def _cell_text(value: object) -> str:
@@ -725,14 +741,11 @@ def execute(
     fill_missing_with_test: bool = False,
     rename_from: str = "",
 ) -> dict[str, object]:
-    load_dotenv(
-        PROJECT_ROOT / ".env",
-        override_keys=UTM_NOTION_FEISHU_ENV_KEYS,
-    )
-    configured_source = configured_utm_notion_source()
+    settings = runtime_settings(PROJECT_ROOT / ".env")
+    configured_source = configured_utm_notion_source(settings)
     token = get_tenant_access_token(
-        os.environ.get("FEISHU_APP_ID", ""),
-        os.environ.get("FEISHU_APP_SECRET", ""),
+        settings.get("FEISHU_APP_ID", ""),
+        settings.get("FEISHU_APP_SECRET", ""),
     )
     app_token, table_id, view_id = resolve_utm_notion_source(
         token, configured_source
@@ -750,7 +763,7 @@ def execute(
         fill_missing_with_test=fill_missing_with_test,
     )
     exact_app_name = application_replacements["应用名: "]
-    images_dir_value = os.environ.get("SUBMISSION_VM_IMAGES_DIR", "").strip()
+    images_dir_value = settings.get("SUBMISSION_VM_IMAGES_DIR", "").strip()
     if not images_dir_value:
         raise RuntimeError("SUBMISSION_VM_IMAGES_DIR is required")
     images_dir = Path(images_dir_value).expanduser()
@@ -766,10 +779,10 @@ def execute(
     )
     feishu_changed = client.ensure_vm(record, vm_name)
 
-    host_title = os.environ.get("SUBMISSION_HOST_MACHINE", "").strip()
+    host_title = settings.get("SUBMISSION_HOST_MACHINE", "").strip()
     if not host_title:
         raise RuntimeError("SUBMISSION_HOST_MACHINE is required")
-    notion = api_from_env()
+    notion = notion_api_from_settings(settings)
     notion.verify_parent(host_title)
     page_title = f"{exact_app_name}-{vm_name}"
     page_id, page_created = notion.create_registration_copy(page_title)

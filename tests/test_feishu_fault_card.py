@@ -504,9 +504,17 @@ def main() -> None:
         "events": [],
     }
 
+    deferred_failure_callbacks = []
+    timeout_failure_mutation_count = 0
+
     def timeout_failure_mutate(run_id: str, mutate) -> dict:
+        nonlocal timeout_failure_mutation_count
         assert run_id == "fault-card-timeout-failure"
-        mutate(timeout_failure_run)
+        timeout_failure_mutation_count += 1
+        if timeout_failure_mutation_count == 1:
+            mutate(timeout_failure_run)
+        else:
+            deferred_failure_callbacks.append(mutate)
         return timeout_failure_run
 
     timeout_failure_args = SimpleNamespace(
@@ -521,13 +529,16 @@ def main() -> None:
         patch("services.feishu_bot.FeishuClient.send_card", side_effect=RuntimeError("send failed")),
         redirect_stderr(StringIO()),
     ):
-        try:
-            timeout_failure_result = wait_decision(timeout_failure_args, object())
-        except RuntimeError:
-            timeout_failure_result = None
-    assert timeout_failure_result == 3
+        assert wait_decision(timeout_failure_args, object()) == 3
+    assert len(deferred_failure_callbacks) == 1
+    deferred_failure_callbacks[0](timeout_failure_run)
     assert timeout_failure_run["status"] == "decision_timeout_stop"
     assert timeout_failure_run["pending_decision"]["timeout_notification_attempted_at"]
+    assert timeout_failure_run["pending_decision"]["timeout_notification_failed_at"]
+    assert timeout_failure_run["events"][-1]["status"] == (
+        "decision_timeout_notification_failed"
+    )
+    assert timeout_failure_run["events"][-1]["note"].endswith("RuntimeError")
 
     with (
         patch("services.feishu_bot.find_run", return_value=timeout_failure_run),

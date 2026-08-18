@@ -67,7 +67,9 @@ def test_feishu_submission_start_entry_is_disabled(tmp_path, monkeypatch) -> Non
         feishu_bot, "CODEX_APP_SESSIONS_DIR", tmp_path / "codex-app-sessions"
     )
     config = replace(
-        feishu_bot.load_config(),
+        feishu_bot.load_config(
+            environ={"FEISHU_DAILY_REPORT_CHAT_ID": "test-report-chat"}
+        ),
         allowed_chat_id="oc_allowed",
         submission_host_machine="海淋",
         assistant_enabled=False,

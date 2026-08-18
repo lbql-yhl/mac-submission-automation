@@ -6,7 +6,17 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.feishu_bot import handle_card_action, normalize_ws_card_payload
+from services.feishu_bot import (
+    handle_card_action as _handle_card_action,
+    normalize_ws_card_payload,
+)
+
+
+REPORT_ONLY_CHAT = "-".join(("daily", "report", "chat"))
+
+
+def handle_card_action(payload: dict, submission_host_machine: str) -> dict:
+    return _handle_card_action(payload, submission_host_machine, REPORT_ONLY_CHAT)
 
 
 def main() -> None:

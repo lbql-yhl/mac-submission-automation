@@ -14,11 +14,18 @@ from services.feishu_bot import (  # noqa: E402
     build_confirmation_card,
     create_or_update_confirmation,
     ensure_decision_card_delivered,
-    handle_card_action,
+    handle_card_action as _handle_card_action,
     notify_confirmation,
     user_confirmation_api_decision,
     wait_decision,
 )
+
+
+REPORT_ONLY_CHAT = "-".join(("daily", "report", "chat"))
+
+
+def handle_card_action(payload: dict, submission_host_machine: str) -> dict:
+    return _handle_card_action(payload, submission_host_machine, REPORT_ONLY_CHAT)
 
 
 def callback_payload(decision: str, decision_id: str) -> dict:
