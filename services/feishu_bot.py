@@ -29,11 +29,26 @@ from typing import Any
 from urllib import error, parse, request
 
 try:
-    from host_config import ConfigurationError, host_settings_snapshot
+    from host_config import (
+        ConfigurationError,
+        host_settings_snapshot,
+        secure_append_text,
+        secure_create_file,
+        secure_runtime_file,
+        secure_runtime_root,
+        secure_runtime_tree,
+        secure_write_text,
+    )
 except ModuleNotFoundError:
     from services.host_config import (
         ConfigurationError,
         host_settings_snapshot,
+        secure_append_text,
+        secure_create_file,
+        secure_runtime_file,
+        secure_runtime_root,
+        secure_runtime_tree,
+        secure_write_text,
     )
 
 
@@ -66,6 +81,26 @@ PROCESSED_MESSAGES_FILE = RUNTIME_DIR / "feishu-processed-messages.json"
 PROCESSED_MESSAGES_DIR = RUNTIME_DIR / "feishu-processed-messages"
 CONVERSATIONS_FILE = RUNTIME_DIR / "feishu-conversations.json"
 CARD_CALLBACK_LOG_FILE = RUNTIME_DIR / "feishu-card-callbacks.jsonl"
+
+
+def harden_runtime_metadata() -> None:
+    """Secure only Feishu-owned metadata inside the shared runtime root."""
+    secure_runtime_root(ROOT)
+    secure_runtime_root(RUNTIME_DIR, create=True)
+    for directory in (
+        PROMPTS_DIR,
+        CODEX_APP_SESSIONS_DIR,
+        PROCESSED_MESSAGES_DIR,
+    ):
+        secure_runtime_tree(directory)
+    for metadata_file in (
+        RUNS_FILE,
+        PROCESSED_MESSAGES_FILE,
+        CONVERSATIONS_FILE,
+        CARD_CALLBACK_LOG_FILE,
+    ):
+        secure_runtime_file(metadata_file)
+
 
 HEALTH_PATH = "/health"
 CALLBACK_PATH = "/feishu/events"
@@ -272,10 +307,7 @@ def read_json(path: Path, default: Any) -> Any:
 
 
 def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    secure_write_text(path, json.dumps(value, ensure_ascii=False, indent=2))
 
 
 def redacted_submission_summary() -> str:
@@ -842,8 +874,7 @@ def is_callback_path(raw_path: str) -> bool:
 
 def prepare_codex_app_session(config: Config, run: dict[str, Any]) -> str:
     prompt_path = PROMPTS_DIR / f"{run['id']}.md"
-    prompt_path.parent.mkdir(parents=True, exist_ok=True)
-    prompt_path.write_text(build_codex_prompt(run), encoding="utf-8")
+    secure_write_text(prompt_path, build_codex_prompt(run))
     run["prompt_path"] = str(prompt_path)
     session_path = create_codex_app_session_request(run, prompt_path)
     return (
@@ -1004,9 +1035,10 @@ def append_card_callback_log(payload: dict[str, Any], result: dict[str, Any] | N
         "operator": event.get("operator") if isinstance(event.get("operator"), dict) else {},
         "result": result or {},
     }
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    with CARD_CALLBACK_LOG_FILE.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(item, ensure_ascii=False) + "\n")
+    secure_append_text(
+        CARD_CALLBACK_LOG_FILE,
+        json.dumps(item, ensure_ascii=False) + "\n",
+    )
 
 
 def normalize_card_value(raw_value: Any) -> dict[str, Any]:
@@ -3110,9 +3142,8 @@ def processed_message_path(message_id: str) -> Path:
 def claim_message(message_id: str) -> bool:
     if not message_id:
         return False
-    PROCESSED_MESSAGES_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        processed_message_path(message_id).touch(exist_ok=False)
+        secure_create_file(processed_message_path(message_id))
     except FileExistsError:
         return False
     # ponytail: One marker per message is sufficient here; move to SQLite only if chat volume becomes high.
@@ -3268,6 +3299,7 @@ def safe_print(*args: Any, file: Any = sys.stdout) -> None:
 
 
 def main() -> int:
+    os.umask(0o077)
     parser = argparse.ArgumentParser(description="Run the Feishu submission bot.")
     parser.add_argument(
         "mode",
@@ -3331,6 +3363,7 @@ def main() -> int:
     )
     parser.add_argument("--poll-chat-id", action="append", default=[])
     args = parser.parse_args()
+    harden_runtime_metadata()
     config = load_config()
     if args.host is None:
         args.host = config.host

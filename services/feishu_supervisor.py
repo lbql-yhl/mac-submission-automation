@@ -20,6 +20,21 @@ from pathlib import Path
 from typing import Any
 from urllib import error, request
 
+try:
+    from host_config import (
+        secure_append_text,
+        secure_runtime_file,
+        secure_runtime_root,
+        secure_write_text,
+    )
+except ModuleNotFoundError:
+    from services.host_config import (
+        secure_append_text,
+        secure_runtime_file,
+        secure_runtime_root,
+        secure_write_text,
+    )
+
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = ROOT / "runtime"
@@ -33,6 +48,22 @@ CLOUDFLARED_PID_FILE = RUNTIME_DIR / "cloudflared.pid"
 LOCAL_CLOUDFLARED = ROOT / "tools" / "bin" / ("cloudflared.exe" if os.name == "nt" else "cloudflared")
 
 TRY_CLOUDFLARE_RE = re.compile(r"https://(?!api\.)[a-zA-Z0-9-]+\.trycloudflare\.com")
+
+
+def harden_runtime_metadata() -> None:
+    """Secure known supervisor metadata without traversing shared runtime."""
+    secure_runtime_root(ROOT)
+    secure_runtime_root(RUNTIME_DIR, create=True)
+    for metadata_file in (
+        SUPERVISOR_LOG,
+        PUBLIC_URL_FILE,
+        CALLBACK_URL_FILE,
+        BOT_PID_FILE,
+        WS_PID_FILE,
+        POLLER_PID_FILE,
+        CLOUDFLARED_PID_FILE,
+    ):
+        secure_runtime_file(metadata_file)
 
 
 def build_no_proxy_opener() -> request.OpenerDirector:
@@ -81,11 +112,9 @@ class Supervisor:
         }
 
     def log(self, message: str) -> None:
-        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         line = f"[{datetime.now().isoformat(timespec='seconds')}] {message}"
         print(line, flush=True)
-        with SUPERVISOR_LOG.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
+        secure_append_text(SUPERVISOR_LOG, line + "\n")
 
     def start_bot(self) -> None:
         if self.bot and self.bot.poll() is None:
@@ -110,7 +139,7 @@ class Supervisor:
             bufsize=1,
             **process_group_kwargs(),
         )
-        BOT_PID_FILE.write_text(str(self.bot.pid), encoding="utf-8")
+        secure_write_text(BOT_PID_FILE, str(self.bot.pid))
         self.log(f"started feishu bot pid={self.bot.pid}")
         threading.Thread(target=self.pipe_output, args=("bot", self.bot), daemon=True).start()
 
@@ -136,7 +165,7 @@ class Supervisor:
             bufsize=1,
             **process_group_kwargs(),
         )
-        WS_PID_FILE.write_text(str(self.ws.pid), encoding="utf-8")
+        secure_write_text(WS_PID_FILE, str(self.ws.pid))
         self.log(f"started feishu ws pid={self.ws.pid}")
         threading.Thread(target=self.pipe_output, args=("ws", self.ws), daemon=True).start()
 
@@ -162,7 +191,7 @@ class Supervisor:
             bufsize=1,
             **process_group_kwargs(),
         )
-        POLLER_PID_FILE.write_text(str(self.poller.pid), encoding="utf-8")
+        secure_write_text(POLLER_PID_FILE, str(self.poller.pid))
         self.log(f"started feishu poller pid={self.poller.pid}")
         threading.Thread(target=self.pipe_output, args=("poller", self.poller), daemon=True).start()
 
@@ -191,7 +220,7 @@ class Supervisor:
             bufsize=1,
             **process_group_kwargs(),
         )
-        CLOUDFLARED_PID_FILE.write_text(str(self.tunnel.pid), encoding="utf-8")
+        secure_write_text(CLOUDFLARED_PID_FILE, str(self.tunnel.pid))
         self.log(f"started cloudflared pid={self.tunnel.pid}")
         threading.Thread(target=self.pipe_output, args=("cloudflared", self.tunnel), daemon=True).start()
 
@@ -213,8 +242,8 @@ class Supervisor:
             return
         self.last_public_url = public_url
         callback_url = public_url.rstrip("/") + "/feishu/events"
-        PUBLIC_URL_FILE.write_text(public_url + "\n", encoding="utf-8")
-        CALLBACK_URL_FILE.write_text(callback_url + "\n", encoding="utf-8")
+        secure_write_text(PUBLIC_URL_FILE, public_url + "\n")
+        secure_write_text(CALLBACK_URL_FILE, callback_url + "\n")
         self.log(f"public url: {public_url}")
         self.log(f"feishu callback url: {callback_url}")
 
@@ -353,6 +382,8 @@ def load_dotenv(path: Path) -> None:
 
 
 def main() -> int:
+    os.umask(0o077)
+    harden_runtime_metadata()
     load_dotenv(ROOT / ".env")
     return Supervisor().run()
 
