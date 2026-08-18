@@ -10,11 +10,8 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
-from scripts.ssh_password import (
-    FIXED_PASSWORD,
-    password_environment,
-    ssh_args as fixed_password_ssh_args,
-)
+from services.host_config import ConfigurationError, guest_password
+from scripts.ssh_password import password_environment, ssh_args as shared_ssh_args
 from scripts.utm_1_ax import (
     _copy as copy_ax_value,
     _load_ax as load_utm_ax,
@@ -45,7 +42,7 @@ def parse_key_values(output: str) -> dict[str, str]:
 
 
 def ssh_args(user: str, ip: str, *, tty: bool = False) -> list[str]:
-    return fixed_password_ssh_args(user, ip, connect_timeout=5, tty=tty)
+    return shared_ssh_args(user, ip, connect_timeout=5, tty=tty)
 
 
 def _run(
@@ -157,7 +154,7 @@ raise SystemExit('CLASH_APP_DATA=initialization_failed')
 def password_lines(count: int = 4) -> str:
     if count <= 0:
         raise ValueError("password line count must be positive")
-    return (FIXED_PASSWORD + "\n") * count
+    return (guest_password() + "\n") * count
 
 
 def ssh_sudo_script(
@@ -855,15 +852,33 @@ LOGIN_NAME_KEY_CODES = {
     "o": 31, "p": 35, "q": 12, "r": 15, "s": 1, "t": 17, "u": 32,
     "v": 9, "w": 13, "x": 7, "y": 16, "z": 6,
 }
+DIGIT_KEY_CODES = {
+    "0": 29, "1": 18, "2": 19, "3": 20, "4": 21,
+    "5": 23, "6": 22, "7": 26, "8": 28, "9": 25,
+}
 KEY_EVENT_DELAY_SECONDS = 0.03
 
 
+def configured_password_key_codes() -> tuple[int, ...]:
+    """Map the configured four ASCII digits without exposing their value."""
+    password = guest_password()
+    if re.fullmatch(r"[0-9]{4}", password) is None:
+        raise ConfigurationError(
+            "invalid host setting: SUBMISSION_GUEST_PASSWORD must be exactly "
+            "four ASCII digits"
+        )
+    return tuple(DIGIT_KEY_CODES[digit] for digit in password)
+
+
 def login_key_codes(user: str) -> tuple[int, ...]:
-    """Type the exact four-letter VM user, then the fixed `1234` password."""
+    """Type the exact four-letter VM user, then the configured password."""
     if not re.fullmatch(r"[a-z]{4}", user):
         raise GuestAutomationError("GUEST_LOGIN_USER_INVALID")
-    return tuple(LOGIN_NAME_KEY_CODES[character] for character in user) + (
-        48, 18, 19, 20, 21, 36,
+    return (
+        tuple(LOGIN_NAME_KEY_CODES[character] for character in user)
+        + (48,)
+        + configured_password_key_codes()
+        + (36,)
     )
 
 
@@ -875,8 +890,8 @@ def username_key_codes(user: str) -> tuple[int, ...]:
 
 
 def password_key_codes() -> tuple[int, ...]:
-    """Clear stale login-window text and submit the fixed VM password."""
-    return (51,) * 32 + (18, 19, 20, 21, 36)
+    """Clear stale login-window text and submit the configured VM password."""
+    return (51,) * 32 + configured_password_key_codes() + (36,)
 
 
 def loginwindow_full_name_enabled(user: str, ip: str) -> bool:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one UTM-18 SSH operation through the fixed-password transport."""
+"""Run one UTM-18 SSH operation through the configured-password transport."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ if str(PROJECT_SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_SOURCE_ROOT))
 
 from scripts.ssh_password import (  # noqa: E402
-    FIXED_PASSWORD,
     password_environment,
     ssh_args,
 )
@@ -52,7 +51,7 @@ def build_invocation(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run one UTM-18 command using the fixed guest password."
+        description="Run one UTM-18 command using the configured guest password."
     )
     parser.add_argument("--vm-name", required=True)
     parser.add_argument("--vm-ip", required=True)

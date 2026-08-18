@@ -14,6 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 
 
+@pytest.fixture(autouse=True)
+def configured_guest_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUBMISSION_GUEST_PASSWORD", "9072")
+
+
 def test_post_clone_is_split_into_three_business_modules() -> None:
     expected = (
         SCRIPTS / "utm_post_clone.py",
@@ -106,10 +111,30 @@ def test_guest_login_verifies_exact_capture_before_password_input() -> None:
     assert "time.sleep(WAIT_SECONDS)" in source
 
 
-def test_guest_login_key_codes_enter_vm_name_then_fixed_password() -> None:
-    assert guest.login_key_codes("jexp") == (38, 14, 7, 35, 48, 18, 19, 20, 21, 36)
+def test_guest_login_key_codes_enter_vm_name_then_configured_password(monkeypatch) -> None:
+    monkeypatch.setattr(guest, "guest_password", lambda: "9072")
+    assert guest.login_key_codes("jexp") == (38, 14, 7, 35, 48, 25, 29, 26, 19, 36)
     with pytest.raises(guest.GuestAutomationError):
         guest.login_key_codes("bad-name")
+
+
+def test_sudo_password_lines_use_the_runtime_setting(monkeypatch) -> None:
+    synthetic_value = "9072"
+    monkeypatch.setattr(guest, "guest_password", lambda: synthetic_value)
+
+    assert guest.password_lines(2) == f"{synthetic_value}\n{synthetic_value}\n"
+
+
+@pytest.mark.parametrize("invalid", ("12", "12345", "12a4", "１２３４"))
+def test_guest_login_key_codes_reject_invalid_password_without_echo(
+    invalid: str, monkeypatch
+) -> None:
+    monkeypatch.setattr(guest, "guest_password", lambda: invalid)
+
+    with pytest.raises(guest.ConfigurationError) as captured:
+        guest.password_key_codes()
+
+    assert invalid not in str(captured.value)
 
 
 def test_guest_key_events_are_paced_for_utm_delivery(monkeypatch) -> None:
@@ -129,7 +154,8 @@ def test_guest_key_events_are_paced_for_utm_delivery(monkeypatch) -> None:
     assert sleeps == [0.03, 0.03]
 
 
-def test_selected_user_login_sends_only_fixed_password_first(monkeypatch) -> None:
+def test_selected_user_login_sends_only_configured_password_first(monkeypatch) -> None:
+    monkeypatch.setattr(guest, "guest_password", lambda: "9072")
     states = iter(
         (
             {"CONSOLE_USER": "root", "FINDER": "missing", "SETUP_ASSISTANT": "absent"},
@@ -172,6 +198,7 @@ def test_missing_showfullname_uses_default_selected_user_mode(monkeypatch) -> No
 
 
 def test_full_name_login_uses_verified_capture_and_keyboard_only(monkeypatch) -> None:
+    monkeypatch.setattr(guest, "guest_password", lambda: "9072")
     states = iter(
         (
             {"CONSOLE_USER": "root", "FINDER": "missing", "SETUP_ASSISTANT": "absent"},
@@ -210,6 +237,7 @@ def test_full_name_login_uses_verified_capture_and_keyboard_only(monkeypatch) ->
 def test_guest_login_falls_back_to_username_and_password_after_selected_user_retry(
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(guest, "guest_password", lambda: "9072")
     states = iter(
         (
             {"CONSOLE_USER": "root", "FINDER": "missing", "SETUP_ASSISTANT": "absent"},
@@ -249,6 +277,7 @@ def test_guest_login_falls_back_to_username_and_password_after_selected_user_ret
 def test_guest_login_targets_both_fields_and_clears_stale_values(
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(guest, "guest_password", lambda: "9072")
     states = iter(
         (
             {"CONSOLE_USER": "root", "FINDER": "missing", "SETUP_ASSISTANT": "absent"},
@@ -282,9 +311,9 @@ def test_guest_login_targets_both_fields_and_clears_stale_values(
     assert result["CONSOLE_USER"] == "abcd"
     assert clicks == [(520.0, 728.0), (520.0, 696.0), (520.0, 728.0)]
     assert sent == [
-        clear + (18, 19, 20, 21, 36),
+        clear + (25, 29, 26, 19, 36),
         clear + (0, 11, 8, 2),
-        clear + (18, 19, 20, 21, 36),
+        clear + (25, 29, 26, 19, 36),
     ]
 
 

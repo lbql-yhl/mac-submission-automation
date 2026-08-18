@@ -31,14 +31,14 @@ PROJECT_SOURCE_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_SOURCE_ROOT))
 
-from scripts.notion_api import api_from_env
-from scripts.clean_cli import run_clean_cli
-from scripts.ssh_password import (
-    FIXED_PASSWORD,
+from scripts.notion_api import api_from_env  # noqa: E402
+from scripts.clean_cli import run_clean_cli  # noqa: E402
+from scripts.ssh_password import (  # noqa: E402
     password_environment,
-    ssh_args as fixed_password_ssh_args,
+    ssh_args as shared_ssh_args,
 )
-from services.project_paths import SHARED_DIR, VM_IMAGES_DIR
+from services.host_config import guest_password  # noqa: E402
+from services.project_paths import SHARED_DIR, VM_IMAGES_DIR  # noqa: E402
 
 
 LOGIN_FILES = (
@@ -107,7 +107,7 @@ def _redacted_process_detail(
 
 
 def _ssh_args(user: str, ip: str) -> list[str]:
-    return fixed_password_ssh_args(user, ip, connect_timeout=8)
+    return shared_ssh_args(user, ip, connect_timeout=8)
 
 
 def _remote_python_command(*arguments: str) -> str:
@@ -491,8 +491,9 @@ def _probe_remote_accessibility(user: str, ip: str) -> bool:
 
 def _accessibility_recovery_applescript(user: str, ip: str) -> str:
     """Return the semantic three-dialog recovery used through guest AEServer."""
-    machine = f"eppc://{user}:{FIXED_PASSWORD}@{ip}"
-    password = FIXED_PASSWORD.replace("\\", "\\\\").replace('"', '\\"')
+    configured_password = guest_password()
+    machine = f"eppc://{user}:{configured_password}@{ip}"
+    password = configured_password.replace("\\", "\\\\").replace('"', '\\"')
     return f'''
 using terms from application "System Events"
  tell application "System Events" of machine "{machine}"

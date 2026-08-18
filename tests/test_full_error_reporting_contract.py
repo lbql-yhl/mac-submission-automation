@@ -68,17 +68,19 @@ def test_login_guest_failure_keeps_all_lines_without_length_limit() -> None:
     assert detail == "first login detail | second detail for <redacted> " + tail
 
 
-def test_key_guest_failure_keeps_actual_stderr_and_redacts_fixed_password(
+def test_key_guest_failure_keeps_actual_stderr_and_redacts_configured_password(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    synthetic_value = "9072"
     completed = SimpleNamespace(
         returncode=9,
         stdout=b"",
         stderr=(
             b"keychain helper failed while clicking Allow\n"
-            b"authorization password=1234 was rejected\n"
+            + f"authorization password={synthetic_value} was rejected\n".encode()
         ),
     )
+    monkeypatch.setenv("SUBMISSION_GUEST_PASSWORD", synthetic_value)
     monkeypatch.setattr(utm_9, "_run_ssh", lambda *_args, **_kwargs: completed)
 
     with pytest.raises(
@@ -97,16 +99,17 @@ def test_key_guest_failure_keeps_actual_stderr_and_redacts_fixed_password(
         )
 
 
-def test_key_error_does_not_rewrite_unrelated_occurrences_of_1234(
+def test_key_error_does_not_rewrite_unrelated_numeric_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     completed = SimpleNamespace(
         returncode=7,
         stdout=b"",
-        stderr=b"tool reported status 1234 without a password field\n",
+        stderr=b"tool reported status 9876 without a password field\n",
     )
+    monkeypatch.setenv("SUBMISSION_GUEST_PASSWORD", "9072")
     monkeypatch.setattr(utm_9, "_run_ssh", lambda *_args, **_kwargs: completed)
-    with pytest.raises(utm_9.UTM9Error, match=r"status 1234"):
+    with pytest.raises(utm_9.UTM9Error, match=r"status 9876"):
         utm_9.call_guest(
             vm_user="abcd",
             vm_ip="192.0.2.10",

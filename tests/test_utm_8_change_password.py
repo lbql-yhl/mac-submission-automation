@@ -17,7 +17,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import scripts.utm_8_change_password as runner
+import scripts.utm_8_change_password as runner  # noqa: E402
 
 
 TARGET_PASSWORD = "K7mQ9vT2pL6xR4nZy"
@@ -53,6 +53,15 @@ def runner_args() -> SimpleNamespace:
 
 
 class UTM8ChangePasswordTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.password_patch = patch.dict(
+            os.environ, {"SUBMISSION_GUEST_PASSWORD": "9072"}
+        )
+        self.password_patch.start()
+
+    def tearDown(self) -> None:
+        self.password_patch.stop()
+
     def test_guest_workflow_recovers_nested_account_page_with_unique_back_button(self) -> None:
         source = (ROOT / "scripts" / "find_system_settings_general.py").read_text(
             encoding="utf-8"

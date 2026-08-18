@@ -7,6 +7,7 @@ import contextlib
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,11 +15,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-import sys
 
 sys.path.insert(0, str(ROOT))
 
-import scripts.utm_7_login as runner
+import scripts.utm_7_login as runner  # noqa: E402
 
 
 class FakeNotion:
@@ -64,13 +64,18 @@ class FakeNotion:
 class UTM7LoginRunnerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.shared_temp = tempfile.TemporaryDirectory()
+        self.password_patch = patch.dict(
+            os.environ, {"SUBMISSION_GUEST_PASSWORD": "9072"}
+        )
         self.shared_patch = patch.object(
             runner, "SHARED_DIR", Path(self.shared_temp.name)
         )
+        self.password_patch.start()
         self.shared_patch.start()
 
     def tearDown(self) -> None:
         self.shared_patch.stop()
+        self.password_patch.stop()
         self.shared_temp.cleanup()
 
     def test_main_reports_elapsed_seconds(self) -> None:
@@ -675,7 +680,10 @@ class UTM7LoginRunnerTests(unittest.TestCase):
         self.assertIn("pyobjc-framework-ApplicationServices", command_text)
 
     def test_missing_accessibility_is_recovered_by_remote_apple_events(self) -> None:
-        with patch.object(
+        synthetic_value = "9072"
+        with patch.dict(
+            os.environ, {"SUBMISSION_GUEST_PASSWORD": synthetic_value}
+        ), patch.object(
             runner, "_probe_remote_accessibility", side_effect=(False, True)
         ) as probe, patch.object(
             runner.subprocess,
@@ -691,7 +699,9 @@ class UTM7LoginRunnerTests(unittest.TestCase):
         command = run_command.call_args_list[1].args[0]
         source = run_command.call_args_list[1].kwargs["input"]
         self.assertEqual(command, ["/usr/bin/osascript", "-"])
-        self.assertNotIn(runner.FIXED_PASSWORD, " ".join(command))
+        self.assertNotIn(synthetic_value, " ".join(command))
+        self.assertIn(synthetic_value, source)
+        self.assertFalse(hasattr(runner, "FIXED_PASSWORD"))
         self.assertIn("Open System Settings", source)
         self.assertIn("sshd-keygen-wrapper", source)
         self.assertIn('text field whose name is "Password"', source)

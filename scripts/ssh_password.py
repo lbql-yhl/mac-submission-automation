@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Shared fixed-password SSH/SCP command construction.
+"""Shared configured-password SSH/SCP command construction.
 
-OpenSSH obtains the fixed guest password through a mode-700 SSH_ASKPASS
+OpenSSH obtains the guest password through a mode-700 SSH_ASKPASS
 helper, leaving stdin available for remote scripts and sudo input.  Public-key
 authentication is explicitly disabled for every connection.
 """
@@ -13,11 +13,15 @@ import uuid
 from pathlib import Path
 from typing import Mapping
 
+from services.host_config import guest_password
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-FIXED_PASSWORD = "1234"
 DEFAULT_RUNTIME_DIR = PROJECT_ROOT / "runtime" / "ssh-password"
-_ASKPASS_BODY = "#!/bin/sh\nexec /usr/bin/printf '1234\\n'\n"
+_ASKPASS_SCRIPT = (
+    "#!/bin/sh\n"
+    "exec /usr/bin/printf '%s\\n' \"$SUBMISSION_GUEST_PASSWORD\"\n"
+)
 
 
 class SSHPasswordError(RuntimeError):
@@ -35,14 +39,22 @@ def _secure_runtime_dir(path: Path) -> Path:
 
 def _askpass_helper(runtime_dir: Path) -> Path:
     directory = _secure_runtime_dir(runtime_dir)
-    helper = directory / "askpass-1234"
+    helper = directory / "askpass"
     if helper.exists() and (helper.is_symlink() or not helper.is_file()):
         raise SSHPasswordError(f"SSH_ASKPASS helper is unsafe: {helper}")
-    if not helper.exists() or helper.read_text(encoding="utf-8") != _ASKPASS_BODY:
+    if not helper.exists() or helper.read_text(encoding="utf-8") != _ASKPASS_SCRIPT:
         temporary = directory / f".askpass-{uuid.uuid4().hex}.tmp"
-        temporary.write_text(_ASKPASS_BODY, encoding="utf-8")
-        temporary.chmod(0o700)
-        os.replace(temporary, helper)
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(_ASKPASS_SCRIPT)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.chmod(0o700)
+            os.replace(temporary, helper)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
     helper.chmod(0o700)
     return helper
 
@@ -50,13 +62,19 @@ def _askpass_helper(runtime_dir: Path) -> Path:
 def password_environment(
     base: Mapping[str, str] | None = None, *, runtime_dir: Path = DEFAULT_RUNTIME_DIR
 ) -> dict[str, str]:
-    """Return an environment that forces one fixed-password prompt."""
+    """Return an environment that forces one configured-password prompt."""
     env = dict(os.environ if base is None else base)
+    configured_password = (
+        guest_password(environ=base)
+        if base is not None and "SUBMISSION_GUEST_PASSWORD" in base
+        else guest_password()
+    )
     env.update(
         {
             "SSH_ASKPASS": str(_askpass_helper(runtime_dir)),
             "SSH_ASKPASS_REQUIRE": "force",
             "DISPLAY": env.get("DISPLAY") or "submission-ssh:0",
+            "SUBMISSION_GUEST_PASSWORD": configured_password,
         }
     )
     return env

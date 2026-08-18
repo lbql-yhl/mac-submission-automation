@@ -15,6 +15,14 @@ from scripts import utm_9
 from scripts import utm_9_guest
 
 
+DUMMY_GUEST_VALUE = "9072"
+
+
+@pytest.fixture(autouse=True)
+def configured_guest_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUBMISSION_GUEST_PASSWORD", DUMMY_GUEST_VALUE)
+
+
 def test_certtool_input_uses_rsa_2048_sha256_and_exact_subject() -> None:
     payload = utm_9_guest.build_certtool_input(
         key_label="utm-9-0123456789abcdef",
@@ -48,7 +56,7 @@ def test_guest_payload_rejects_control_characters_and_wrong_path() -> None:
         "csr_path": "/Users/abcd/Desktop/CertificateSigningRequest.certSigningRequest",
         "key_label": "utm-9-0123456789abcdef",
         "challenge": "utm-9-0123456789abcdef",
-        "keychain_password": "1234",
+        "keychain_password": DUMMY_GUEST_VALUE,
         "common_name": "Example User",
         "email": "account@example.test",
     }
@@ -74,7 +82,7 @@ def test_keychain_unlock_uses_password_prompt_without_password_in_argv() -> None
 
     utm_9_guest.unlock_keychain(
         Path("/Users/abcd/Library/Keychains/login.keychain-db"),
-        "1234",
+        DUMMY_GUEST_VALUE,
         prompt_runner=fake_prompt,
     )
 
@@ -85,8 +93,8 @@ def test_keychain_unlock_uses_password_prompt_without_password_in_argv() -> None
         "unlock-keychain",
         "/Users/abcd/Library/Keychains/login.keychain-db",
     ]
-    assert password == "1234"
-    assert "1234" not in command
+    assert password == DUMMY_GUEST_VALUE
+    assert DUMMY_GUEST_VALUE not in command
     assert prompt == b"password to unlock"
 
 
@@ -103,16 +111,16 @@ sys.stdout.write('password to unlock test: ')
 sys.stdout.flush()
 password = sys.stdin.readline().rstrip('\\r\\n')
 termios.tcsetattr(fd, termios.TCSANOW, settings)
-raise SystemExit(0 if password == '1234' else 7)
+raise SystemExit(0 if password == '9072' else 7)
 """,
         encoding="utf-8",
     )
 
     command = [sys.executable, str(helper)]
     assert utm_9_guest._pty_password_prompt(
-        command, "1234", b"password to unlock"
+        command, DUMMY_GUEST_VALUE, b"password to unlock"
     ) == 0
-    assert "1234" not in command
+    assert DUMMY_GUEST_VALUE not in command
 
 
 def test_keychain_application_label_parser_returns_exact_sha1() -> None:
@@ -274,11 +282,11 @@ def test_sensitive_subject_values_are_stdin_only() -> None:
     decoded = json.loads(payload.decode("utf-8"))
     assert decoded["email"] == "account@example.test"
     assert decoded["common_name"] == "Example User"
-    assert decoded["keychain_password"] == "1234"
+    assert decoded["keychain_password"] == DUMMY_GUEST_VALUE
     joined = " ".join(command)
     assert "account@example.test" not in joined
     assert "Example User" not in joined
-    assert "1234" not in joined
+    assert DUMMY_GUEST_VALUE not in joined
     assert command[-2:] == ["--mode", "create"]
 
 

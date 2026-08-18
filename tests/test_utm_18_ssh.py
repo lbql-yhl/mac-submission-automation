@@ -2,9 +2,16 @@ from pathlib import Path
 import importlib.util
 import shlex
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "utm_18_ssh.py"
+
+
+@pytest.fixture(autouse=True)
+def configured_guest_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUBMISSION_GUEST_PASSWORD", "9072")
 
 
 def _load_module():
@@ -16,7 +23,7 @@ def _load_module():
     return module
 
 
-def test_wrapper_uses_shared_fixed_password_transport_only() -> None:
+def test_wrapper_uses_shared_configured_password_transport_only() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
     assert "scripts.ssh_password" in source
     for obsolete in (
@@ -30,8 +37,10 @@ def test_wrapper_uses_shared_fixed_password_transport_only() -> None:
         assert obsolete not in source, obsolete
 
 
-def test_wrapper_builds_password_ssh_command_without_exposing_password() -> None:
+def test_wrapper_builds_password_ssh_command_without_exposing_password(monkeypatch) -> None:
     module = _load_module()
+    synthetic_value = "9072"
+    monkeypatch.setenv("SUBMISSION_GUEST_PASSWORD", synthetic_value)
     command, env = module.build_invocation(
         "wsyy",
         "192.168.64.26",
@@ -43,7 +52,8 @@ def test_wrapper_builds_password_ssh_command_without_exposing_password() -> None
     assert "BatchMode=no" in joined
     assert "PubkeyAuthentication=no" in joined
     assert "PreferredAuthentications=password,keyboard-interactive" in joined
-    assert module.FIXED_PASSWORD not in joined
+    assert synthetic_value not in joined
+    assert env["SUBMISSION_GUEST_PASSWORD"] == synthetic_value
     assert env["SSH_ASKPASS_REQUIRE"] == "force"
 
 

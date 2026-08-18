@@ -176,6 +176,8 @@ def test_ip_candidate_falls_back_to_unique_registered_mac_when_utm_backend_has_n
 
 def test_password_prompt_is_unique_and_redacted() -> None:
     module = load_module()
+    synthetic_value = "9072"
+    module.guest_password = lambda: synthetic_value
     count, delta = module.password_prompt_delta(b"ocww@host's password:", 0)
     assert (count, delta) == (1, 1)
     with pytest.raises(module.UTMAError):
@@ -185,14 +187,15 @@ def test_password_prompt_is_unique_and_redacted() -> None:
     )
     assert public == "IDENTITY=verified"
     assert "password" not in public.casefold()
-    assert "1234" not in public
+    assert synthetic_value not in public
     assert module.has_marker(
         "Warning: host key accepted\nSETTINGS_OPENED=1", "SETTINGS_OPENED=1"
     )
 
 
-def test_run_ssh_uses_fixed_password_askpass_without_a_pty(monkeypatch) -> None:
+def test_run_ssh_uses_configured_password_askpass_without_a_pty(monkeypatch) -> None:
     module = load_module()
+    monkeypatch.setenv("SUBMISSION_GUEST_PASSWORD", "9072")
     command = f"{sys.executable} -c \"print('MARKER=verified')\""
     monkeypatch.setattr(
         module,
@@ -240,11 +243,53 @@ def test_file_picker_cancel_uses_guest_relative_coordinates() -> None:
 
 def test_ssh_transcript_redacts_an_unexpected_password_echo() -> None:
     module = load_module()
+    synthetic_value = "9072"
+    module.guest_password = lambda: synthetic_value
     public = module.redact_ssh_transcript(
-        b"ocww@host's password:\r\n1234\r\nIDENTITY=verified\r\n"
+        b"ocww@host's password:\r\n" + synthetic_value.encode() + b"\r\nIDENTITY=verified\r\n"
     )
     assert public == "IDENTITY=verified"
-    assert module.FIXED_PASSWORD not in public
+    assert synthetic_value not in public
+
+
+def test_password_input_maps_every_configured_ascii_digit(monkeypatch) -> None:
+    module = load_module()
+    synthetic_value = "9072"
+    monkeypatch.setattr(module, "guest_password", lambda: synthetic_value)
+    events: list[tuple[int, bool]] = []
+    fake_quartz = type(
+        "Quartz",
+        (),
+        {
+            "CGEventCreateKeyboardEvent": staticmethod(
+                lambda _source, key_code, pressed: (key_code, pressed)
+            ),
+            "CGEventPostToPid": staticmethod(lambda _pid, event: events.append(event)),
+        },
+    )
+    monkeypatch.setitem(sys.modules, "Quartz", fake_quartz)
+
+    module._send_password(module.UTMWindow(42, 7, (0.0, 0.0, 100.0, 100.0)))
+
+    assert events == [
+        (25, True), (25, False),
+        (29, True), (29, False),
+        (26, True), (26, False),
+        (19, True), (19, False),
+    ]
+
+
+@pytest.mark.parametrize("invalid", ("12", "12345", "12a4", "１２３４"))
+def test_password_input_rejects_non_four_ascii_digits_without_echoing_value(
+    invalid: str, monkeypatch
+) -> None:
+    module = load_module()
+    monkeypatch.setattr(module, "guest_password", lambda: invalid)
+
+    with pytest.raises(module.ConfigurationError) as captured:
+        module._send_password(module.UTMWindow(42, 7, (0.0, 0.0, 100.0, 100.0)))
+
+    assert invalid not in str(captured.value)
 
 
 def test_ocr_targets_and_authorization_are_unique() -> None:
@@ -345,6 +390,8 @@ def test_source_contract_forbids_scope_and_lifecycle_expansion() -> None:
     assert "CGWindowListCopyWindowInfo" in source
     assert "Capture Input" in source
     assert "CGEventCreateKeyboardEvent" in source
+    assert "FIXED_PASSWORD" not in source
+    assert "PASSWORD_KEY_CODES" not in source
     assert "AXIsProcessTrusted" in source
     assert source.count("verify_all_targets") >= 3
     assert "_active_vm_name" not in source

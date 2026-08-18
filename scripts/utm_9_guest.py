@@ -64,7 +64,7 @@ def validate_payload(payload: object, *, require_subject: bool) -> dict[str, Any
     keychain_password = _one_line(
         payload.get("keychain_password"), "keychain_password", maximum=64
     )
-    if keychain_password != "1234":
+    if re.fullmatch(r"[0-9]{4}", keychain_password) is None:
         raise GuestError("KEYCHAIN_PASSWORD_INVALID")
     normalized: dict[str, Any] = {
         "expected_user": expected_user,

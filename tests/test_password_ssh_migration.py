@@ -10,6 +10,11 @@ from scripts import utm_post_clone_guest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def configured_guest_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUBMISSION_GUEST_PASSWORD", "9072")
+
+
 def test_guest_ssh_failure_preserves_stdout_and_stderr(monkeypatch) -> None:
     def fail(*_args, **_kwargs):
         raise subprocess.CalledProcessError(
@@ -28,7 +33,7 @@ def test_guest_ssh_failure_preserves_stdout_and_stderr(monkeypatch) -> None:
     assert "remote stderr detail" in str(captured.value)
 
 
-def test_guest_ssh_scripts_share_fixed_password_transport() -> None:
+def test_guest_ssh_scripts_share_configured_password_transport() -> None:
     for relative in (
         "scripts/utm_2_guest_identity.py",
         "scripts/utm_7_login.py",

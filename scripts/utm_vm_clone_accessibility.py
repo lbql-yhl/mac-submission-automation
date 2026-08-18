@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
-import os
 import plistlib
 import re
 import shlex
@@ -26,6 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from services.host_config import ConfigurationError, guest_password  # noqa: E402
 from services.project_paths import VM_IMAGES_DIR  # noqa: E402
 from scripts.ssh_password import password_environment  # noqa: E402
 
@@ -36,8 +36,18 @@ VISION_SOURCE = PROJECT_ROOT / "scripts" / "utm_vm_clone_accessibility_vision.sw
 UTMCTL = str(Path(shutil.which("utmctl") or "/opt/homebrew/bin/utmctl").resolve())
 TARGETS = ("AEServer", "sshd-keygen-wrapper", "Terminal")
 WAIT_SECONDS = 3.0
-FIXED_PASSWORD = "1234"
-PASSWORD_KEY_CODES = (18, 19, 20, 21)
+DIGIT_KEY_CODES = {
+    "0": 29,
+    "1": 18,
+    "2": 19,
+    "3": 20,
+    "4": 21,
+    "5": 23,
+    "6": 22,
+    "7": 26,
+    "8": 28,
+    "9": 25,
+}
 VM_NAME_RE = re.compile(r"^[a-z]{4}$")
 UUID_RE = re.compile(r"^[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}$")
 MAC_RE = re.compile(r"^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$")
@@ -302,13 +312,14 @@ def password_prompt_delta(output: bytes, seen: int) -> tuple[int, int]:
 
 
 def redact_ssh_transcript(output: bytes) -> str:
+    configured_password = guest_password()
     text = output.decode("utf-8", errors="replace").replace("\r", "")
     text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", text)
     lines = [
         line.strip()
         for line in text.splitlines()
         if line.strip()
-        and FIXED_PASSWORD not in line
+        and configured_password not in line
         and not re.search(r"(?i)password\s*:", line)
     ]
     return "\n".join(lines)
@@ -794,7 +805,13 @@ def _click(window: UTMWindow, point: tuple[float, float], image_size: tuple[int,
 def _send_password(window: UTMWindow) -> None:
     import Quartz
 
-    for key_code in PASSWORD_KEY_CODES:
+    password = guest_password()
+    if re.fullmatch(r"[0-9]{4}", password) is None:
+        raise ConfigurationError(
+            "invalid host setting: SUBMISSION_GUEST_PASSWORD must be exactly "
+            "four ASCII digits"
+        )
+    for key_code in (DIGIT_KEY_CODES[digit] for digit in password):
         for pressed in (True, False):
             event = Quartz.CGEventCreateKeyboardEvent(None, key_code, pressed)
             Quartz.CGEventPostToPid(window.pid, event)

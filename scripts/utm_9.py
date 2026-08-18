@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run UTM-9 through Notion API, fixed-password SSH, and guest certtool."""
+"""Run UTM-9 through Notion API, configured-password SSH, and guest certtool."""
 
 from __future__ import annotations
 
@@ -34,11 +34,11 @@ from scripts.utm_clash_ip_target import (  # noqa: E402
 )
 from scripts.vm_inventory import InventoryError  # noqa: E402
 from scripts.ssh_password import (  # noqa: E402
-    FIXED_PASSWORD,
     password_environment,
     scp_args,
     ssh_args,
 )
+from services.host_config import guest_password  # noqa: E402
 from services.project_paths import PROJECT_ROOT, VM_IMAGES_DIR  # noqa: E402
 
 
@@ -290,7 +290,7 @@ def _guest_base_payload(vm_user: str, attempt: Mapping[str, Any]) -> dict[str, A
         "csr_path": attempt["csr_path"],
         "key_label": attempt["key_label"],
         "challenge": attempt["challenge"],
-        "keychain_password": FIXED_PASSWORD,
+        "keychain_password": guest_password(),
     }
 
 
@@ -501,7 +501,7 @@ def call_guest(
             for line in result.stderr.decode("utf-8", errors="replace").splitlines()
         ]
         detail = " | ".join(line for line in lines if line) or "guest exited without detail"
-        password_pattern = re.escape(FIXED_PASSWORD)
+        password_pattern = re.escape(guest_password())
         detail = re.sub(
             rf"(?i)(\b(?:keychain_)?password\b[\"']?\s*[:=]\s*[\"']?)"
             rf"{password_pattern}([\"']?)",
@@ -536,7 +536,7 @@ def _probe_payload(vm_user: str, csr_path: str, key_label: str, challenge: str) 
             "csr_path": csr_path,
             "key_label": key_label,
             "challenge": challenge,
-            "keychain_password": FIXED_PASSWORD,
+            "keychain_password": guest_password(),
         }
     )
 

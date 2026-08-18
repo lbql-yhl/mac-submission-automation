@@ -6,9 +6,17 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 from typing import Any, List, Optional
 
-from find_system_settings_general import (
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from services.host_config import guest_password  # noqa: E402
+
+from find_system_settings_general import (  # noqa: E402
     AX,
     LOGIN_CONTINUE_TEXT,
     MINIMUM_GUI_SETTLE_SECONDS,
@@ -35,7 +43,6 @@ MAC_PASSWORD_PROMPT_TEXTS = (
     MAC_PASSWORD_PROMPT_TEXT,
     APPLE_ACCOUNT_CHANGES_PROMPT_TEXT,
 )
-MAC_PASSWORD_VALUE = "1234"
 
 
 def find_mac_password_field(roots: List[Any]) -> Optional[Any]:
@@ -68,12 +75,14 @@ def find_mac_password_field(roots: List[Any]) -> Optional[Any]:
 def mac_password_readback_matches(
     rendered_value: Any,
     field_info: dict[str, Any],
+    expected_password: str | None = None,
 ) -> bool:
-    """Validate a four-character secure readback without assuming its mask glyph."""
+    """Validate a secure readback without assuming its mask glyph."""
+    password = guest_password() if expected_password is None else expected_password
     rendered_text = str(rendered_value or "")
-    if rendered_text == MAC_PASSWORD_VALUE:
+    if rendered_text == password:
         return True
-    if len(rendered_text) != len(MAC_PASSWORD_VALUE):
+    if len(rendered_text) != len(password):
         return False
     mask_characters = {"•", "●", "*", "·"}
     if set(rendered_text) <= mask_characters:
@@ -92,7 +101,7 @@ def _iter_tree(roots: List[Any]):
 
 
 def handle_mac_password_prompt(pid: int) -> Optional[int]:
-    """若授权弹窗存在则输入 1234，唯一点击 Continue/Allow 并复验关闭。"""
+    """若授权弹窗存在则输入运行时客机密码并复验关闭。"""
     roots = current_search_roots(pid, auto_handle_mac_password=False)
     visible_prompts = [
         text for text in MAC_PASSWORD_PROMPT_TEXTS if tree_contains_text(roots, text)
@@ -113,7 +122,8 @@ def handle_mac_password_prompt(pid: int) -> Optional[int]:
     if password_field is None:
         print("检测到 Apple Account Mac 密码授权，但密码框不唯一。", file=sys.stderr)
         return 5
-    password_error = set_login_field(password_field, MAC_PASSWORD_VALUE)
+    password = guest_password()
+    password_error = set_login_field(password_field, password)
     if password_error != AX.kAXErrorSuccess:
         print("写入 Mac 密码失败，AXError={}".format(password_error), file=sys.stderr)
         return 4
@@ -129,7 +139,9 @@ def handle_mac_password_prompt(pid: int) -> Optional[int]:
     refreshed_info = (
         describe_element(refreshed_field) if refreshed_field is not None else {}
     )
-    if not mac_password_readback_matches(rendered_value, refreshed_info):
+    if not mac_password_readback_matches(
+        rendered_value, refreshed_info, expected_password=password
+    ):
         print("Mac 密码字段四位回读不匹配。", file=sys.stderr)
         return 5
 
