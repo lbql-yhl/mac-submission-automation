@@ -10,11 +10,13 @@ import shlex
 import shutil
 import sys
 from pathlib import Path
+from typing import Mapping
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from services.host_config import host_settings_snapshot  # noqa: E402
 from services.project_paths import (  # noqa: E402
     PROJECT_ROOT,
     PROJECT_SKILLS_DIR,
@@ -25,9 +27,22 @@ from services.project_paths import (  # noqa: E402
 
 
 ORDERED = (
-    "utm-vm-clone", "utm-notion", "utm-clash-ip", "utm-login", "utm-edit",
-    "utm-key", "utm-apps", "utm-business",
-    "utm-env", "utm-script", "utm-image", "utm-p8", "utm-21", "utm-22", "utm-23", "utm-24",
+    "utm-vm-clone",
+    "utm-notion",
+    "utm-clash-ip",
+    "utm-login",
+    "utm-edit",
+    "utm-key",
+    "utm-apps",
+    "utm-business",
+    "utm-env",
+    "utm-script",
+    "utm-image",
+    "utm-p8",
+    "utm-21",
+    "utm-22",
+    "utm-23",
+    "utm-24",
 )
 STANDALONE: tuple[str, ...] = ()
 
@@ -66,16 +81,27 @@ def runner_command_valid(command: str) -> bool:
 
 
 def check(project_only: bool) -> dict[str, object]:
+    settings: Mapping[str, str] = os.environ
+    if not project_only:
+        settings = host_settings_snapshot(
+            environ=os.environ,
+            env_path=ROOT / ".env",
+        )
     discovered = {
         path.parent.name for path in PROJECT_SKILLS_DIR.glob("*/SKILL.md")
     }
-    codex_command = os.getenv("FEISHU_CODEX_COMMAND", "codex").strip()
-    runner_command = os.getenv(
-        "SUBMISSION_RUNNER_COMMAND", "python3 services/submission_runner.py"
+    codex_command = str(settings.get("FEISHU_CODEX_COMMAND", "codex")).strip()
+    runner_command = str(
+        settings.get(
+            "SUBMISSION_RUNNER_COMMAND", "python3 services/submission_runner.py"
+        )
     ).strip()
     checks: dict[str, object] = {
         "project_root": PROJECT_ROOT == ROOT and (ROOT / "README.md").is_file(),
-        "skills_count": sum((PROJECT_SKILLS_DIR / name / "SKILL.md").is_file() for name in ORDERED),
+        "skills_count": sum(
+            (PROJECT_SKILLS_DIR / name / "SKILL.md").is_file()
+            for name in ORDERED
+        ),
         "standalone_skills_count": sum(
             (PROJECT_SKILLS_DIR / name / "SKILL.md").is_file() for name in STANDALONE
         ),
@@ -85,7 +111,9 @@ def check(project_only: bool) -> dict[str, object]:
             and len(STANDALONE) == len(set(STANDALONE)) == 0
             and set(ORDERED).isdisjoint(STANDALONE)
         ),
-        "shared_contract": (PROJECT_SKILLS_DIR / "_shared" / "AUTOMATION_CONTRACT.md").is_file(),
+        "shared_contract": (
+            PROJECT_SKILLS_DIR / "_shared" / "AUTOMATION_CONTRACT.md"
+        ).is_file(),
         "python3": shutil.which("python3") is not None,
         "codex": executable_exists(codex_command),
         "runner_enabled": runner_command_valid(runner_command),
@@ -96,13 +124,27 @@ def check(project_only: bool) -> dict[str, object]:
                 "vm_images_dir": VM_IMAGES_DIR.is_dir(),
                 "vm_template": VM_TEMPLATE.is_dir(),
                 "shared_dir": SHARED_DIR.is_dir(),
-                "submission_host_machine": bool(os.getenv("SUBMISSION_HOST_MACHINE", "").strip()),
-                "feishu_app_id": bool(os.getenv("FEISHU_APP_ID", "").strip()),
-                "feishu_app_secret": bool(os.getenv("FEISHU_APP_SECRET", "").strip()),
-                "notion_token": bool(os.getenv("NOTION_TOKEN", "").strip()),
-                "notion_root_page_id": bool(os.getenv("NOTION_ROOT_PAGE_ID", "").strip()),
-                "codeup_username": bool(os.getenv("CODEUP_USERNAME", "").strip()),
-                "codeup_password": bool(os.getenv("CODEUP_PASSWORD", "").strip()),
+                "submission_host_machine": bool(
+                    str(settings.get("SUBMISSION_HOST_MACHINE", "")).strip()
+                ),
+                "feishu_app_id": bool(
+                    str(settings.get("FEISHU_APP_ID", "")).strip()
+                ),
+                "feishu_app_secret": bool(
+                    str(settings.get("FEISHU_APP_SECRET", "")).strip()
+                ),
+                "notion_token": bool(
+                    str(settings.get("NOTION_TOKEN", "")).strip()
+                ),
+                "notion_root_page_id": bool(
+                    str(settings.get("NOTION_ROOT_PAGE_ID", "")).strip()
+                ),
+                "codeup_username": bool(
+                    str(settings.get("CODEUP_USERNAME", "")).strip()
+                ),
+                "codeup_password": bool(
+                    str(settings.get("CODEUP_PASSWORD", "")).strip()
+                ),
                 "ssh": shutil.which("ssh") is not None,
                 "git": shutil.which("git") is not None,
                 "node": shutil.which("node") is not None,

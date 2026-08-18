@@ -1,27 +1,28 @@
 ---
 name: utm-env
-description: Use when the script-preparation and execution segment or this skill is explicitly requested.
+description: Use when the prepared UTM guest needs the current application's submission environment and assets materialized.
 ---
 
 # utm-env
 
-所属阶段：脚本准备、执行。本技能可人工单独指定执行，也是本段入口。
+Read and obey [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md). From the repository root run `eval "$(python3 scripts/preflight.py --project-only --emit-shell)"` before the entry command.
 
-## 执行
+## Contract
 
-```bash
-python3 /Users/yehailin/Documents/mac提审自动化/scripts/utm_env.py \
-  --parent-title '<parent-title>' \
-  --app-name '<app-name>' \
-  [--asset-app-name '<Feishu源应用名>'] \
-  --vm-ip '<vm-ip>' \
-  --vm-user '<vm-user>'
-```
+- Segment: 3, script preparation and execution; this is the segment entry.
+- Input: exact `<parent-title>`, `<app-name>`, optional distinct `<asset-app-name>`, inherited `<vm-ip>`, and `<vm-user>`.
+- Only public host entry:
 
-主线和人工单独执行均使用以上命令并传入当前目标参数。Feishu Base 的源应用名与当前应用名不同时传入 `--asset-app-name`；一致时省略。操作者只运行以上唯一宿主入口，不读取或解释脚本内容，不调用内部脚本或中间步骤。执行失败并修复后，重新运行同一入口。
+  ```bash
+  python3 "$PROJECT_ROOT/scripts/utm_env.py" \
+    --parent-title '<parent-title>' --app-name '<app-name>' \
+    --vm-ip '<vm-ip>' --vm-user '<vm-user>'
+  ```
 
-## 输出与交接
+  Add `--asset-app-name '<asset-app-name>'` only when the Feishu asset source differs from the application name.
+- Require unique source rows and application identity; verify the guest environment and copied assets without printing `.env` values or asset credentials.
+- Retry the same source/guest checkpoint at most three rounds using 0/5/10 seconds. Do not switch source application unless the inherited input explicitly names it.
 
-终端只显示 `开始执行：utm-env`、`执行成功：utm-env；UTM_ENV=verified` 或 `执行报错：utm-env；<非敏感原因>`。
+## Result and handoff
 
-成功后交接 `utm-script`。
+The canonical success summary is `执行成功：utm-env；UTM_ENV=verified`. Immediately hand the same run, VM, application, asset source, and browser session to `utm-script`.

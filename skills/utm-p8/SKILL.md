@@ -1,34 +1,27 @@
 ---
 name: utm-p8
-description: Use when the script-preparation and execution segment reaches P8 registration or this skill is explicitly requested.
+description: Use when the current application needs its App Store Connect API key configuration finalized in the prepared UTM guest.
 ---
 
 # utm-p8
 
-所属阶段：脚本准备、执行。本技能可人工单独指定执行。
+Read and obey [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md). From the repository root run `eval "$(python3 scripts/preflight.py --project-only --emit-shell)"` before the entry command.
 
-## 执行
+## Contract
 
-```bash
-/Users/yehailin/.venvs/py312-common/bin/python3 /Users/yehailin/Documents/mac提审自动化/scripts/utm_p8.py \
-  --run-id '<run-id>' --vm-name '<vm-name>' --vm-ip '<vm-ip>' --vm-user '<vm-user>'
-```
+- Segment: 3, script preparation and execution; this is the segment tail.
+- Input: exact `<run-id>` or `<page-title>`, plus `<vm-name>`, inherited `<vm-ip>`, and `<vm-user>`.
+- Only public host entry:
 
-人工单独执行也可改用精确页面：
+  ```bash
+  python3 "$PROJECT_ROOT/scripts/utm_p8.py" \
+    --run-id '<run-id>' --vm-name '<vm-name>' --vm-ip '<vm-ip>' --vm-user '<vm-user>'
+  ```
 
-```bash
-/Users/yehailin/.venvs/py312-common/bin/python3 /Users/yehailin/Documents/mac提审自动化/scripts/utm_p8.py \
-  --page-title '<page-title>' --vm-name '<vm-name>' --vm-ip '<vm-ip>' --vm-user '<vm-user>'
-```
+  Standalone selector: replace `--run-id '<run-id>'` with `--page-title '<page-title>'`. For explicitly requested local cleanup only, add `--cleanup-only` and omit `--vm-ip`/`--vm-user`.
+- Require one matching key ID, issuer, App ID, and non-empty P8 file; never print the key or token. Normal completion also verifies cleanup of only the current application's four shared temporary asset targets.
+- Retry the same key/configuration checkpoint at most three rounds using 0/5/10 seconds. Do not choose a different P8 or delete unrelated shared content.
 
-只清理本地共享文件时，在精确页面命令末尾追加 `--cleanup-only`，并省略 `--vm-ip`、`--vm-user`。该模式只按页面中的当前应用名处理四项本地临时文件，不要求 VM 运行，也不连接 VM 或 Notion。
+## Result and handoff
 
-两个选择器二选一。操作者只运行以上唯一宿主入口，不读取或解释脚本内容，不调用内部脚本或中间步骤。执行失败并修复后，重新运行同一入口。
-
-## 输出与交接
-
-终端只显示 `开始执行：utm-p8`、`执行成功：utm-p8；UTM_P8=verified`、清理模式的 `执行成功：utm-p8；SHARED_APP_ASSETS_CLEANED=verified` 或 `执行报错：utm-p8；<非敏感原因>`。
-
-成功标记同时证明唯一入口已按当前应用名精确清理共享目录中的应用目录、`-git` 目录、`.png` 和 `.xlsx` 四项临时文件，并记录 `SHARED_APP_ASSETS_CLEANED=verified`；其他共享内容不处理。
-
-成功后结束本段；需要继续下一段时交接 `utm-21`。
+Normal success is `执行成功：utm-p8；UTM_P8=verified`; cleanup-only success is `执行成功：utm-p8；SHARED_APP_ASSETS_CLEANED=verified`. This ends segment 3. If the request includes segment 4, hand the same verified context to `utm-21`; otherwise stop at the segment boundary.

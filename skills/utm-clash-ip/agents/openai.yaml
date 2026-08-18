@@ -1,4 +1,4 @@
 interface:
   display_name: "UTM Clash IP"
-  short_description: "从 Notion 配置并验证 UTM guest 的完整代理通路"
-  default_prompt: "Use $utm-clash-ip to configure and verify the exact UTM guest proxy path."
+  short_description: "Configure the assigned proxy for one UTM guest"
+  default_prompt: "Use $utm-clash-ip to configure the current guest proxy and network identity."

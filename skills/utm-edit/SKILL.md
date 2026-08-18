@@ -1,26 +1,27 @@
 ---
 name: utm-edit
-description: Use when the environment-preparation segment reaches account editing or this skill is explicitly requested.
+description: Use when the signed-in UTM guest needs the current Apple Account password-change stage completed for its exact application.
 ---
 
 # utm-edit
 
-所属阶段：环境准备。本技能可人工单独指定执行。
+Read and obey [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md). From the repository root run `eval "$(python3 scripts/preflight.py --project-only --emit-shell)"` before the entry command.
 
-## 执行
+## Contract
 
-```bash
-python3 /Users/yehailin/Documents/mac提审自动化/scripts/utm_8_change_password.py \
-  --page-title '<page-title>' \
-  --vm-name '<vm-name>' \
-  --vm-ip '<vm-ip>' \
-  --vm-user '<vm-user>'
-```
+- Segment: 2, environment preparation.
+- Input: exact `<page-title>`, `<vm-name>`, inherited `<vm-ip>`, and `<vm-user>`.
+- Only public host entry:
 
-主线和人工单独执行均使用以上命令并传入当前目标参数。操作者只运行以上唯一宿主入口，不读取或解释脚本内容，不调用内部脚本或中间步骤。执行失败并修复后，重新运行同一入口。
+  ```bash
+  python3 "$PROJECT_ROOT/scripts/utm_8_change_password.py" \
+    --page-title '<page-title>' --vm-name '<vm-name>' \
+    --vm-ip '<vm-ip>' --vm-user '<vm-user>'
+  ```
 
-## 输出与交接
+- Keep old/new passwords and recovery data inside the secured entry. Verify the changed account state and authoritative page update without printing a secret.
+- Retry the same account checkpoint at most three rounds using 0/5/10 seconds. Never change a different account or manufacture recovery answers.
 
-终端只显示 `开始执行：utm-edit`、`执行成功：utm-edit；UTM_8=verified` 或 `执行报错：utm-edit；<非敏感原因>`。
+## Result and handoff
 
-成功后交接 `utm-key`。
+The canonical success summary is `执行成功：utm-edit；UTM_8=verified`. Preserve the same account, VM, and session and immediately hand them to `utm-key`.

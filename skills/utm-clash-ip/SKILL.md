@@ -1,27 +1,27 @@
 ---
 name: utm-clash-ip
-description: Use when the environment-preparation segment reaches Clash/IP setup or this skill is explicitly requested.
+description: Use when the target UTM guest needs its assigned proxy and Clash/IP state configured for the current application.
 ---
 
 # utm-clash-ip
 
-所属阶段：环境准备。本技能可人工单独指定执行。
+Read and obey [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md). From the repository root run `eval "$(python3 scripts/preflight.py --project-only --emit-shell)"` before the entry command.
 
-## 执行
+## Contract
 
-```bash
-python3 /Users/yehailin/Documents/mac提审自动化/scripts/utm_clash_ip.py \
-  --vm-name '<vm-name>' \
-  --application-name '<app-name>' \
-  --vm-ip '<vm-ip>' \
-  --parent-title '<parent-title>' \
-  --page-title '<page-title>'
-```
+- Segment: 2, environment preparation.
+- Input: exact `<vm-name>`, `<app-name>`, inherited `<vm-ip>`, Notion `<parent-title>`, and `<page-title>`.
+- Only public host entry:
 
-主线和人工单独执行均使用以上命令并传入当前目标参数。操作者只运行以上唯一宿主入口，不读取或解释脚本内容，不调用内部脚本或中间步骤。执行失败并修复后，重新运行同一入口。
+  ```bash
+  python3 "$PROJECT_ROOT/scripts/utm_clash_ip.py" \
+    --vm-name '<vm-name>' --application-name '<app-name>' --vm-ip '<vm-ip>' \
+    --parent-title '<parent-title>' --page-title '<page-title>'
+  ```
 
-## 输出与交接
+- Require one inventory-bound VM and one authoritative proxy assignment. Verify guest proxy configuration and outbound identity without printing proxy credentials.
+- Retry the same VM/proxy checkpoint at most three rounds using 0/5/10 seconds. Never claim, switch, or guess another proxy or VM.
 
-终端只显示 `开始执行：utm-clash-ip`、`执行成功：utm-clash-ip；UTM_CLASH_IP=verified` 或 `执行报错：utm-clash-ip；<非敏感原因>`。
+## Result and handoff
 
-成功后交接 `utm-login`。
+The canonical success summary is `执行成功：utm-clash-ip；UTM_CLASH_IP=verified`. Immediately hand the same run, VM, network identity, and Notion page to `utm-login`.

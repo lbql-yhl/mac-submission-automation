@@ -1,30 +1,27 @@
 ---
 name: utm-key
-description: Use when the environment-preparation segment reaches key preparation or this skill is explicitly requested.
+description: Use when the password-updated UTM guest needs Apple Developer keys, identifiers, certificates, and profiles prepared.
 ---
 
 # utm-key
 
-所属阶段：环境准备。本技能可人工单独指定执行。
+Read and obey [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md). From the repository root run `eval "$(python3 scripts/preflight.py --project-only --emit-shell)"` before the entry command.
 
-## 执行
+## Contract
 
-```bash
-/usr/bin/python3 /Users/yehailin/Documents/mac提审自动化/scripts/utm_9.py \
-  --run-id '<run-id>' --vm-name '<vm-name>' --vm-ip '<vm-ip>' --vm-user '<vm-user>'
-```
+- Segment: 2, environment preparation.
+- Input: exact `<run-id>` or exact `<page-title>`, plus `<vm-name>`, inherited `<vm-ip>`, and `<vm-user>`.
+- Only public host entry:
 
-人工单独执行也可改用精确页面：
+  ```bash
+  python3 "$PROJECT_ROOT/scripts/utm_9.py" \
+    --run-id '<run-id>' --vm-name '<vm-name>' --vm-ip '<vm-ip>' --vm-user '<vm-user>'
+  ```
 
-```bash
-/usr/bin/python3 /Users/yehailin/Documents/mac提审自动化/scripts/utm_9.py \
-  --page-title '<page-title>' --vm-name '<vm-name>' --vm-ip '<vm-ip>' --vm-user '<vm-user>'
-```
+  Standalone selector: replace `--run-id '<run-id>'` with `--page-title '<page-title>'`.
+- Accept only the unique App ID/Bundle ID/account context bound to the inherited run. Do not expose certificate material, P8 data, or passwords.
+- Retry the same entry and exact identifier at most three rounds using 0/5/10 seconds; reconcile existing Apple resources before attempting any creation.
 
-两个选择器二选一。操作者只运行以上唯一宿主入口，不读取或解释脚本内容，不调用内部脚本或中间步骤。执行失败并修复后，重新运行同一入口。
+## Result and handoff
 
-## 输出与交接
-
-终端只显示 `开始执行：utm-key`、`执行成功：utm-key；UTM_9=verified` 或 `执行报错：utm-key；<非敏感原因>`。
-
-成功后交接 `utm-apps`。
+The canonical success summary is `执行成功：utm-key；UTM_9=verified`. Preserve the same browser login and identifier context and immediately hand them to `utm-apps`.

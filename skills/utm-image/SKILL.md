@@ -1,30 +1,27 @@
 ---
 name: utm-image
-description: Use when the script-preparation and execution segment reaches image handling or this skill is explicitly requested.
+description: Use when the executed application stage needs its exact submission image assets prepared and verified.
 ---
 
 # utm-image
 
-所属阶段：脚本准备、执行。本技能可人工单独指定执行。
+Read and obey [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md). From the repository root run `eval "$(python3 scripts/preflight.py --project-only --emit-shell)"` before the entry command.
 
-## 执行
+## Contract
 
-```bash
-/Users/yehailin/.venvs/py312-common/bin/python3 /Users/yehailin/Documents/mac提审自动化/scripts/utm_image.py \
-  --run-id '<run-id>' --vm-name '<vm-name>' --vm-ip '<vm-ip>' --vm-user '<vm-user>'
-```
+- Segment: 3, script preparation and execution.
+- Input: exact `<run-id>` or `<page-title>`, plus `<vm-name>`, inherited `<vm-ip>`, `<vm-user>`, and optional distinct `<asset-app-name>`.
+- Only public host entry:
 
-人工单独执行也可改用精确页面：
+  ```bash
+  python3 "$PROJECT_ROOT/scripts/utm_image.py" \
+    --run-id '<run-id>' --vm-name '<vm-name>' --vm-ip '<vm-ip>' --vm-user '<vm-user>'
+  ```
 
-```bash
-/Users/yehailin/.venvs/py312-common/bin/python3 /Users/yehailin/Documents/mac提审自动化/scripts/utm_image.py \
-  --page-title '<page-title>' --vm-name '<vm-name>' --vm-ip '<vm-ip>' --vm-user '<vm-user>'
-```
+  Standalone selector: replace `--run-id '<run-id>'` with `--page-title '<page-title>'`. Add `--asset-app-name '<asset-app-name>'` only for an explicitly different source.
+- Require the exact application/source binding and independently verify the expected image set and guest delivery. Do not print source credentials or unrelated asset contents.
+- Retry the same source/file checkpoint at most three rounds using 0/5/10 seconds; never substitute another application's images.
 
-两个选择器二选一。操作者只运行以上唯一宿主入口，不读取或解释脚本内容，不调用内部脚本或中间步骤。执行失败并修复后，重新运行同一入口。
+## Result and handoff
 
-## 输出与交接
-
-终端只显示 `开始执行：utm-image`、`执行成功：utm-image；UTM_19=verified` 或 `执行报错：utm-image；<非敏感原因>`。
-
-成功后交接 `utm-p8`。
+The canonical success summary is `执行成功：utm-image；UTM_19=verified`. Immediately hand the same run, VM, application, source binding, and verified assets to `utm-p8`.

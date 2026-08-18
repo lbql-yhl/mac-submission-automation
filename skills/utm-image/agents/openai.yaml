@@ -1,4 +1,4 @@
 interface:
-  display_name: "UTM-IMAGE Screenshot Upload"
-  short_description: "Resume-safe scripted App Store screenshot upload"
-  default_prompt: "Use $utm-image to reuse the existing Edge session and safely resume or complete the 6.9-inch screenshot upload."
+  display_name: "UTM Image"
+  short_description: "Prepare and verify exact submission image assets"
+  default_prompt: "Use $utm-image to prepare and verify the current application image assets."
