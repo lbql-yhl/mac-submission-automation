@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from fnmatch import fnmatchcase
 from pathlib import Path
 import re
 import subprocess
@@ -48,17 +49,20 @@ _REPORT_DESTINATION_SUFFIXES = (
     "REPORT_DESTINATION",
     "REPORT_RECEIVE_ID",
 )
-_ASSIGNMENT = re.compile(
+_QUOTED_ASSIGNMENT = re.compile(
     r"(?m)^[ \t]*(?:(?:export|const|let|var)\s+)?"
     r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)"
     r"(?:\s*:\s*[^=\r\n]+)?\s*=\s*"
-    r"(?P<quote>['\"])(?P<value>[^\r\n]*?)(?P=quote)"
+    r"(?P<prefix>[bBrRuUfF]{0,2})"
+    r"(?P<quote>['\"`])(?P<value>[^\r\n]*?)(?P=quote)"
 )
 _POSIX_HOME = re.compile(
     r"/(?:Users|home)/(?P<owner>[^/\s'\"<>${}]+)(?:/|$)"
 )
+_ROOT_HOME = re.compile(r"(?<![A-Za-z0-9_])/root(?:/|$)")
 _WINDOWS_HOME = re.compile(
-    r"[A-Za-z]:[\\/]Users[\\/](?P<owner>[^\\/\s'\"<>%]+)(?:[\\/]|$)",
+    r"[A-Za-z]:(?:\\+|/)Users(?:\\+|/)"
+    r"(?P<owner>[^\\/\s'\"<>%]+)(?:(?:\\+|/)|$)",
     re.IGNORECASE,
 )
 _NON_PERSONAL_HOME_NAMES = {
@@ -71,6 +75,7 @@ _NON_PERSONAL_HOME_NAMES = {
 _IGNORE_PROBES = (
     ".env",
     "config/workflow.env",
+    "nested/service.env",
     "runtime/public-release-audit.json",
     "signing/public-release-audit.p8",
     "signing/public-release-audit.p12",
@@ -91,9 +96,14 @@ _IGNORE_PROBES = (
     "vm/public-release-audit.ovf",
     "vm/public-release-audit.vmsn",
 )
+_ALLOWED_EXAMPLE_PROBES = (
+    ".env.example",
+    "config/workflow.env.example",
+    "nested/service.env.example",
+)
 
 
-def _tracked_regular_paths(root: Path) -> list[str]:
+def _tracked_regular_blobs(root: Path) -> dict[str, str]:
     completed = subprocess.run(
         ["git", "ls-files", "-z", "--stage"],
         cwd=root,
@@ -101,18 +111,38 @@ def _tracked_regular_paths(root: Path) -> list[str]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    paths: set[str] = set()
+    blobs: dict[str, str] = {}
     for record in completed.stdout.split(b"\0"):
         if not record:
             continue
         metadata, separator, raw_path = record.partition(b"\t")
-        if not separator or metadata.split(maxsplit=1)[0] not in _REGULAR_FILE_MODES:
+        fields = metadata.split()
+        if (
+            not separator
+            or len(fields) != 3
+            or fields[0] not in _REGULAR_FILE_MODES
+            or fields[2] != b"0"
+        ):
             continue
-        paths.add(raw_path.decode("utf-8", errors="surrogateescape"))
-    return sorted(paths)
+        relative_path = raw_path.decode("utf-8", errors="surrogateescape")
+        blobs[relative_path] = fields[1].decode("ascii")
+    return dict(sorted(blobs.items()))
+
+
+def _read_index_blob(root: Path, object_id: str) -> bytes:
+    completed = subprocess.run(
+        ["git", "cat-file", "blob", object_id],
+        cwd=root,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return completed.stdout
 
 
 def _is_personal_home_path(text: str) -> bool:
+    if _ROOT_HOME.search(text):
+        return True
     for pattern in (_POSIX_HOME, _WINDOWS_HOME):
         for match in pattern.finditer(text):
             if match.group("owner").casefold() not in _NON_PERSONAL_HOME_NAMES:
@@ -144,34 +174,63 @@ def _env_assignments(text: str) -> tuple[dict[str, list[str]], set[str]]:
     return assignments, duplicate_keys
 
 
-def _is_ignored(root: Path, relative_path: str) -> bool:
-    completed = subprocess.run(
-        ["git", "check-ignore", "-q", "--no-index", "--", relative_path],
-        cwd=root,
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return completed.returncode == 0
+def _is_dotenv_path(relative_path: str) -> bool:
+    name = relative_path.rsplit("/", 1)[-1]
+    return name == ".env" or ".env." in name or name.endswith(".env")
+
+
+def _ignore_pattern_matches(pattern: str, relative_path: str) -> bool:
+    directory_only = pattern.endswith("/")
+    pattern = pattern.removeprefix("/").removesuffix("/")
+    if not pattern:
+        return False
+
+    path_parts = relative_path.split("/")
+    if "/" not in pattern:
+        candidates = path_parts[:-1] if directory_only else path_parts
+        return any(fnmatchcase(part, pattern) for part in candidates)
+
+    if directory_only:
+        directories = (
+            "/".join(path_parts[:index]) for index in range(1, len(path_parts))
+        )
+        return any(fnmatchcase(directory, pattern) for directory in directories)
+    return fnmatchcase(relative_path, pattern)
+
+
+def _is_ignored(ignore_text: str, relative_path: str) -> bool:
+    ignored = False
+    for line in ignore_text.splitlines():
+        pattern = line.strip()
+        if not pattern or pattern.startswith("#"):
+            continue
+        negated = pattern.startswith("!")
+        if negated:
+            pattern = pattern[1:]
+        if _ignore_pattern_matches(pattern, relative_path):
+            ignored = not negated
+    return ignored
 
 
 def audit_repository(root: Path) -> list[tuple[str, str]]:
     """Return sorted ``(rule, relative_path)`` public-release findings."""
     root = root.resolve()
-    tracked_paths = _tracked_regular_paths(root)
+    tracked_blobs = _tracked_regular_blobs(root)
+    blob_cache: dict[str, bytes] = {}
     findings: set[tuple[str, str]] = set()
 
-    for relative_path in tracked_paths:
+    def blob_content(object_id: str) -> bytes:
+        if object_id not in blob_cache:
+            blob_cache[object_id] = _read_index_blob(root, object_id)
+        return blob_cache[object_id]
+
+    for relative_path, object_id in tracked_blobs.items():
         if relative_path.startswith("docs/superpowers/"):
             findings.add(("HISTORICAL_PLAN", relative_path))
         if relative_path == ".env":
             continue
 
-        path = root / relative_path
-        try:
-            content = path.read_bytes()
-        except (FileNotFoundError, IsADirectoryError):
-            continue
+        content = blob_content(object_id)
         if b"\0" in content:
             continue
         text = content.decode("utf-8", errors="replace")
@@ -198,7 +257,18 @@ def audit_repository(root: Path) -> list[tuple[str, str]]:
                 findings.add(("EXAMPLE_SENSITIVE_KEY_MISSING", relative_path))
             continue
 
-        for match in _ASSIGNMENT.finditer(text):
+        if _is_dotenv_path(relative_path):
+            assignments, _ = _env_assignments(text)
+            for key, values in assignments.items():
+                upper_key = key.upper()
+                if not any(bool(value) for value in values):
+                    continue
+                if upper_key.endswith(_REPORT_DESTINATION_SUFFIXES):
+                    findings.add(("FIXED_REPORT_DESTINATION", relative_path))
+                if _is_sensitive_key(upper_key):
+                    findings.add(("SENSITIVE_ASSIGNMENT", relative_path))
+
+        for match in _QUOTED_ASSIGNMENT.finditer(text):
             key = match.group("key").upper()
             if not match.group("value"):
                 continue
@@ -207,12 +277,22 @@ def audit_repository(root: Path) -> list[tuple[str, str]]:
             if _is_sensitive_key(key):
                 findings.add(("SENSITIVE_ASSIGNMENT", relative_path))
 
+    ignore_content = b""
+    ignore_object_id = tracked_blobs.get(".gitignore")
+    if ignore_object_id is not None:
+        ignore_content = blob_content(ignore_object_id)
+    ignore_text = (
+        ""
+        if b"\0" in ignore_content
+        else ignore_content.decode("utf-8", errors="replace")
+    )
     for relative_path in _IGNORE_PROBES:
-        if not _is_ignored(root, relative_path):
+        if not _is_ignored(ignore_text, relative_path):
             findings.add(("IGNORE_RULE_MISSING", relative_path))
-    if _is_ignored(root, ".env.example"):
-        findings.add(("EXAMPLE_FILE_IGNORED", ".env.example"))
-    if ".env.example" not in tracked_paths:
+    for relative_path in _ALLOWED_EXAMPLE_PROBES:
+        if _is_ignored(ignore_text, relative_path):
+            findings.add(("EXAMPLE_FILE_IGNORED", relative_path))
+    if ".env.example" not in tracked_blobs:
         findings.add(("EXAMPLE_FILE_NOT_TRACKED", ".env.example"))
 
     return sorted(findings)

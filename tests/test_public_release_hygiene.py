@@ -1,6 +1,11 @@
 import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
+import sys
+
+import pytest
 
 from scripts.public_release_audit import (
     REQUIRED_SENSITIVE_EXAMPLE_KEYS,
@@ -9,6 +14,20 @@ from scripts.public_release_audit import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+AUDIT_SCRIPT = ROOT / "scripts/public_release_audit.py"
+
+KNOWN_RULES = {
+    "EXAMPLE_DUPLICATE_KEY",
+    "EXAMPLE_FILE_IGNORED",
+    "EXAMPLE_FILE_NOT_TRACKED",
+    "EXAMPLE_SENSITIVE_KEY_MISSING",
+    "EXAMPLE_SENSITIVE_VALUE",
+    "FIXED_REPORT_DESTINATION",
+    "HISTORICAL_PLAN",
+    "IGNORE_RULE_MISSING",
+    "PERSONAL_HOME_PATH",
+    "SENSITIVE_ASSIGNMENT",
+}
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -19,6 +38,43 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
     )
+
+
+def _public_release_gitignore() -> str:
+    return """\
+.env
+*.env
+.env.*
+!.env.example
+!*.env.example
+config/workflow.env
+runtime/
+*.p8
+*.p12
+*.pem
+*.key
+*.cer
+*.mobileprovision
+*.utm/
+*.vmwarevm/
+*.qcow2
+*.vmdk
+*.vdi
+*.vhd
+*.vhdx
+*.raw
+*.iso
+*.ova
+*.ovf
+*.vmsn
+"""
+
+
+def _copy_audit_cli(root: Path) -> Path:
+    destination = root / "scripts/public_release_audit.py"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(AUDIT_SCRIPT, destination)
+    return destination
 
 
 def _tracked_fixture_repository(tmp_path: Path) -> Path:
@@ -112,6 +168,86 @@ def test_audit_scans_only_tracked_regular_text_files_and_never_reads_env(
     assert findings == sorted(set(findings))
 
 
+def test_index_stage_zero_blobs_are_the_only_content_source(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    root = _tracked_fixture_repository(tmp_path)
+    secret = "index-only-fixture-secret"
+    external_secret = "external-symlink-fixture-secret"
+
+    staged_unsafe = root / "staged-unsafe.py"
+    staged_unsafe.write_text(f'FIXED_PASSWORD = "{secret}"\n', encoding="utf-8")
+    deleted = root / "deleted.py"
+    deleted.write_text(f'API_TOKEN = "{secret}"\n', encoding="utf-8")
+    staged_safe = root / "staged-safe.py"
+    staged_safe.write_text("VALUE = 1\n", encoding="utf-8")
+    worktree_symlink = root / "worktree-symlink.py"
+    worktree_symlink.write_text("VALUE = 1\n", encoding="utf-8")
+    (root / ".gitignore").write_text(
+        _public_release_gitignore(), encoding="utf-8"
+    )
+    assert (
+        _git(
+            root,
+            "add",
+            "staged-unsafe.py",
+            "deleted.py",
+            "staged-safe.py",
+            "worktree-symlink.py",
+            ".gitignore",
+        ).returncode
+        == 0
+    )
+
+    staged_unsafe.write_text("VALUE = 1\n", encoding="utf-8")
+    deleted.unlink()
+    staged_safe.write_text(f'API_TOKEN = "{secret}"\n', encoding="utf-8")
+    (root / ".gitignore").write_text("", encoding="utf-8")
+    outside = tmp_path / "outside.py"
+    outside.write_text(
+        f'FIXED_PASSWORD = "{external_secret}"\n', encoding="utf-8"
+    )
+    worktree_symlink.unlink()
+    try:
+        os.symlink(outside, worktree_symlink)
+    except (NotImplementedError, OSError):
+        pass
+
+    def reject_worktree_reads(path: Path) -> bytes:
+        raise AssertionError(f"worktree content read: {path.name}")
+
+    monkeypatch.setattr(Path, "read_bytes", reject_worktree_reads)
+    findings = audit_repository(root)
+
+    assert ("SENSITIVE_ASSIGNMENT", "staged-unsafe.py") in findings
+    assert ("SENSITIVE_ASSIGNMENT", "deleted.py") in findings
+    assert ("SENSITIVE_ASSIGNMENT", "staged-safe.py") not in findings
+    assert ("SENSITIVE_ASSIGNMENT", "worktree-symlink.py") not in findings
+    assert not any(rule == "IGNORE_RULE_MISSING" for rule, _ in findings)
+    assert secret not in repr(findings)
+    assert external_secret not in repr(findings)
+
+
+def test_index_symlink_to_external_file_is_not_scanned(tmp_path: Path) -> None:
+    root = _tracked_fixture_repository(tmp_path)
+    external_secret = "external-index-symlink-secret"
+    outside = tmp_path / "external.py"
+    outside.write_text(
+        f'FIXED_PASSWORD = "{external_secret}"\n', encoding="utf-8"
+    )
+    link = root / "external-link.py"
+    try:
+        os.symlink(outside, link)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+    assert _git(root, "add", "external-link.py").returncode == 0
+
+    findings = audit_repository(root)
+
+    assert not any(path == "external-link.py" for _, path in findings)
+    assert external_secret not in repr(findings)
+
+
 def test_sensitive_example_keys_are_required_and_must_be_empty(tmp_path: Path) -> None:
     root = _tracked_fixture_repository(tmp_path)
     nonempty_key = "SUBMISSION_PROJECT_ROOT"
@@ -124,6 +260,7 @@ def test_sensitive_example_keys_are_required_and_must_be_empty(tmp_path: Path) -
         ),
         encoding="utf-8",
     )
+    assert _git(root, "add", ".env.example").returncode == 0
 
     findings = audit_repository(root)
 
@@ -139,6 +276,7 @@ def test_duplicate_example_key_cannot_hide_an_earlier_nonempty_value(
     lines = [f"{key}=\n" for key in REQUIRED_SENSITIVE_EXAMPLE_KEYS]
     lines.extend(("NOTION_TOKEN=nonempty-fixture-value\n", "NOTION_TOKEN=\n"))
     (root / ".env.example").write_text("".join(lines), encoding="utf-8")
+    assert _git(root, "add", ".env.example").returncode == 0
 
     findings = audit_repository(root)
 
@@ -163,6 +301,107 @@ def test_fixed_report_destination_does_not_require_a_sensitive_key_suffix(
     assert value not in repr(findings)
 
 
+def test_sensitive_assignment_syntaxes_are_detected_without_reporting_values(
+    tmp_path: Path,
+) -> None:
+    root = _tracked_fixture_repository(tmp_path)
+    value = "syntax-fixture-secret-value"
+    sources = {
+        "dotenv.env.sample": f"API_TOKEN={value}\n",
+        "bytes.py": f'BYTE_PASSWORD = b"{value}"\n',
+        "raw.py": f'RAW_TOKEN = r"{value}"\n',
+        "unicode.py": f'UNICODE_SECRET = u"{value}"\n',
+        "format.py": f'FORMAT_APP_ID = f"{value}"\n',
+        "javascript.js": f"const TARGET_CHAT_ID = `{value}`;\n",
+    }
+    for relative_path, content in sources.items():
+        (root / relative_path).write_text(content, encoding="utf-8")
+    assert _git(root, "add", *sources).returncode == 0
+
+    findings = audit_repository(root)
+
+    for relative_path in sources:
+        assert ("SENSITIVE_ASSIGNMENT", relative_path) in findings
+    assert value not in repr(findings)
+
+
+def test_personal_home_paths_include_root_and_escaped_windows_source(
+    tmp_path: Path,
+) -> None:
+    root = _tracked_fixture_repository(tmp_path)
+    sources = {
+        "root-home.txt": "/" + "root" + "/private/project\n",
+        "windows-source.py": 'PATH = "C:\\\\Users\\\\alice\\\\project"\n',
+        "windows.json": '{"path": "C:\\\\Users\\\\alice\\\\project"}\n',
+    }
+    for relative_path, content in sources.items():
+        (root / relative_path).write_text(content, encoding="utf-8")
+    assert _git(root, "add", *sources).returncode == 0
+
+    findings = audit_repository(root)
+
+    for relative_path in sources:
+        assert ("PERSONAL_HOME_PATH", relative_path) in findings
+
+
+def test_cli_audits_index_and_never_prints_matching_values(tmp_path: Path) -> None:
+    root = _tracked_fixture_repository(tmp_path)
+    secret = "cli-fixture-secret-that-must-not-leak"
+    indexed = root / "indexed.py"
+    indexed.write_text(f'FIXED_PASSWORD = "{secret}"\n', encoding="utf-8")
+    assert _git(root, "add", "indexed.py").returncode == 0
+    indexed.write_text("VALUE = 1\n", encoding="utf-8")
+    cli = _copy_audit_cli(root)
+
+    completed = subprocess.run(
+        [sys.executable, str(cli)],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "SENSITIVE_ASSIGNMENT indexed.py" in completed.stdout.splitlines()
+    assert all(
+        re.fullmatch(r"[A-Z_]+ [^\r\n]+", line)
+        for line in completed.stdout.splitlines()
+    )
+    assert secret not in completed.stdout
+    assert secret not in completed.stderr
+
+
+def test_cli_prints_exact_success_marker_for_a_clean_index(tmp_path: Path) -> None:
+    root = tmp_path / "clean-repo"
+    root.mkdir()
+    assert _git(root, "init", "-q").returncode == 0
+    (root / ".env.example").write_text(
+        "".join(f"{key}=\n" for key in REQUIRED_SENSITIVE_EXAMPLE_KEYS),
+        encoding="utf-8",
+    )
+    (root / ".gitignore").write_text(
+        _public_release_gitignore(), encoding="utf-8"
+    )
+    (root / "README.md").write_text("Portable project.\n", encoding="utf-8")
+    assert (
+        _git(root, "add", ".env.example", ".gitignore", "README.md").returncode
+        == 0
+    )
+    cli = _copy_audit_cli(root)
+
+    completed = subprocess.run(
+        [sys.executable, str(cli)],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout == "PUBLIC_RELEASE_AUDIT=ok\n"
+    assert completed.stderr == ""
+
+
 def test_private_runtime_signing_and_vm_files_are_ignored_but_examples_are_allowed() -> None:
     ignored = (
         ".env",
@@ -176,7 +415,11 @@ def test_private_runtime_signing_and_vm_files_are_ignored_but_examples_are_allow
         "vm/public-release-audit.vmdk",
         "vm/public-release-audit.utm/config.plist",
     )
-    allowed = (".env.example", "config/workflow.env.example")
+    allowed = (
+        ".env.example",
+        "config/workflow.env.example",
+        "nested/service.env.example",
+    )
 
     missing = [
         path
@@ -196,18 +439,29 @@ def test_private_runtime_signing_and_vm_files_are_ignored_but_examples_are_allow
     assert _git(ROOT, "ls-files", "--error-unmatch", ".env.example").returncode == 0
 
 
-def test_current_repository_has_an_explicit_red_baseline() -> None:
-    findings = set(audit_repository(ROOT))
-    expected = {
-        ("PERSONAL_HOME_PATH", "README.md"),
-        ("SENSITIVE_ASSIGNMENT", "scripts/ssh_password.py"),
-        ("SENSITIVE_ASSIGNMENT", "scripts/utm_notion.py"),
-        ("FIXED_REPORT_DESTINATION", "services/feishu_bot.py"),
-        (
-            "HISTORICAL_PLAN",
-            "docs/superpowers/plans/2026-08-18-public-release-hardening.md",
-        ),
-    }
+def test_audit_probes_nested_env_and_nested_example_from_index(tmp_path: Path) -> None:
+    root = _tracked_fixture_repository(tmp_path)
+    without_env_glob = _public_release_gitignore().replace("*.env\n", "")
+    (root / ".gitignore").write_text(without_env_glob, encoding="utf-8")
+    assert _git(root, "add", ".gitignore").returncode == 0
 
-    assert findings
-    assert not expected - findings, f"missing baseline findings: {sorted(expected - findings)}"
+    findings = audit_repository(root)
+
+    assert ("IGNORE_RULE_MISSING", "nested/service.env") in findings
+
+    (root / ".gitignore").write_text(
+        _public_release_gitignore() + "nested/service.env.example\n",
+        encoding="utf-8",
+    )
+    assert _git(root, "add", ".gitignore").returncode == 0
+
+    findings = audit_repository(root)
+
+    assert ("EXAMPLE_FILE_IGNORED", "nested/service.env.example") in findings
+
+
+def test_current_repository_baseline_uses_only_stable_rule_ids() -> None:
+    findings = audit_repository(ROOT)
+
+    assert findings == sorted(set(findings))
+    assert {rule for rule, _ in findings} <= KNOWN_RULES
