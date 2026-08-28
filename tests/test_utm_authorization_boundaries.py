@@ -1,59 +1,65 @@
-#!/usr/bin/env python3
 from pathlib import Path
+
+import pytest
+
+from skill_contract_assertions import assert_shared_contract_reference
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL_ROOT = ROOT / "skills"
+SKILLS = ROOT / "skills"
+SHARED_CONTRACT = SKILLS / "_shared" / "AUTOMATION_CONTRACT.md"
+HIGH_RISK_SKILLS = (
+    "utm-vm-clone",
+    "utm-clash-ip",
+    "utm-edit",
+    "utm-key",
+    "utm-apps",
+    "utm-business",
+    "utm-image",
+    "utm-p8",
+    "utm-21",
+    "utm-22",
+    "utm-23",
+    "utm-24",
+)
+
+EXPLICIT_AUTHORIZATION = (
+    "有状态或破坏性动作，只能在用户对精确对象与范围明确授权后执行"
+)
+NO_AMBIGUOUS_EXPANSION = "授权不得从“继续”“完成”或其他模糊用语扩张"
 
 
-def sources_for(skill_name: str) -> str:
-    paths = (
-        SKILL_ROOT / skill_name / "SKILL.md",
-        ROOT / f"docs/{skill_name}.md",
-        ROOT / "README.md",
-        ROOT / "AGENTS.md",
-        ROOT / "docs/utm-feishu-bot.md",
-    )
-    return "\n".join(path.read_text(encoding="utf-8") for path in paths if path.exists())
+def test_shared_contract_preserves_the_project_authorization_boundary() -> None:
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    shared = SHARED_CONTRACT.read_text(encoding="utf-8")
+
+    for required in (EXPLICIT_AUTHORIZATION, NO_AMBIGUOUS_EXPANSION):
+        assert required in agents
+        assert required in shared
 
 
-def main() -> None:
-    utm_8 = sources_for("utm-edit")
-    assert "再自动点击一次并记录 `PASSWORD_CHANGE_SUBMISSION=clicked_once`" in utm_8
-    assert "该动作最多执行一次" in utm_8
+@pytest.mark.parametrize("skill_name", HIGH_RISK_SKILLS)
+def test_high_risk_skills_inherit_authorization_instead_of_redefining_it(
+    skill_name: str,
+) -> None:
+    skill_file = SKILLS / skill_name / "SKILL.md"
+    text = skill_file.read_text(encoding="utf-8")
 
-    utm_business = sources_for("utm-business")
-    assert "one-shot `Submit`" in utm_business
-    assert "`bank_add` attempt 后只点击一次 `Add`" in utm_business
-    assert "不得等待用户确认" in utm_business
-
-    utm_24 = sources_for("utm-24")
-    assert "record-auto-review-approval" in utm_24
-    assert "source=automatic_self_check" in utm_24
-    assert "notify-review" not in (SKILL_ROOT / "utm-24" / "SKILL.md").read_text(encoding="utf-8")
-    assert "--decision-kind review_submit" not in utm_24
-    assert "AUTOMATIC_REVIEW_APPROVAL=verified" in utm_24
-    assert "notify-review-success" not in (SKILL_ROOT / "utm-24" / "SKILL.md").read_text(encoding="utf-8")
-    assert "只点击一次 `Send`" in utm_24
-
-    utm_p8 = sources_for("utm-p8")
-    assert "notify-review-success" not in utm_p8
-    assert "只读固定文件" in utm_p8
-
-    combined = "\n".join((utm_8, utm_business, utm_24, utm_p8))
-    for stale in (
-        "最终 `Change` 由用户确认并点击",
-        "用户完成该点击",
-        "user-click checkpoint",
-        "两次最终 `Submit` 都必须分别取得用户明确授权",
-        "用户对本次证书提交的明确授权",
-        "用户对本次 W-8BEN 提交的明确授权",
-        "只有用户明确授权同意条款并新增银行账户后",
-        "只有用户明确要求使用前面技能相同的短信验证方法后",
-    ):
-        assert stale not in combined, stale
-    print("UTM_AUTHORIZATION_BOUNDARIES=verified")
+    assert_shared_contract_reference(skill_file, text, SHARED_CONTRACT)
 
 
-if __name__ == "__main__":
-    main()
+def test_authorized_replacement_is_bound_to_one_exact_image_operation() -> None:
+    image = (SKILLS / "utm-image" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "user-authorized replacement" in image
+    assert "--force-development --replace-existing" in image
+    assert "These flags are inseparable for replacement" in image
+    assert "clear only that target panel" in image
+
+
+def test_irreversible_or_unknown_results_are_never_replayed_speculatively() -> None:
+    shared = SHARED_CONTRACT.read_text(encoding="utf-8")
+
+    assert "Perform one minimum action." in shared
+    assert "must never be repeated speculatively" in shared
+    assert "Never hand off a partial, blocked, ambiguous, or result-unknown state." in shared

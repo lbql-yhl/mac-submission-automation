@@ -29,6 +29,9 @@ const PLAYWRIGHT_CORE_URL = pathToFileURL(path.join(
 ));
 const APPS_URL = "https://appstoreconnect.apple.com/apps";
 const DEFAULT_DISPLAY_NAME = '6.9" Display';
+const FALLBACK_DISPLAY_DIMENSIONS = new Map([
+  [DEFAULT_DISPLAY_NAME, { width: 1320, height: 2868 }],
+]);
 const CDP_PORT = 9222;
 const RUNTIME_ROOT = path.join(os.homedir(), "Downloads", ".utm-image-runtime");
 const MAX_STDIN_BYTES = 65_536;
@@ -143,7 +146,7 @@ async function readStdinJson() {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("stdin must be a JSON object");
   const allowed = new Set([
     "runId", "vmName", "appStoreAppId", "appName", "displayName", "resumeExisting",
-    "source", "expectedEdgePid", "expectedEdgeWebSocket",
+    "replaceExisting", "source", "expectedEdgePid", "expectedEdgeWebSocket",
   ]);
   for (const key of Object.keys(parsed)) if (!allowed.has(key)) throw new Error(`unsupported input field: ${key}`);
   if (typeof parsed.runId !== "string" || !/^[A-Za-z0-9_-]{8,100}$/.test(parsed.runId)) {
@@ -167,7 +170,13 @@ async function readStdinJson() {
   if (parsed.resumeExisting !== undefined && parsed.resumeExisting !== true) {
     throw new Error("resumeExisting, when provided, must be true");
   }
+  if (parsed.replaceExisting !== undefined && typeof parsed.replaceExisting !== "boolean") {
+    throw new Error("replaceExisting must be a boolean");
+  }
   validateProvidedSource(parsed.source, parsed.appName);
+  if (parsed.replaceExisting === true && sourceFieldMarker(parsed.source) !== "development_attachment") {
+    throw new Error("replaceExisting requires the verified development attachment");
+  }
   return parsed;
 }
 
@@ -319,6 +328,7 @@ async function downloadPackage(context, shareUrl, runDir) {
   } catch (error) {
     const title = String(await page.title().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 120);
     const text = String(await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 300);
+    if (/任务已过期销毁/.test(text)) throw new Error("WENSHUSHU_TASK_EXPIRED");
     throw new Error(`${error.message}; title=${title || "<empty>"}; visible text=${text || "<empty>"}`);
   }
   if (!await button.isEnabled()) throw new Error("download button is disabled");
@@ -740,14 +750,23 @@ async function displayPanel(page, displayName) {
   return { panel, input, current };
 }
 
-async function acceptedDimensionsFromPanel(panel) {
+function fallbackDimensionsForDisplay(displayName) {
+  const dimensions = FALLBACK_DISPLAY_DIMENSIONS.get(displayName);
+  return dimensions ? { ...dimensions } : null;
+}
+
+async function acceptedDimensionsFromPanel(panel, displayName) {
   const text = await panel.innerText();
   const pairs = [...text.matchAll(/(\d{3,4})\s*[\u00d7x]\s*(\d{3,4})\s*px/gi)].map((match) => ({
     width: Number(match[1]),
     height: Number(match[2]),
   }));
   const portrait = pairs.filter((item) => item.width < item.height);
-  if (!portrait.length) throw new Error("Media Manager accepted screenshot dimensions are missing");
+  if (!portrait.length) {
+    const fallback = fallbackDimensionsForDisplay(displayName);
+    if (!fallback) throw new Error("Media Manager accepted screenshot dimensions are missing");
+    return fallback;
+  }
   portrait.sort((left, right) => (right.width * right.height) - (left.width * left.height));
   return portrait[0];
 }
@@ -785,10 +804,121 @@ async function screenshotDimensionsError(page) {
   return false;
 }
 
+async function screenshotRemovalControls(panel) {
+  const controls = panel.getByRole("button", { name: /^(?:delete|remove)(?: screenshot)?$/i }).or(
+    panel.locator([
+      'button[aria-label*="delete" i]',
+      'button[aria-label*="remove" i]',
+      'button[title*="delete" i]',
+      'button[title*="remove" i]',
+      '[role="button"][aria-label*="delete" i]',
+      '[role="button"][aria-label*="remove" i]',
+    ].join(",")),
+  );
+  const unique = [];
+  const handles = new Set();
+  for (let index = 0; index < await controls.count(); index += 1) {
+    const control = controls.nth(index);
+    const handle = await control.elementHandle();
+    if (!handle || handles.has(handle)) continue;
+    handles.add(handle);
+    if (await control.isEnabled()) unique.push(control);
+  }
+  return unique;
+}
+
+async function confirmScreenshotRemoval(page) {
+  const dialogs = page.getByRole("dialog");
+  const visible = [];
+  for (let index = 0; index < await dialogs.count(); index += 1) {
+    if (await dialogs.nth(index).isVisible()) visible.push(dialogs.nth(index));
+  }
+  if (visible.length === 0) return;
+  if (visible.length !== 1) throw new Error("screenshot removal confirmation is ambiguous");
+  const confirm = visible[0].getByRole("button", { name: /^(?:delete|remove)$/i });
+  const button = await exactlyOne(confirm, "screenshot removal confirmation");
+  if (!await button.isEnabled()) throw new Error("screenshot removal confirmation is disabled");
+  await button.click({ timeout: TIMEOUT });
+  await settleAfterGuiAction(page);
+}
+
+async function clearExistingScreenshots(
+  page,
+  displayName,
+  ledgerFile,
+  { appId, archiveDigest, imageSetDigest: preparedImageSetDigest },
+) {
+  let current = await readStableScreenshotCount(page, displayName);
+  if (!Number.isInteger(current)) throw new Error("pre-upload screenshot count is unstable");
+  let ledger = await readJson(ledgerFile);
+  if (ledger === null) {
+    if (current === 0) throw new Error("replaceExisting requires a non-empty target panel");
+    ledger = {
+      state: "authorized",
+      appId,
+      displayName,
+      archiveDigest,
+      imageSetDigest: preparedImageSetDigest,
+      initialCount: current,
+      remainingCount: current,
+      authorizedAt: new Date().toISOString(),
+    };
+    await writeSecureJson(ledgerFile, ledger);
+  } else if (
+    ledger.appId !== appId || ledger.displayName !== displayName ||
+    ledger.archiveDigest !== archiveDigest || ledger.imageSetDigest !== preparedImageSetDigest ||
+    !Number.isInteger(ledger.initialCount) || ledger.initialCount < 1 || ledger.initialCount > 10 ||
+    !["authorized", "clearing", "cleared", "verified"].includes(ledger.state)
+  ) {
+    throw new Error("replacement ledger identity mismatch");
+  }
+  if (current > ledger.initialCount) throw new Error("target panel gained screenshots after replacement authorization");
+  if (["cleared", "verified"].includes(ledger.state)) {
+    if (current !== 0 && ledger.state === "cleared") throw new Error("cleared replacement ledger has a non-empty target panel");
+    return ledger.initialCount;
+  }
+  while (current > 0) {
+    const state = await displayPanel(page, displayName);
+    if (state.current !== current) throw new Error("screenshot count changed before a removal action");
+    const controls = await screenshotRemovalControls(state.panel);
+    if (controls.length !== current) {
+      throw new Error(`screenshot removal controls are not unique; expected ${current}, found ${controls.length}`);
+    }
+    const control = controls.at(-1);
+    await control.scrollIntoViewIfNeeded();
+    const container = control.locator("xpath=..");
+    if (await container.count() === 1) await container.hover().catch(() => {});
+    if (!await control.isVisible()) throw new Error("scoped screenshot removal control is not visible");
+    await writeSecureJson(ledgerFile, {
+      ...ledger,
+      state: "clearing",
+      remainingCount: current,
+      clearingAt: new Date().toISOString(),
+    });
+    await control.click({ timeout: TIMEOUT });
+    await settleAfterGuiAction(page);
+    await confirmScreenshotRemoval(page);
+    const next = await readStableScreenshotCount(page, displayName);
+    if (!Number.isInteger(next) || next !== current - 1) {
+      throw new Error("screenshot count did not decrease by exactly one");
+    }
+    current = next;
+    ledger = { ...ledger, state: "clearing", remainingCount: current };
+    await writeSecureJson(ledgerFile, { ...ledger, updatedAt: new Date().toISOString() });
+  }
+  await writeSecureJson(ledgerFile, {
+    ...ledger,
+    state: "cleared",
+    remainingCount: 0,
+    clearedAt: new Date().toISOString(),
+  });
+  return ledger.initialCount;
+}
+
 async function uploadImages(page, sessionId, appId, displayName, images, ledgerFile, archiveDigest) {
   await openMediaManager(page, displayName);
   let state = await displayPanel(page, displayName);
-  const targetDimensions = await acceptedDimensionsFromPanel(state.panel);
+  const targetDimensions = await acceptedDimensionsFromPanel(state.panel, displayName);
   let setDigest = imageSetDigest(images);
   const existing = await readJson(ledgerFile);
   let sameAttempt = existing && existing.appId === appId && existing.displayName === displayName &&
@@ -883,6 +1013,10 @@ async function selfTest() {
   if (sourceFieldMarker({ sourceField: "研发截图", kind: "attachment" }) !== "development_attachment") {
     throw new Error("development source marker self-test failed");
   }
+  const fallback = fallbackDimensionsForDisplay(DEFAULT_DISPLAY_NAME);
+  if (fallback?.width !== 1320 || fallback?.height !== 2868 || fallbackDimensionsForDisplay("unknown") !== null) {
+    throw new Error("6.9-inch display dimension fallback self-test failed");
+  }
   const temporary = await mkdtemp(path.join(os.tmpdir(), "utm-image-self-test-"));
   try {
     const validArchive = path.join(temporary, "valid.zip");
@@ -906,6 +1040,7 @@ with ZipFile(sys.argv[2], "w") as z: z.writestr("../escape.jpg", b"test")
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
+  process.stdout.write("DISPLAY_DIMENSION_FALLBACK_SELF_TEST=verified\n");
   process.stdout.write("UTM_19_SELF_TEST=verified\n");
 }
 
@@ -992,7 +1127,33 @@ async function main() {
   }
   await openAppVersionPage(appPage, appId, displayName);
   await openMediaManager(appPage, displayName);
-  const ledgerFile = path.join(sessionDir, "upload-attempt.json");
+  let preuploadClassification = "empty";
+  let replacementLedgerFile = null;
+  if (input.replaceExisting === true) {
+    if (sourceMarker !== "development_attachment") {
+      throw new Error("replaceExisting requires development_attachment");
+    }
+    const targetState = await displayPanel(appPage, displayName);
+    const targetDimensions = await acceptedDimensionsFromPanel(targetState.panel, displayName);
+    images = await normalizeImagesForDisplay(images, sessionDir, targetDimensions);
+    if (images.length > 10) throw new Error("replacement screenshot package exceeds target capacity");
+    replacementLedgerFile = path.join(sessionDir, "replacement-attempt.json");
+    await clearExistingScreenshots(
+      appPage,
+      displayName,
+      replacementLedgerFile,
+      {
+        appId,
+        archiveDigest: downloaded.digest,
+        imageSetDigest: imageSetDigest(images),
+      },
+    );
+    preuploadClassification = "nonempty_authorized";
+  }
+  const ledgerFile = path.join(
+    sessionDir,
+    input.replaceExisting === true ? "replacement-upload-attempt.json" : "upload-attempt.json",
+  );
   const outcome = await uploadImages(
     appPage,
     connected.sessionId,
@@ -1002,10 +1163,27 @@ async function main() {
     ledgerFile,
     downloaded.digest,
   );
+  if (input.replaceExisting === true) {
+    const finalCount = await readStableScreenshotCount(appPage, displayName);
+    if (finalCount !== images.length || await screenshotDimensionsError(appPage)) {
+      throw new Error("replacement screenshot readback verification failed");
+    }
+    const replacementLedger = await readJson(replacementLedgerFile);
+    await writeSecureJson(replacementLedgerFile, {
+      ...replacementLedger,
+      state: "verified",
+      finalCount,
+      verifiedAt: new Date().toISOString(),
+    });
+  }
 
   process.stdout.write("LOCAL_EDGE_SESSION=reused\n");
   process.stdout.write(`SCREENSHOT_SOURCE_FIELD=${sourceMarker}\n`);
   process.stdout.write("SCREENSHOT_PACKAGE=verified\n");
+  process.stdout.write(input.replaceExisting === true
+    ? "SCREENSHOT_PREUPLOAD_CLASSIFICATION=nonempty_authorized\n"
+    : "SCREENSHOT_PREUPLOAD_CLASSIFICATION=empty\n");
+  if (input.replaceExisting === true) process.stdout.write("SCREENSHOT_REPLACEMENT=verified\n");
   process.stdout.write(`SCREENSHOT_ARCHIVE_EXTRACTED=${downloaded.isZip ? "verified" : "not_needed_direct_image"}\n`);
   process.stdout.write(`SCREENSHOT_FILES=verified_${images.length}\n`);
   process.stdout.write(`APP_STORE_CONNECT_APPS=${appPageMode}\n`);

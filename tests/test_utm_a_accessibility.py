@@ -4,6 +4,7 @@ import importlib.util
 import json
 import plistlib
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -211,6 +212,21 @@ def test_run_ssh_uses_configured_password_askpass_without_a_pty(monkeypatch) -> 
     assert "pty.openpty" not in source
 
 
+def test_accessibility_probe_uses_a_stage_specific_ssh_failure(monkeypatch) -> None:
+    module = load_module()
+    monkeypatch.setattr(module, "password_environment", lambda: {})
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 1, stdout="", stderr=""
+        ),
+    )
+
+    with pytest.raises(module.UTMAError, match="ssh_accessibility_probe_failed"):
+        module.verify_ssh_accessibility("ocww", "192.0.2.10")
+
+
 def test_accessibility_recovery_cancels_stale_file_picker_before_reopening_settings(
     monkeypatch,
 ) -> None:
@@ -231,6 +247,150 @@ def test_accessibility_recovery_cancels_stale_file_picker_before_reopening_setti
         object(), Image.new("RGB", (300, 200)), observations
     ) is True
     assert keys == [53]
+
+
+def test_accessibility_recovery_dismisses_exact_clash_local_network_prompt(
+    monkeypatch,
+) -> None:
+    module = load_module()
+    observations = [
+        module.OCRObservation(
+            "Allow 'Clash Verge' to find devices on your local network?",
+            1.0,
+            module.PixelBox(20, 20, 280, 60),
+        ),
+        module.OCRObservation(
+            "Don't Allow", 1.0, module.PixelBox(80, 100, 150, 125)
+        ),
+        module.OCRObservation(
+            "Allow", 1.0, module.PixelBox(170, 100, 220, 125)
+        ),
+    ]
+    keys: list[int] = []
+    monkeypatch.setattr(
+        module,
+        "_send_key",
+        lambda _window, key_code: keys.append(key_code),
+    )
+
+    assert module.dismiss_clash_local_network_prompt(
+        object(), observations
+    ) is True
+    assert keys == [53]
+
+
+def test_accessibility_recovery_wakes_and_unlocks_the_exact_guest(
+    monkeypatch, tmp_path: Path
+) -> None:
+    module = load_module()
+    window = module.UTMWindow(42, 7, (0.0, 0.0, 1200.0, 760.0))
+    image = Image.new("RGB", (1200, 760), "black")
+    locked = [
+        module.OCRObservation(
+            "ocww", 1.0, module.PixelBox(560, 620, 640, 650)
+        ),
+        module.OCRObservation(
+            "Enter Password", 1.0, module.PixelBox(520, 670, 680, 705)
+        ),
+    ]
+    accessibility = [
+        module.OCRObservation(
+            "Accessibility", 1.0, module.PixelBox(40, 40, 220, 75)
+        )
+    ]
+    snapshots = iter(
+        (
+            (tmp_path / "locked.png", image, locked),
+            (tmp_path / "desktop.png", image, []),
+            (tmp_path / "accessibility.png", image, accessibility),
+        )
+    )
+    keys: list[int] = []
+    wake_events: list[str] = []
+    password_entries: list[str] = []
+    opened: list[tuple[str, str]] = []
+    monkeypatch.setattr(module, "_snapshot", lambda *_args: next(snapshots))
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        module, "_send_key", lambda _window, key_code: keys.append(key_code)
+    )
+    monkeypatch.setattr(
+        module,
+        "_wake_guest_display",
+        lambda actual_window, vm_name: wake_events.append(vm_name)
+        or actual_window,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        module, "_send_password", lambda _window: password_entries.append("sent")
+    )
+    monkeypatch.setattr(module, "_click", lambda *_args: None)
+    monkeypatch.setattr(
+        module,
+        "open_accessibility_settings",
+        lambda vm_name, ip: opened.append((vm_name, ip)),
+    )
+
+    _image, observations = module.recover_accessibility_page(
+        tmp_path,
+        [1],
+        window,
+        object(),
+        "ocww",
+        "192.0.2.10",
+        image,
+        [],
+    )
+
+    assert observations == accessibility
+    assert wake_events == ["ocww"]
+    assert keys == [36]
+    assert password_entries == ["sent"]
+    assert opened == [("ocww", "192.0.2.10")]
+
+
+def test_lock_screen_identity_ignores_the_utm_titlebar_name() -> None:
+    module = load_module()
+    prompt = module.OCRObservation(
+        "Enter Password", 1.0, module.PixelBox(520, 670, 680, 705)
+    )
+    observations = [
+        module.OCRObservation(
+            "ocww", 1.0, module.PixelBox(150, 4, 195, 24)
+        ),
+        module.OCRObservation(
+            "ocww", 1.0, module.PixelBox(570, 620, 630, 650)
+        ),
+        prompt,
+    ]
+
+    assert module._lock_screen_password_prompt(observations, "ocww") == prompt
+
+
+def test_wake_guest_display_relocks_the_exact_window_before_global_escape(
+    monkeypatch,
+) -> None:
+    module = load_module()
+    window = module.UTMWindow(42, 7, (0.0, 0.0, 1200.0, 760.0))
+    events: list[tuple[int, tuple[int, bool]]] = []
+    fake_quartz = type(
+        "Quartz",
+        (),
+        {
+            "kCGHIDEventTap": 99,
+            "CGEventCreateKeyboardEvent": staticmethod(
+                lambda _source, key_code, pressed: (key_code, pressed)
+            ),
+            "CGEventPost": staticmethod(
+                lambda tap, event: events.append((tap, event))
+            ),
+        },
+    )
+    monkeypatch.setitem(sys.modules, "Quartz", fake_quartz)
+    monkeypatch.setattr(module, "lock_utm_window", lambda _vm_name: window)
+
+    assert module._wake_guest_display(window, "ocww") == window
+    assert events == [(99, (53, True)), (99, (53, False))]
 
 
 def test_file_picker_cancel_uses_guest_relative_coordinates() -> None:

@@ -33,6 +33,7 @@ from scripts.utm_direct_context import resolve_direct_context  # noqa: E402
 from scripts.utm_notion import resolve_feishu_source  # noqa: E402
 from services.feishu_gateway import get_tenant_access_token  # noqa: E402
 from services.feishu_bot import find_run, load_config, run_host_machine  # noqa: E402
+from services.host_config import optional_setting  # noqa: E402
 from services.project_paths import SHARED_DIR  # noqa: E402
 
 
@@ -192,7 +193,9 @@ def _guest_session(stdout: bytes | str) -> tuple[int, str]:
     return pid, websocket
 
 
-def _guest_markers(stdout: bytes | str) -> tuple[str, ...]:
+def _guest_markers(
+    stdout: bytes | str, *, replace_existing: bool = False
+) -> tuple[str, ...]:
     markers = tuple(line.strip() for line in _decode(stdout).splitlines() if line.strip())
     if len(markers) != len(set(markers)):
         raise UTMImageError("GUEST_MARKERS_DUPLICATED")
@@ -211,6 +214,13 @@ def _guest_markers(stdout: bytes | str) -> tuple[str, ...]:
         upload[0],
     ):
         raise UTMImageError("GUEST_UPLOAD_MARKER_INVALID")
+    if replace_existing:
+        replacement_required = {
+            "SCREENSHOT_PREUPLOAD_CLASSIFICATION=nonempty_authorized",
+            "SCREENSHOT_REPLACEMENT=verified",
+        }
+        if not replacement_required.issubset(markers):
+            raise UTMImageError("GUEST_REPLACEMENT_MARKER_MISSING")
     return markers
 
 
@@ -262,7 +272,10 @@ def run_guest_script(
             detail = match.group(1).decode("utf-8", errors="replace")
             raise UTMImageError(f"GUEST_EXECUTION_FAILED:{detail}")
         raise UTMImageError("GUEST_EXECUTION_FAILED")
-    markers = _guest_markers(execution.stdout)
+    markers = _guest_markers(
+        execution.stdout,
+        replace_existing=payload.get("replaceExisting") is True,
+    )
     GUEST_DIAGNOSTIC_PATH.unlink(missing_ok=True)
     return markers
 
@@ -304,6 +317,31 @@ def _source_result(app_name: str, run_id: str) -> dict[str, Any]:
         app_name=app_name,
         output_dir=source_dir,
         client=FeishuClient(*credentials),
+    )
+
+
+def _development_source_result(app_name: str, run_id: str) -> dict[str, Any]:
+    source_dir = PROJECT_ROOT / "runtime" / "utm-19" / run_id / "source-development"
+    if source_dir.exists() and (source_dir.is_symlink() or not source_dir.is_dir()):
+        raise UTMImageError("SOURCE_DIRECTORY_UNSAFE")
+    source_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    source_dir.chmod(0o700)
+    existing = _secure_source_manifest(source_dir / MANIFEST_NAME, app_name)
+    if existing is not None:
+        return existing
+    credentials = load_credentials(PROJECT_ROOT / ".env")
+    token = get_tenant_access_token(*credentials)
+    app_token, table_id, view_id = resolve_feishu_source(token)
+    base_url = (
+        f"https://qv0zc1dq6qy.feishu.cn/base/{app_token}"
+        f"?table={table_id}&view={view_id}"
+    )
+    return prepare_screenshot_source(
+        base_url=base_url,
+        app_name=app_name,
+        output_dir=source_dir,
+        client=FeishuClient(*credentials),
+        force_development=True,
     )
 
 
@@ -444,10 +482,15 @@ def run(
     password_env: Mapping[str, str] | None = None,
 ) -> int:
     validate_target(args.vm_name, args.vm_ip, args.vm_user)
+    force_development = bool(getattr(args, "force_development", False))
+    replace_existing = bool(getattr(args, "replace_existing", False))
+    if replace_existing and not force_development:
+        raise UTMImageError("REPLACE_EXISTING_REQUIRES_FORCE_DEVELOPMENT")
     supplied_run_id = getattr(args, "run_id", None)
     direct_mode = not supplied_run_id
     if direct_mode:
         context = resolve_direct_context(
+            parent_title=optional_setting("SUBMISSION_HOST_MACHINE"),
             page_title=str(getattr(args, "page_title", "") or ""),
             vm_name=args.vm_name,
             vm_ip=args.vm_ip,
@@ -470,7 +513,11 @@ def run(
     asset_app_name = str(getattr(args, "asset_app_name", "") or app_name).strip()
     if not asset_app_name:
         raise UTMImageError("ASSET_APP_NAME_MISSING")
-    source = _source_result(asset_app_name, context_id)
+    source = (
+        _development_source_result(asset_app_name, context_id)
+        if force_development
+        else _source_result(asset_app_name, context_id)
+    )
     payload = {
         "runId": context_id,
         "vmName": args.vm_name,
@@ -482,16 +529,40 @@ def run(
             context_id,
             source_app_name=asset_app_name,
         ),
+        "replaceExisting": replace_existing,
     }
     sync_utm_image_guest_file(SHARED_DIR, vm_user=args.vm_user, vm_ip=args.vm_ip)
-    markers = run_guest_script(
-        vm_name=args.vm_name,
-        vm_ip=args.vm_ip,
-        vm_user=args.vm_user,
-        payload=payload,
-        runner=runner,
-        password_env=password_env,
-    )
+    try:
+        markers = run_guest_script(
+            vm_name=args.vm_name,
+            vm_ip=args.vm_ip,
+            vm_user=args.vm_user,
+            payload=payload,
+            runner=runner,
+            password_env=password_env,
+        )
+    except UTMImageError as error:
+        if (
+            source.get("kind") != "share_url"
+            or str(error)
+            != "GUEST_EXECUTION_FAILED:WENSHUSHU_TASK_EXPIRED"
+        ):
+            raise
+        source = _development_source_result(asset_app_name, context_id)
+        payload["source"] = guest_source_payload(
+            source,
+            app_name,
+            context_id,
+            source_app_name=asset_app_name,
+        )
+        markers = run_guest_script(
+            vm_name=args.vm_name,
+            vm_ip=args.vm_ip,
+            vm_user=args.vm_user,
+            payload=payload,
+            runner=runner,
+            password_env=password_env,
+        )
     payload.clear()
     print("UTM_IMAGE_HOST_TRANSPORT=password_ssh")
     print("UTM_IMAGE_GUEST_SOURCE=utm-vm-clone")
@@ -514,6 +585,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vm-ip", required=True)
     parser.add_argument("--vm-user", required=True)
     parser.add_argument("--asset-app-name")
+    parser.add_argument("--force-development", action="store_true")
+    parser.add_argument("--replace-existing", action="store_true")
     return parser
 
 

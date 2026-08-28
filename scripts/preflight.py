@@ -22,6 +22,7 @@ from services.project_paths import (  # noqa: E402
     PROJECT_SKILLS_DIR,
     SHARED_DIR,
     VM_IMAGES_DIR,
+    VM_IMAGES_DIRS,
     VM_TEMPLATE,
 )
 
@@ -62,24 +63,6 @@ def executable_exists(command: str) -> bool:
     return shutil.which(parts[0]) is not None
 
 
-def runner_command_valid(command: str) -> bool:
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        return False
-    if not parts or not executable_exists(parts[0]):
-        return False
-    for item in parts[1:]:
-        if item.startswith("-"):
-            continue
-        candidate = Path(os.path.expanduser(item))
-        if candidate.suffix in {".py", ".sh", ".zsh"}:
-            if not candidate.is_absolute():
-                candidate = ROOT / candidate
-            return candidate.is_file()
-    return True
-
-
 def check(project_only: bool) -> dict[str, object]:
     settings: Mapping[str, str] = os.environ
     if not project_only:
@@ -91,11 +74,6 @@ def check(project_only: bool) -> dict[str, object]:
         path.parent.name for path in PROJECT_SKILLS_DIR.glob("*/SKILL.md")
     }
     codex_command = str(settings.get("FEISHU_CODEX_COMMAND", "codex")).strip()
-    runner_command = str(
-        settings.get(
-            "SUBMISSION_RUNNER_COMMAND", "python3 services/submission_runner.py"
-        )
-    ).strip()
     checks: dict[str, object] = {
         "project_root": PROJECT_ROOT == ROOT and (ROOT / "README.md").is_file(),
         "skills_count": sum(
@@ -115,12 +93,14 @@ def check(project_only: bool) -> dict[str, object]:
             PROJECT_SKILLS_DIR / "_shared" / "AUTOMATION_CONTRACT.md"
         ).is_file(),
         "python3": shutil.which("python3") is not None,
-        "codex": executable_exists(codex_command),
-        "runner_enabled": runner_command_valid(runner_command),
     }
     if not project_only:
         checks.update(
             {
+                "codex": executable_exists(codex_command),
+                "submission_runner_entry": (
+                    ROOT / "services" / "submission_runner.py"
+                ).is_file(),
                 "vm_images_dir": VM_IMAGES_DIR.is_dir(),
                 "vm_template": VM_TEMPLATE.is_dir(),
                 "shared_dir": SHARED_DIR.is_dir(),
@@ -181,6 +161,9 @@ def main() -> int:
             "PROJECT_ROOT": PROJECT_ROOT,
             "PROJECT_SKILLS_DIR": PROJECT_SKILLS_DIR,
             "SUBMISSION_VM_IMAGES_DIR": VM_IMAGES_DIR,
+            "SUBMISSION_VM_IMAGES_DIRS": json.dumps(
+                [str(path) for path in VM_IMAGES_DIRS], ensure_ascii=False
+            ),
             "SUBMISSION_VM_TEMPLATE": VM_TEMPLATE,
             "SUBMISSION_SHARED_DIR": SHARED_DIR,
         }

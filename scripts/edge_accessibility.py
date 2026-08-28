@@ -318,14 +318,6 @@ class EdgeAXBackend:
         if error != self.ax.kAXErrorSuccess:
             raise EdgeAccessibilityError(f"AX_PRESS_FAILED={error}")
 
-    def _ensure_frontmost(self) -> None:
-        application = self.ax.AXUIElementCreateApplication(self.pid)
-        if self._attribute(application, self.ax.kAXFrontmostAttribute) in {True, 1}:
-            return
-        self._set(application, self.ax.kAXFrontmostAttribute, True)
-        if self._attribute(application, self.ax.kAXFrontmostAttribute) not in {True, 1}:
-            raise EdgeAccessibilityError("EDGE_FRONTMOST_READBACK_FAILED")
-
     def _root(self) -> Any:
         if _edge_pids() != (self.pid,):
             raise EdgeAccessibilityError("EDGE_PROCESS_CHANGED")

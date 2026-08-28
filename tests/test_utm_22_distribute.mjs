@@ -189,6 +189,11 @@ test('resumes only the persisted build upload after the file was committed', () 
     buildUploadId: 'upload-3',
   }), { action: 'ambiguous', uploadId: 'upload-3' });
   assert.deepEqual(attemptRecoveryAction({
+    state: 'file_uploaded',
+    buildUploadId: 'upload-4',
+    buildUploadFileId: 'file-4',
+  }), { action: 'commit_file', uploadId: 'upload-4', fileId: 'file-4' });
+  assert.deepEqual(attemptRecoveryAction({
     state: 'existing_build_valid',
     existingBuildIds: ['build-1'],
   }), { action: 'poll_existing', buildId: 'build-1' });

@@ -28,7 +28,6 @@ def test_business_replaces_utm_14_and_utm_20_in_the_mainline() -> None:
     assert preflight.ORDERED == EXPECTED_ORDER
     assert len(preflight.ORDERED) == 16
     assert (ROOT / "skills/utm-business/SKILL.md").is_file()
-    assert (ROOT / "docs/utm-business.md").is_file()
     for removed in ("utm-14", "utm-20"):
         assert not (ROOT / "skills" / removed).exists()
         assert not (ROOT / "docs" / f"{removed}.md").exists()

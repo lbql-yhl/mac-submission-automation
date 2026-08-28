@@ -509,18 +509,7 @@ def test_gitignore_wildcard_does_not_cross_directory_boundaries(
     ) in findings
 
 
-def test_current_repository_has_representative_baseline_findings() -> None:
+def test_current_repository_has_no_public_release_findings() -> None:
     findings = set(audit_repository(ROOT))
-    representative_findings = {
-        ("PERSONAL_HOME_PATH", "README.md"),
-        ("SENSITIVE_ASSIGNMENT", "scripts/ssh_password.py"),
-        ("FIXED_REPORT_DESTINATION", "services/feishu_bot.py"),
-        (
-            "HISTORICAL_PLAN",
-            "docs/superpowers/plans/2026-08-18-public-release-hardening.md",
-        ),
-    }
-
-    assert findings
     assert {rule for rule, _ in findings} <= KNOWN_RULES
-    assert representative_findings <= findings
+    assert not findings

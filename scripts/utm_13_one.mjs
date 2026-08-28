@@ -588,15 +588,6 @@ async function readTeamFromCertificatesPage(workflowPage, handoff) {
   return teamId;
 }
 
-function dateLooksCurrent(text) {
-  if (/\b(active|valid)\b/i.test(text)) return true;
-  const patterns = text.match(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+20\d{2}/gi) || [];
-  return patterns.some((value) => {
-    const timestamp = Date.parse(value);
-    return Number.isFinite(timestamp) && timestamp > Date.now();
-  });
-}
-
 async function currentTableRows(page) {
   const strategies = [
     (frame) => frame.locator("main table tbody tr"),
@@ -1039,18 +1030,6 @@ async function optionalDownloadedIdentity(teamId, evidence) {
   const identities = await stableIdentityInventory(teamId);
   if (identities.length !== 1) return null;
   return identities[0].sha1 === evidence.fingerprintSha1 ? identities[0] : null;
-}
-
-async function existingVisibleDistributionCertificate(teamId) {
-  const evidence = await validateCer(VISIBLE_CERTIFICATE_PATH).catch((error) => {
-    if (error?.code === "ENOENT") return null;
-    throw error;
-  });
-  if (!evidence) return null;
-  if (teamId && !evidence.commonName?.includes(`(${teamId})`)) {
-    throw new Error("Downloads/distribution.cer belongs to a different Apple Team");
-  }
-  return { file: VISIBLE_CERTIFICATE_PATH, evidence, visibleFile: VISIBLE_CERTIFICATE_PATH };
 }
 
 async function ensureDistributionCertificate(workflowPage, sessionId, handoff, csr, authorization, run) {

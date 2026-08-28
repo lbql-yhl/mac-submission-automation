@@ -307,6 +307,9 @@ def test_minibuddy_completion_is_command_verified_without_tcc() -> None:
     assert "osascript" not in script
     assert "pgrep -u" in script
     assert 'pgrep -x "Setup Assistant"' not in script
+    assert script.index("DidSeeAccessibility") < script.index(
+        'if /usr/bin/pgrep -u "$current_uid" -f "$mini_pattern"'
+    )
     assert hasattr(post_clone, "launch_finder_script")
     launcher = post_clone.launch_finder_script()
     for marker in (
@@ -398,7 +401,7 @@ def test_demo_cleanup_removes_clash_desired_state_that_recreates_demo_home() -> 
     assert 'launchctl enable "system/$clash_label"' not in script
     assert 'launchctl bootstrap system "$clash_plist"' not in script
     assert script.index('launchctl bootout system "$clash_plist"') < script.index(
-        'pkill -TERM -f "$stale_demo_pattern"'
+        '/bin/kill -TERM $stale_pids'
     )
 
     assert 'live_pids()' in script
@@ -449,9 +452,9 @@ def test_stale_demo_clash_cleanup_failure_is_recovered_by_guest_reboot() -> None
 def test_account_probe_repairs_only_residual_demo_home_before_verification() -> None:
     source = inspect.getsource(post_clone.perform_account_setup)
     assert "residual_demo_home_cleanup_script()" in source
-    assert source.index("residual_demo_home_cleanup_script()") < source.index(
-        "guest_shutdown_script()"
-    )
+    residual_cleanup = source.index("residual_demo_home_cleanup_script()")
+    final_shutdown = source.index("guest_shutdown_script()", residual_cleanup)
+    assert residual_cleanup < final_shutdown
 
 
 def test_main_uses_vm_name_from_current_workflow_environment(monkeypatch) -> None:

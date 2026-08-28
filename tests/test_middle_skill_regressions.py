@@ -1,76 +1,67 @@
-#!/usr/bin/env python3
 from pathlib import Path
+
+import pytest
+
+from scripts.utm_8_change_password import REQUIRED_GUEST_MARKERS
+from scripts.utm_apps import GUEST_WRAPPERS
+from scripts.utm_business import REQUIRED_MARKERS as BUSINESS_MARKERS
+from skill_contract_assertions import assert_shared_contract_reference
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ROOT / "skills"
+SHARED_CONTRACT = SKILLS / "_shared" / "AUTOMATION_CONTRACT.md"
+
+MIDDLE_SKILLS = (
+    ("utm-clash-ip", "scripts/utm_clash_ip.py", "UTM_CLASH_IP=verified", "utm-login"),
+    ("utm-edit", "scripts/utm_8_change_password.py", "UTM_8=verified", "utm-key"),
+    ("utm-key", "scripts/utm_9.py", "UTM_9=verified", "utm-apps"),
+    ("utm-apps", "scripts/utm_apps.py", "UTM_APPS=verified", "utm-business"),
+    ("utm-business", "scripts/utm_business.py", "UTM_BUSINESS=verified", "utm-env"),
+)
 
 
-def read(name: str) -> str:
-    return (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    ("skill_name", "entry", "marker", "handoff"),
+    MIDDLE_SKILLS,
+)
+def test_middle_skill_contracts_expose_entry_result_and_handoff(
+    skill_name: str,
+    entry: str,
+    marker: str,
+    handoff: str,
+) -> None:
+    skill_file = SKILLS / skill_name / "SKILL.md"
+    text = skill_file.read_text(encoding="utf-8")
+
+    assert_shared_contract_reference(skill_file, text, SHARED_CONTRACT)
+    assert entry in text
+    assert marker in text
+    assert handoff in text
 
 
-def main() -> None:
-    clash_ip = read("utm-clash-ip")
-    assert "expected_proxy_ip='<proxy-ip" not in clash_ip
-    for required in (
-        "ipaddress.IPv4Address",
-        "SOCKS5_SHARED_READBACK=exact",
-        "PROXY_EGRESS=verified",
-    ):
-        assert required in clash_ip, required
+def test_password_change_entry_owns_the_verified_guest_markers() -> None:
+    assert {
+        "PASSWORD_CHANGE_NAVIGATION=verified",
+        "PASSWORD_CHANGE_FIELDS=verified",
+        "PASSWORD_CHANGE_BUTTON=enabled",
+        "PASSWORD_CHANGE_SUBMISSION=clicked_once",
+    }.issubset(REQUIRED_GUEST_MARKERS)
 
-    utm_8 = read("utm-edit")
-    for required in (
-        "scripts/utm_8_change_password.py",
-        "APPLE_ACCOUNT_NEW_PASSWORD",
-        "MODIFIED_PASSWORD_SOURCE=verified",
-        "Sign-In & Security",
-        "Change Password",
-    ):
-        assert required in utm_8, required
-    for stale in ("secrets.choice", "初始密码：", "用户名：", "生日："):
-        assert stale not in utm_8, stale
 
-    utm_9 = read("utm-key")
-    docs_9 = (ROOT / "docs" / "utm-key.md").read_text(encoding="utf-8")
-    for required in (
-        "$PROJECT_ROOT/scripts/utm_9.py",
-        "CSR_ATTEMPT_ID",
-        "CSR_PATH=/Users/example/Desktop/CertificateSigningRequest.certSigningRequest",
-        "CSR_PRIVATE_KEY=verified",
-        "CSR_DISK=verified",
-        "/usr/bin/certtool",
-    ):
-        assert required in utm_9, required
-    for stale in ("Computer Use", 'open -a "Keychain Access"', "SUBMISSION_SSH_PRIVATE_KEY"):
-        assert stale not in utm_9
-        assert stale not in docs_9
+def test_apps_entry_owns_the_four_post_login_stages() -> None:
+    assert GUEST_WRAPPERS == {
+        "utm-10": "utm_10_login.mjs",
+        "utm-11": "utm_11_one.mjs",
+        "utm-12": "utm_12_one.mjs",
+        "utm-13": "utm_13_one.mjs",
+    }
 
-    utm_apps = read("utm-apps")
-    body = [line.strip() for line in utm_apps.split("---", 2)[-1].splitlines() if line.strip()]
-    assert body == [
-        "1. 运行 utm-10 技能脚本",
-        "2. 运行 utm-11 技能脚本",
-        "3. 运行 utm-12 技能脚本",
-        "4. 运行 utm-13 技能脚本",
-    ]
 
-    utm_business = read("utm-business")
-    for required in (
-        "$PROJECT_ROOT/scripts/utm_business.py",
-        "/Users/example/Downloads/AppleAccountScriptsBackup/utm_business_one.mjs",
-        "SSH stdin JSON",
-        "FOREIGN_STATUS_FORM=verified",
+def test_business_entry_requires_verified_legal_and_banking_results() -> None:
+    assert {
+        "PAID_APPS_AGREEMENT=accepted_or_existing",
         "W8BEN_SUBMIT=verified",
         "BANK_ACCOUNT_PROCESSING=verified",
-        "DAC7_READBACK=No_saved",
         "UTM_BUSINESS=verified",
-    ):
-        assert required in utm_business, required
-
-    print("MIDDLE_SKILL_REGRESSIONS=verified")
-
-
-if __name__ == "__main__":
-    main()
+    }.issubset(BUSINESS_MARKERS)

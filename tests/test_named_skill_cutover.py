@@ -36,9 +36,7 @@ def test_named_skills_are_the_only_mainline_names() -> None:
 
     for name in ("utm-login", "utm-edit", "utm-key", "utm-script"):
         skill = ROOT / "skills" / name / "SKILL.md"
-        doc = ROOT / "docs" / f"{name}.md"
         assert skill.is_file()
-        assert doc.is_file()
         assert skill.read_text(encoding="utf-8").startswith(f"---\nname: {name}\n")
 
 

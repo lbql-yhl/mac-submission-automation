@@ -7,27 +7,21 @@ import argparse
 import os
 import sys
 import time
-from typing import Any, List, Optional, Tuple
+from typing import Any, List
 
 from find_system_settings_general import (
     AX,
     APPLE_ACCOUNT_TEXT,
-    DONT_MERGE_TEXTS,
-    ENTER_PASSCODE_LATER_TEXT,
-    IPHONE_PASSCODE_PROMPT_TEXT,
     OPERATION_TIMEOUT_SECONDS,
     NSRunningApplication,
     WORKFLOW_RENDER_INTERVAL_SECONDS,
     activate,
     current_search_roots,
     copy_attribute,
-    describe_element,
-    find_pressable_text_candidate_any,
     find_sidebar_candidate,
     get_running_system_settings,
     iter_accessibility_tree,
     launch_system_settings,
-    tree_contains_text,
 )
 
 
@@ -152,49 +146,6 @@ def tree_contains_casefold(roots: List[Any], target: str) -> bool:
             if value is not None and wanted in str(value).casefold():
                 return True
     return False
-
-
-def click_text_with_wait(
-    pid: int,
-    targets: Tuple[str, ...],
-    error_message: str,
-) -> int:
-    """等待并点击一个可用的文本控件。"""
-    for attempt in range(POST_LOGIN_WAIT_ATTEMPTS):
-        candidate = find_pressable_text_candidate_any(
-            current_search_roots(
-                pid,
-                auto_handle_mac_password=False,
-                auto_handle_security_prompts=False,
-            ),
-            targets,
-        )
-        if candidate is not None:
-            error = activate(candidate)
-            if error != AX.kAXErrorSuccess:
-                # 弹窗刚出现或刚切换时，AX 可能短暂返回
-                # AttributeUnsupported/CannotComplete；继续读取同一页面，
-                # 不要把这个瞬时状态当作不可恢复错误。
-                if error in (
-                    AX.kAXErrorAttributeUnsupported,
-                    AX.kAXErrorCannotComplete,
-                ):
-                    if attempt < POST_LOGIN_WAIT_ATTEMPTS - 1:
-                        time.sleep(WORKFLOW_RENDER_INTERVAL_SECONDS)
-                        continue
-                print(
-                    "{}，AXError={}".format(error_message, error),
-                    file=sys.stderr,
-                )
-                return 4
-            return 0
-        if attempt < POST_LOGIN_WAIT_ATTEMPTS - 1:
-            time.sleep(WORKFLOW_RENDER_INTERVAL_SECONDS)
-    print(
-        "{}（超时：{}秒）。".format(error_message, OPERATION_TIMEOUT_SECONDS),
-        file=sys.stderr,
-    )
-    return 5
 
 
 def handle_post_login_prompts(pid: int, expected_email: str) -> int:

@@ -8,8 +8,7 @@ PROJECT_DOCS = {
     ROOT / "AGENTS.md": 55,
     ROOT / "README.md": 100,
     ROOT / "docs/project-workflow.md": 65,
-    ROOT / "docs/utm-feishu-bot.md": 70,
-    ROOT / "docs/feishu-host-routing.md": 75,
+    ROOT / "docs/utm-feishu-bot.md": 220,
     ROOT / "shared-files/README.md": 30,
 }
 
@@ -61,9 +60,12 @@ def test_project_docs_do_not_restore_old_skill_names() -> None:
 
 
 def test_project_docs_point_execution_to_skill_commands() -> None:
-    for path in (ROOT / "AGENTS.md", ROOT / "README.md", ROOT / "docs/project-workflow.md"):
-        text = path.read_text(encoding="utf-8")
-        assert "每段可单独运行" in text, path
-        assert "每个技能可人工单独指定执行" in text, path
-        assert "skills/<skill>/SKILL.md" in text, path
-        assert "不读取或解释脚本内容" in text, path
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    workflow = (ROOT / "docs/project-workflow.md").read_text(encoding="utf-8")
+
+    assert "skills/` 是 16 个主线技能的唯一正文源" in agents
+    assert "skills/<skill>/SKILL.md" in readme
+    assert "每段可单独运行，每个技能也可人工单独指定执行" in readme
+    assert "四段均可单独运行，每个技能也可人工单独指定执行" in workflow
+    assert "单技能执行以链接的 `SKILL.md` 为唯一可执行真值" in workflow

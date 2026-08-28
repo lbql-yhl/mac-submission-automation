@@ -927,10 +927,24 @@ async function developerAgreementPresent(page) {
     || (url.pathname.startsWith("/account/agree/") && Boolean(finalButtons));
 }
 
+async function recoverDeveloperAgreementCompletion(page) {
+  if (!await developerAgreementPresent(page)) return true;
+  await page.reload({ waitUntil: "domcontentloaded", timeout: TIMEOUT });
+  await waitForSafePage(page, "developer.apple.com");
+  return !await developerAgreementPresent(page);
+}
+
 async function handleDeveloperAgreementIfPresent(page, run) {
   if (!await developerAgreementPresent(page)) return null;
+  const existing = await readJson(ledgerPath(run, "agreement"));
+  if (existing?.state === "submitted") {
+    if (!await recoverDeveloperAgreementCompletion(page)) {
+      throw new Error("Apple Developer agreement remains visible after the single acceptance attempt");
+    }
+    return existing.attemptId;
+  }
   const attemptId = await ensureAgreement(page, run);
-  if (await developerAgreementPresent(page)) {
+  if (!await recoverDeveloperAgreementCompletion(page)) {
     throw new Error("Apple Developer agreement remains visible after the single acceptance attempt");
   }
   return attemptId;
@@ -947,25 +961,6 @@ async function handleAppStoreAgreementIfPresent(page, run) {
     throw new Error("App Store Connect Terms Of Service remains visible after the single acceptance attempt");
   }
   return attemptId;
-}
-
-// Stage 1: Developer Account agreement and membership verification.
-async function membershipValue(section, label) {
-  const labels = await visible(section.getByText(label, { exact: true }));
-  if (labels.length !== 1) throw new Error(`${label} must be uniquely visible in Membership details`);
-  const value = await labels[0].evaluate((element) => {
-    const normalize = (text) => String(text || "").replace(/\s+/g, " ").trim();
-    const wanted = normalize(element.textContent);
-    const row = element.closest("tr, li, [role='row'], dl > div, .row") || element.parentElement;
-    if (!row) return "";
-    const chunks = [...row.querySelectorAll("dd, td, [role='cell'], span, p, div")]
-      .map((node) => normalize(node.textContent))
-      .filter((text) => text && text !== wanted && !text.startsWith(`${wanted} `));
-    if (chunks.length) return chunks.sort((a, b) => a.length - b.length)[0];
-    return normalize(row.textContent).replace(wanted, "").trim();
-  });
-  if (!value) throw new Error(`${label} is empty`);
-  return value;
 }
 
 async function readMembership(page) {
@@ -1029,13 +1024,25 @@ async function identifierListIsStableEmpty(page) {
     && /Register an App ID/i.test(bodyText);
 }
 
-async function filterListByExactValue(page, value, label) {
+async function filterListByExactValue(
+  page,
+  value,
+  label,
+  { exactMatches = null } = {},
+) {
   if (await identifierListIsStableEmpty(page)) return;
   const selector = "main input[type='search'], input[placeholder*='Search' i], input[type='search']";
   const deadline = Date.now() + TIMEOUT;
   let controls = [];
   do {
     if (await identifierListIsStableEmpty(page)) return;
+    if (exactMatches) {
+      const matches = await exactMatches();
+      if (matches.length > 1) {
+        throw new Error(`multiple exact ${label} matches found while waiting for search`);
+      }
+      if (matches.length === 1) return "existing";
+    }
     controls = [];
     for (const frame of page.frames()) {
       const candidates = frame.locator(selector);
@@ -1063,6 +1070,7 @@ async function filterListByExactValue(page, value, label) {
   await page.waitForLoadState("networkidle", { timeout: TIMEOUT }).catch(() => {});
   const busy = page.locator("[aria-busy='true'], [role='progressbar']");
   await busy.first().waitFor({ state: "hidden", timeout: TIMEOUT }).catch(() => {});
+  return "filtered";
 }
 
 async function clickUniqueContinue(page, label) {
@@ -1118,7 +1126,16 @@ async function recoverIdentifier(page, config, { reload = false } = {}) {
   if (reload) {
     await page.waitForLoadState("networkidle", { timeout: TIMEOUT }).catch(() => {});
   }
-  await filterListByExactValue(page, config.bundleId, "App ID");
+  const visibleMatches = await exactBundleMatches(page, config.bundleId);
+  if (visibleMatches.length > 1) throw new Error("multiple exact App ID matches found before search");
+  if (visibleMatches.length === 1) return true;
+  const filterResult = await filterListByExactValue(
+    page,
+    config.bundleId,
+    "App ID",
+    { exactMatches: () => exactBundleMatches(page, config.bundleId) },
+  );
+  if (filterResult === "existing") return true;
   await page.locator("[aria-busy='true'], [role='progressbar']").first()
     .waitFor({ state: "hidden", timeout: TIMEOUT }).catch(() => {});
   await page.getByText(config.bundleId, { exact: true }).first()

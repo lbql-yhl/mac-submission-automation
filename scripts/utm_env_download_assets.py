@@ -316,7 +316,7 @@ class FeishuClient:
         records: list[dict[str, Any]] = []
         page_token: str | None = None
         while True:
-            query = {"view_id": location.view_id, "page_size": "500"}
+            query = {"page_size": "500"}
             if page_token is not None:
                 query["page_token"] = page_token
             url = (

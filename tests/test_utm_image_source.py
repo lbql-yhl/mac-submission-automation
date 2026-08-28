@@ -107,6 +107,34 @@ def test_blank_beauty_link_falls_back_to_one_development_attachment(
     assert attachment.stat().st_mode & 0o777 == 0o600
 
 
+def test_expired_beauty_recovery_forces_the_same_records_development_attachment(
+    tmp_path: Path,
+) -> None:
+    module = load_source_module()
+    client = FakeClient(
+        [
+            record(
+                "Xrimo",
+                beauty="https://c.wss.ink/f/expired",
+                development=[{"file_token": "dev-token", "name": "screens.zip"}],
+            )
+        ],
+        {"dev-token": b"PK\x03\x04test-archive"},
+    )
+
+    result = module.prepare_screenshot_source(
+        base_url=BASE_URL,
+        app_name="Xrimo",
+        output_dir=tmp_path,
+        client=client,
+        force_development=True,
+    )
+
+    assert result["source_field"] == "研发截图"
+    assert result["kind"] == "attachment"
+    assert client.downloaded == ["dev-token"]
+
+
 @pytest.mark.parametrize(
     "beauty",
     [

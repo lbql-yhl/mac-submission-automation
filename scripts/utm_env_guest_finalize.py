@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -173,21 +174,45 @@ def _prepare_studio_projects(home: Path, mode: str) -> Path:
     return studio_projects
 
 
+def _source_root(
+    mode: str, payload: dict[str, Any], downloads: Path
+) -> Path:
+    if mode in {"copy", "verify"}:
+        return GUEST_SHARED_ROOT
+    value = payload.get("source_root")
+    if not isinstance(value, str):
+        raise GuestFinalizeError("staged source root is missing")
+    source_root = Path(value)
+    if (
+        source_root.parent != downloads
+        or re.fullmatch(r"[.]utm-env-stage-[0-9a-f]{32}", source_root.name)
+        is None
+        or source_root.is_symlink()
+        or not source_root.is_dir()
+    ):
+        raise GuestFinalizeError("staged source root is unsafe")
+    return source_root
+
+
 def run_assets(mode: str, vm_user: str, payload: dict[str, Any]) -> dict[str, Any]:
-    if mode not in {"copy", "verify"}:
+    if mode not in {"copy", "verify", "copy-staged", "verify-staged"}:
         raise GuestFinalizeError("invalid asset mode")
     app_name, assets, env_evidence = _validate_payload(payload)
     home, downloads, fire_one = _verify_identity(vm_user)
+    source_root = _source_root(mode, payload, downloads)
     if downloads.parent != home or fire_one.parent != downloads:
         raise GuestFinalizeError("Fire_One_en1.3 is not directly below Downloads")
-    studio_projects = _prepare_studio_projects(home, mode)
+    copy_mode = mode in {"copy", "copy-staged"}
+    studio_projects = _prepare_studio_projects(
+        home, "copy" if copy_mode else "verify"
+    )
     code_source_name = f"{app_name}-git"
     code_target = studio_projects / app_name
 
-    source_env = GUEST_SHARED_ROOT / "Fire_One_en1.3" / ".env"
+    source_env = source_root / "Fire_One_en1.3" / ".env"
     target_env = fire_one / ".env"
     if (
-        source_env.parent != GUEST_SHARED_ROOT / "Fire_One_en1.3"
+        source_env.parent != source_root / "Fire_One_en1.3"
         or target_env.parent != fire_one
     ):
         raise GuestFinalizeError("Fire_One_en1.3/.env parent path is invalid")
@@ -197,7 +222,7 @@ def run_assets(mode: str, vm_user: str, payload: dict[str, Any]) -> dict[str, An
         )
     if target_env.is_symlink():
         raise GuestFinalizeError("guest Fire_One_en1.3/.env is an unsafe symlink")
-    if mode == "copy":
+    if copy_mode:
         result = subprocess.run(
             ["/bin/cp", "-p", str(source_env), str(target_env)],
             check=False,
@@ -212,10 +237,10 @@ def run_assets(mode: str, vm_user: str, payload: dict[str, Any]) -> dict[str, An
         raise GuestFinalizeError("guest Fire_One_en1.3/.env mode is not 600")
 
     for name, expected in assets.items():
-        source = GUEST_SHARED_ROOT / name
+        source = source_root / name
         target = code_target if name == code_source_name else downloads / name
         expected_parent = studio_projects if name == code_source_name else downloads
-        if source.parent != GUEST_SHARED_ROOT or target.parent != expected_parent:
+        if source.parent != source_root or target.parent != expected_parent:
             raise GuestFinalizeError("asset parent path is invalid")
         if _summary(source, expected["type"]) != expected:
             raise GuestFinalizeError(
@@ -230,7 +255,7 @@ def run_assets(mode: str, vm_user: str, payload: dict[str, Any]) -> dict[str, An
                     f"guest {target_kind} conflicts with shared source: {name}"
                 )
             continue
-        if mode == "verify":
+        if not copy_mode:
             target_kind = (
                 "StudioProjects target" if name == code_source_name else "Downloads target"
             )
@@ -251,7 +276,7 @@ def run_assets(mode: str, vm_user: str, payload: dict[str, Any]) -> dict[str, An
             raise GuestFinalizeError(f"guest asset copy verification failed: {name}")
 
     for name, expected in assets.items():
-        if _summary(GUEST_SHARED_ROOT / name, expected["type"]) != expected:
+        if _summary(source_root / name, expected["type"]) != expected:
             raise GuestFinalizeError(f"fresh shared-source verification failed: {name}")
         target = code_target if name == code_source_name else downloads / name
         if _summary(target, expected["type"]) != expected:
@@ -275,7 +300,11 @@ def run_assets(mode: str, vm_user: str, payload: dict[str, Any]) -> dict[str, An
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="UTM-ENV guest file helper")
-    parser.add_argument("--mode", required=True, choices=("copy", "verify"))
+    parser.add_argument(
+        "--mode",
+        required=True,
+        choices=("copy", "verify", "copy-staged", "verify-staged"),
+    )
     parser.add_argument("--vm-user", required=True)
     parser.add_argument("--stdin-json", action="store_true")
     args = parser.parse_args()

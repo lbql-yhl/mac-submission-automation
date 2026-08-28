@@ -11,7 +11,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 
 @dataclass(frozen=True)

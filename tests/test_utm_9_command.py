@@ -52,8 +52,8 @@ def test_certtool_input_uses_rsa_2048_sha256_and_exact_subject() -> None:
 
 def test_guest_payload_rejects_control_characters_and_wrong_path() -> None:
     valid = {
-        "expected_user": "abcd",
-        "csr_path": "/Users/example/Desktop/CertificateSigningRequest.certSigningRequest",
+        "expected_user": "user",
+        "csr_path": "/Users/user/Desktop/CertificateSigningRequest.certSigningRequest",
         "key_label": "utm-9-0123456789abcdef",
         "challenge": "utm-9-0123456789abcdef",
         "keychain_password": DUMMY_GUEST_VALUE,
@@ -153,7 +153,7 @@ def test_exact_owned_run_requires_one_local_vm_match() -> None:
             {
                 "id": "run-123",
                 "app_name": "ExampleApp",
-                "vm_name": "abcd",
+                "vm_name": "user",
                 "submission_data": {"host_machine": "current-host"},
             }
         ]
@@ -162,7 +162,7 @@ def test_exact_owned_run_requires_one_local_vm_match() -> None:
     run = utm_9.exact_owned_run(
         payload,
         run_id="run-123",
-        vm_name="abcd",
+        vm_name="user",
         local_host="current-host",
     )
     assert run["app_name"] == "ExampleApp"
@@ -171,7 +171,7 @@ def test_exact_owned_run_requires_one_local_vm_match() -> None:
         utm_9.exact_owned_run(
             payload,
             run_id="run-123",
-            vm_name="abcd",
+            vm_name="user",
             local_host="other-host",
         )
 
@@ -240,10 +240,10 @@ def test_attempt_is_mode_600_idempotent_and_context_locked(tmp_path: Path) -> No
     context = {
         "run_id": "run-123",
         "app_name": "ExampleApp",
-        "vm_name": "abcd",
+        "vm_name": "user",
         "vm_ip": "192.0.2.10",
-        "vm_user": "abcd",
-        "csr_path": "/Users/example/Desktop/CertificateSigningRequest.certSigningRequest",
+        "vm_user": "user",
+        "csr_path": "/Users/user/Desktop/CertificateSigningRequest.certSigningRequest",
     }
     before = {"desktop_count": 3, "desktop_digest": "a" * 64}
 
@@ -264,18 +264,18 @@ def test_sensitive_subject_values_are_stdin_only() -> None:
         "attempt_id": "01234567-89ab-cdef-0123-456789abcdef",
         "key_label": "utm-9-0123456789abcdef",
         "challenge": "utm-9-0123456789abcdef",
-        "csr_path": "/Users/example/Desktop/CertificateSigningRequest.certSigningRequest",
+        "csr_path": "/Users/user/Desktop/CertificateSigningRequest.certSigningRequest",
         "desktop_before": {"desktop_count": 3, "desktop_digest": "a" * 64},
     }
     payload = utm_9.build_create_payload(
-        vm_user="abcd",
+        vm_user="user",
         email="account@example.test",
         common_name="Example User",
         attempt=attempt,
     )
     command = utm_9.remote_helper_command(
-        vm_user="abcd",
-        guest_dir="/Users/example/Downloads",
+        vm_user="user",
+        guest_dir="/Users/user/Downloads",
         mode="create",
     )
 
@@ -303,9 +303,9 @@ def test_managed_guest_helper_hash_drift_is_atomically_upgraded(
     ssh_calls: list[object] = []
     ssh_results = iter(
         (
-            subprocess.CompletedProcess([], 0, f"PRESENT {old_digest} abcd 700 1\n".encode(), b""),
+            subprocess.CompletedProcess([], 0, f"PRESENT {old_digest} user 700 1\n".encode(), b""),
             subprocess.CompletedProcess([], 0, b"UPDATED\n", b""),
-            subprocess.CompletedProcess([], 0, f"PRESENT {digest} abcd 700 1\n".encode(), b""),
+            subprocess.CompletedProcess([], 0, f"PRESENT {digest} user 700 1\n".encode(), b""),
         )
     )
     scp_calls: list[list[str]] = []
@@ -320,9 +320,9 @@ def test_managed_guest_helper_hash_drift_is_atomically_upgraded(
 
     monkeypatch.setattr(utm_9, "GUEST_HELPER_SOURCE", source)
     utm_9.install_guest_helper(
-        "abcd",
+        "user",
         "192.0.2.10",
-        "/Users/example/Downloads",
+        "/Users/user/Downloads",
         ssh_runner=fake_ssh,
         scp_runner=fake_scp,
         token_factory=lambda: "stabletoken",
@@ -346,14 +346,14 @@ def test_unmanaged_guest_helper_hash_drift_still_blocks(
 
     def fake_ssh(*args, **kwargs):
         return subprocess.CompletedProcess(
-            [], 0, f"PRESENT {old_digest} abcd 700 0\n".encode(), b""
+            [], 0, f"PRESENT {old_digest} user 700 0\n".encode(), b""
         )
 
     with pytest.raises(utm_9.UTM9Error, match="GUEST_HELPER_CONFLICT"):
         utm_9.install_guest_helper(
-            "abcd",
+            "user",
             "192.0.2.10",
-            "/Users/example/Downloads",
+            "/Users/user/Downloads",
             ssh_runner=fake_ssh,
             scp_runner=lambda *args, **kwargs: pytest.fail("must not copy conflict"),
         )
@@ -371,9 +371,9 @@ def test_guest_helper_source_syntax_is_checked_before_remote_access(
 
     with pytest.raises(utm_9.UTM9Error, match="GUEST_HELPER_SOURCE_SYNTAX_INVALID"):
         utm_9.install_guest_helper(
-            "abcd",
+            "user",
             "192.0.2.10",
-            "/Users/example/Downloads",
+            "/Users/user/Downloads",
             ssh_runner=lambda *args, **kwargs: pytest.fail("must validate locally first"),
         )
 
@@ -397,9 +397,9 @@ def test_guest_error_preserves_complete_stderr_with_exit_code(
         ),
     ) as error:
         utm_9.call_guest(
-            vm_user="abcd",
+            vm_user="user",
             vm_ip="192.0.2.10",
-            guest_dir="/Users/example/Downloads",
+            guest_dir="/Users/user/Downloads",
             mode="verify",
             payload=b"{}",
         )
@@ -407,11 +407,9 @@ def test_guest_error_preserves_complete_stderr_with_exit_code(
     assert "ignored raw details" in str(error.value)
 
 
-def test_canonical_skill_and_docs_use_only_the_command_entry() -> None:
+def test_canonical_skill_uses_only_the_command_entry() -> None:
     root = Path(__file__).resolve().parents[1]
     skill = (root / "skills" / "utm-key" / "SKILL.md").read_text(encoding="utf-8")
-    docs = (root / "docs" / "utm-key.md").read_text(encoding="utf-8")
-    canonical = skill + "\n" + docs
     for required in (
         "$PROJECT_ROOT/scripts/utm_9.py",
         "--run-id '<run-id>'",
@@ -419,17 +417,19 @@ def test_canonical_skill_and_docs_use_only_the_command_entry() -> None:
         "--vm-name '<vm-name>'",
         "--vm-ip '<vm-ip>'",
         "--vm-user '<vm-user>'",
-        "不读取或解释脚本内容",
+        "../_shared/AUTOMATION_CONTRACT.md",
+        "Only public host entry",
+        "UTM_9=verified",
+        "utm-apps",
     ):
         assert required in skill, required
-        assert required in docs, required
     for implementation_detail in (
         "/usr/bin/certtool",
         "CSR_PRIVATE_KEY=verified",
         "项目托管标记",
         "SQLite/bundle/UUID/MAC",
     ):
-        assert implementation_detail not in canonical
+        assert implementation_detail not in skill
     for stale in (
         'open -a "Keychain Access"',
         "Computer Use",
@@ -439,7 +439,7 @@ def test_canonical_skill_and_docs_use_only_the_command_entry() -> None:
         "右键",
         "Paste",
     ):
-        assert stale not in canonical, stale
+        assert stale not in skill, stale
 
 
 def test_project_summaries_are_indexes_not_keychain_implementation_docs() -> None:
@@ -450,7 +450,7 @@ def test_project_summaries_are_indexes_not_keychain_implementation_docs() -> Non
         + (root / "README.md").read_text(encoding="utf-8")
     )
     assert "skills/<skill>/SKILL.md" in summaries
-    assert "不读取或解释脚本内容" in summaries
+    assert "项目内 `skills/` 是 16 个主线技能的唯一正文源" in summaries
     for implementation_detail in (
         "--page-title '<应用名>-<vm_name>'",
         "SQLite/bundle/UUID/MAC",
@@ -471,7 +471,7 @@ def test_host_runner_reads_notion_and_finishes_one_stable_attempt(
                     {
                         "id": "run-123",
                         "app_name": "ExampleApp",
-                        "vm_name": "abcd",
+                        "vm_name": "user",
                         "submission_data": {"host_machine": "current-host"},
                     }
                 ]
@@ -532,17 +532,17 @@ def test_host_runner_reads_notion_and_finishes_one_stable_attempt(
     result = utm_9.run(
         Namespace(
             run_id="run-123",
-            vm_name="abcd",
+            vm_name="user",
             vm_ip="192.0.2.10",
-            vm_user="abcd",
+            vm_user="user",
         )
     )
 
     assert result == 0
     assert notion.calls == [
         ("verify-parent", "current-host"),
-        ("read-field", "ExampleApp-abcd", "账号信息", "邮箱："),
-        ("read-field", "ExampleApp-abcd", "账号信息", "用户名："),
+        ("read-field", "ExampleApp-user", "账号信息", "邮箱："),
+        ("read-field", "ExampleApp-user", "账号信息", "用户名："),
     ]
     assert [mode for mode, _ in calls] == ["probe", "probe", "create", "verify", "verify"]
     create_payload = next(payload for mode, payload in calls if mode == "create")

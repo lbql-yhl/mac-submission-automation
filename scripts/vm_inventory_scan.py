@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Daily reconciliation/reporting for the standalone UTM VM inventory.
+"""Daily reconciliation/preview for the standalone UTM VM inventory.
 
 The scan is deliberately separate from cloning.  It only compares the local
 SQLite inventory with the configured image directory; unknown bundles are
-reported for human review and are never inserted automatically.  Feishu
-delivery is opt-in and requires an approval hash copied from the preview.
+reported for human review and are never inserted automatically.  Inventory
+evidence is local-only and cannot be delivered as a Feishu daily report.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import argparse
 import hashlib
 import re
 import sys
-from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,11 +20,6 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from services.feishu_gateway import FeishuSendError, send_text_message  # noqa: E402
-from services.host_config import (  # noqa: E402
-    ConfigurationError,
-    host_settings_snapshot,
-)
 from scripts.vm_inventory import InventoryError, register_existing, scan_inventory  # noqa: E402
 
 
@@ -121,35 +115,21 @@ def _register_confirmed_bundles(
     return registered
 
 
-def _send_report(
-    report: str,
-    digest: str,
-    approval_sha256: str | None,
-    *,
-    environ: Mapping[str, str] | None = None,
-    env_path: Path | None = None,
-) -> None:
-    if not approval_sha256 or approval_sha256.strip().lower() != digest:
-        raise RuntimeError(
-            "refusing Feishu delivery: --approval-sha256 must exactly match the preview REPORT_SHA256"
-        )
-    settings_path = ROOT / ".env" if env_path is None and environ is None else env_path
-    settings = host_settings_snapshot(environ=environ, env_path=settings_path)
-
-    def required(name: str) -> str:
-        value = str(settings.get(name, "")).strip()
-        if not value:
-            raise ConfigurationError(f"missing required host setting: {name}")
-        return value
-
-    app_id = required("FEISHU_APP_ID")
-    app_secret = required("FEISHU_APP_SECRET")
-    daily_report_chat_id = required("FEISHU_DAILY_REPORT_CHAT_ID")
-    # Never accept a command-line chat id, which could bypass the red-line guard.
-    send_text_message(app_id, app_secret, daily_report_chat_id, report)
-
-
 def main(argv: list[str] | None = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    delivery_options = ("--send-feishu", "--approval-sha256")
+    if any(
+        argument == option or argument.startswith(f"{option}=")
+        for argument in raw_argv
+        for option in delivery_options
+    ):
+        print(
+            "VM_INVENTORY_SCAN=failed reason=Feishu delivery is disabled; "
+            "use scripts/feishu_daily_report.py with explicit user-provided JSON",
+            file=sys.stderr,
+        )
+        return 2
+
     parser = argparse.ArgumentParser(description="Scan and report the standalone UTM VM inventory")
     parser.add_argument("--images-dir", type=Path)
     parser.add_argument("--database", type=Path)
@@ -164,13 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         default="test",
         help="application label for --register-existing (only literal 'test' may repeat)",
     )
-    parser.add_argument(
-        "--send-feishu",
-        action="store_true",
-        help="deliver the exact preview to the fixed daily-report group after hash approval",
-    )
-    parser.add_argument("--approval-sha256", help="exact REPORT_SHA256 from a reviewed preview")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_argv)
 
     try:
         if args.images_dir is None or args.database is None:
@@ -196,13 +170,9 @@ def main(argv: list[str] | None = None) -> int:
         digest = report_sha256(report)
         print(report, end="")
         print(f"REPORT_SHA256={digest}")
-        if args.send_feishu:
-            _send_report(report, digest, args.approval_sha256)
-            print("REPORT_FEISHU=sent")
-        else:
-            print("REPORT_PREVIEW_ONLY=verified")
+        print("REPORT_PREVIEW_ONLY=verified")
         return 0
-    except (InventoryError, FeishuSendError, OSError, RuntimeError) as error:
+    except (InventoryError, OSError, RuntimeError) as error:
         print(f"VM_INVENTORY_SCAN=failed reason={type(error).__name__}: {error}", file=sys.stderr)
         return 2
 

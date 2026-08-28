@@ -128,6 +128,7 @@ def send_text_message(
     chat_id: str,
     text: str,
     *,
+    message_uuid: str = "",
     retries: int = 3,
     timeout: int = 20,
 ) -> dict[str, Any]:
@@ -135,13 +136,16 @@ def send_text_message(
     if not precheck["ok"]:
         raise FeishuSendError("Feishu network precheck failed", detail={"precheck": precheck})
     token = get_tenant_access_token(app_id, app_secret, retries=retries, timeout=timeout)
+    body = {
+        "receive_id": chat_id,
+        "msg_type": "text",
+        "content": json.dumps({"text": text}, ensure_ascii=False),
+    }
+    if message_uuid:
+        body["uuid"] = message_uuid
     response = post_json(
         MESSAGE_URL,
-        {
-            "receive_id": chat_id,
-            "msg_type": "text",
-            "content": json.dumps({"text": text}, ensure_ascii=False),
-        },
+        body,
         {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"},
         retries=retries,
         timeout=timeout,

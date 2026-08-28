@@ -375,7 +375,12 @@ async function twoFactorPending(page) {
   if (phoneTail.length === 2) {
     const choices = await visibleAcrossFrames(page, (frame) => frame.getByRole("button"));
     for (const choice of choices) {
-      const label = `${await choice.innerText()} ${await choice.getAttribute("aria-label") || ""}`;
+      let label;
+      try {
+        label = `${await choice.innerText()} ${await choice.getAttribute("aria-label") || ""}`;
+      } catch {
+        continue;
+      }
       if (label.replace(/\D/g, "").endsWith(phoneTail)) return true;
     }
   }
@@ -822,11 +827,15 @@ async function completeForeignForm(page, sessionId, run) {
 
 function extractLatestSixDigitCode(text) {
   const normalized = String(text || "");
+  const appleMessage = normalized.match(
+    /Your\s+Apple\s+Account\s+Code\s+is\s*:\s*(\d{6})\s*\.\s*Don['’]t\s+share\s+it\s+with\s+anyone/i,
+  );
+  if (appleMessage) return appleMessage[1];
   const codes = Array.from(
     normalized.matchAll(/(?<!\d)(\d{6})(?!\d)/g),
     (match) => match[1],
   );
-  return codes.at(-1) || null;
+  return codes[0] || null;
 }
 
 async function readMessages(smsPage) {
@@ -909,11 +918,11 @@ async function completeOtp(page) {
           frame.locator("input[type='tel'][autocomplete='off'], input[inputmode='numeric'], input[autocomplete='one-time-code']"));
         return inputs.length === 1 || inputs.length === 6;
       }, "six-digit verification input");
-      await page.waitForTimeout(10_000);
     } else if (inputs.length !== 1 && inputs.length !== 6) {
       throw new Error(`verification code inputs must be one or six; found ${inputs.length}`);
     }
 
+    await page.waitForTimeout(10_000);
     smsPage = await openSms(page.context(), smsUrl);
     let latest = await waitNewestSms(smsPage, smsUrl);
     let code = latest.code;

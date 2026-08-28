@@ -13,6 +13,27 @@ from scripts.vm_inventory import InventoryError
 
 
 DATABASE = (ROOT / "runtime" / "vm-inventory.sqlite3").resolve()
+PASSTHROUGH_FAILURE_CODES = frozenset(
+    {
+        "CLONE_STORAGE_UNAVAILABLE",
+        "TEMPLATE_NOT_STOPPED",
+        "TEMPLATE_STATUS_AMBIGUOUS",
+        "TEMPLATE_STATUS_UNAVAILABLE",
+    }
+)
+
+
+def safe_failure_code(error: BaseException) -> str:
+    if isinstance(error, CloneError):
+        detail = str(error).strip()
+        if detail in PASSTHROUGH_FAILURE_CODES:
+            return detail
+        return "CLONE_STEP_FAILED"
+    if isinstance(error, InventoryError):
+        return "CLONE_INVENTORY_FAILED"
+    if isinstance(error, OSError):
+        return "CLONE_IO_FAILED"
+    return "CLONE_STEP_FAILED"
 
 
 def main() -> int:
@@ -23,6 +44,11 @@ def main() -> int:
     except (CloneError, InventoryError, OSError) as error:
         print(
             f"执行报错：utm-vm-clone-step-01；{full_reason(error)}",
+            file=sys.stderr,
+            flush=True,
+        )
+        print(
+            f"UTM_VM_CLONE_STEP_01=blocked: {safe_failure_code(error)}",
             file=sys.stderr,
             flush=True,
         )

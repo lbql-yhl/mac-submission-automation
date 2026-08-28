@@ -354,10 +354,6 @@ def guest_shutdown_script() -> str:
     return "/sbin/shutdown -h now\n"
 
 
-def guest_reboot_script() -> str:
-    return "/sbin/shutdown -r now\n"
-
-
 def demo_retirement_script() -> str:
     """Stop demo's logged-out user domain, then delete only that account."""
     return r'''set -e
@@ -583,6 +579,8 @@ if [ "$current_user" != "$console_user" ] || [ "$current_user" = root ]; then
   exit 2
 fi
 test -e /var/db/.AppleSetupDone
+/usr/bin/defaults write com.apple.SetupAssistant DidSeeAccessibility -bool true
+/usr/bin/defaults write com.apple.SetupAssistant MiniBuddyShouldLaunchToResumeSetup -bool false
 if /usr/bin/pgrep -u "$current_uid" -f "$mini_pattern" >/dev/null 2>&1; then
   pids=$(/usr/bin/pgrep -u "$current_uid" -f "$mini_pattern")
   count=$(printf '%s\n' "$pids" | /usr/bin/awk 'NF {n++} END {print n+0}')
@@ -592,8 +590,6 @@ if /usr/bin/pgrep -u "$current_uid" -f "$mini_pattern" >/dev/null 2>&1; then
   command=$(/bin/ps -p "$pid" -o command=)
   [ "$owner" = "$current_uid" ] || { printf 'MINIBUDDY_OWNER_MISMATCH\n'; exit 4; }
   case "$command" in (*'-MiniBuddyYes'*) ;; (*) printf 'MINIBUDDY_COMMAND_MISMATCH\n'; exit 5;; esac
-  /usr/bin/defaults write com.apple.SetupAssistant DidSeeAccessibility -bool true
-  /usr/bin/defaults write com.apple.SetupAssistant MiniBuddyShouldLaunchToResumeSetup -bool false
   /bin/kill -TERM "$pid"
   for attempt in 1 2 3 4 5 6 7 8 9 10; do
     /usr/bin/pgrep -u "$current_uid" -f "$mini_pattern" >/dev/null 2>&1 || break
@@ -998,12 +994,6 @@ def _focus_guest_input(
     pid, bounds = _focus_exact_utm(vm_name, bundle)
     _capture_guest_input(pid, vm_name)
     return pid, bounds
-
-
-def _dismiss_setup_once(vm_name: str, bundle: Path) -> None:
-    pid, bounds = _focus_guest_input(vm_name, bundle)
-    _mouse_click(pid, guest_window_point(bounds, 0.76, 0.80))
-    time.sleep(WAIT_SECONDS)
 
 
 def read_desktop_state(user: str, ip: str) -> tuple[str, dict[str, str]]:

@@ -20,7 +20,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -571,6 +571,7 @@ def _fetch_otp(url: str) -> str:
             decoded = None
         messages = decoded.get("messages") if isinstance(decoded, dict) else None
         if isinstance(messages, list):
+            apple_codes: list[str] = []
             codes: list[str] = []
             for message in messages:
                 if not isinstance(message, dict):
@@ -579,11 +580,29 @@ def _fetch_otp(url: str) -> str:
                     str(message.get(key) or "")
                     for key in ("body", "message", "content", "text", "sms")
                 )
+                apple_codes.extend(
+                    re.findall(
+                        r"Your\s+Apple\s+Account\s+Code\s+is\s*:\s*(\d{6})"
+                        r"\s*\.\s*Don['’]t\s+share\s+it\s+with\s+anyone",
+                        message_text,
+                        re.IGNORECASE,
+                    )
+                )
                 codes.extend(
                     re.findall(r"(?<!\d)(\d{6})(?!\d)", message_text)
                 )
+            if apple_codes:
+                return apple_codes[-1]
             if codes:
                 return codes[-1]
+        apple_codes = re.findall(
+            r"Your\s+Apple\s+Account\s+Code\s+is\s*:\s*(\d{6})"
+            r"\s*\.\s*Don['’]t\s+share\s+it\s+with\s+anyone",
+            body,
+            re.IGNORECASE,
+        )
+        if apple_codes:
+            return apple_codes[0]
         codes = re.findall(r"(?<!\d)(\d{6})(?!\d)", body)
         if codes:
             return codes[-1]
@@ -1793,26 +1812,6 @@ def _ensure_apple_login(
     backend.wait_for_text("Membership details", timeout=90)
 
 
-def _accept_agreement_if_needed(
-    backend: EdgeAXBackend,
-    ledger: GuestAttemptLedger,
-) -> None:
-    if not backend.has_text("Review agreement"):
-        ledger.complete("developer_agreement")
-        return
-    if not ledger.begin("developer_agreement"):
-        raise AppleWebWorkflowError("DEVELOPER_AGREEMENT_AMBIGUOUS")
-    backend.click_text("Review agreement")
-    backend.wait_for_text(("Agreement", "Apple Developer Program License Agreement"))
-    if backend.has_text("I have read and agree"):
-        backend.set_checkbox("I have read and agree", True)
-    backend.click_text("Agree", exact=True)
-    backend.wait_for_text("Account")
-    if backend.has_text("Review agreement"):
-        raise AppleWebWorkflowError("AGREEMENT_ACCEPTANCE_UNVERIFIED")
-    ledger.complete("developer_agreement")
-
-
 def workflow_utm_10(backend: EdgeAXBackend, payload: Mapping[str, Any]) -> tuple[list[str], dict[str, Any]]:
     started_pid = payload.get("UTM_10_EDGE_STARTED_PID")
     if (
@@ -2447,15 +2446,6 @@ def _identity_count(team_id: str | None = None) -> int:
     return len(_identity_inventory(team_id))
 
 
-def _stable_identity_count(team_id: str | None = None) -> int:
-    if team_id is not None:
-        return len(_stable_identity_inventory(team_id))
-    counts = (_identity_count(), _identity_count())
-    if counts[0] != counts[1]:
-        raise AppleWebWorkflowError("CODESIGN_IDENTITY_UNSTABLE")
-    return counts[0]
-
-
 def _stable_page_text(backend: EdgeAXBackend) -> str:
     first = backend.page_text()
     second = backend.page_text()
@@ -3063,7 +3053,7 @@ def execute_utm_apps_stage(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--stdin-json", action="store_true", required=True)
-    args = parser.parse_args()
+    parser.parse_args()
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):

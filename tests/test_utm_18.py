@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -13,6 +14,16 @@ from scripts import apple_web_workflow
 from scripts.utm_18_attempt import Attempt, AttemptResult
 
 
+@pytest.fixture(autouse=True)
+def _skip_browser_recovery_for_existing_run_tests(monkeypatch):
+    monkeypatch.setattr(
+        utm_18,
+        "ensure_browser_session",
+        lambda *args, **kwargs: False,
+        raising=False,
+    )
+
+
 class FakeNotion:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
@@ -22,6 +33,7 @@ class FakeNotion:
             "初始密码：": "initial-secret",
             "电话：": "+1 555 0100",
             "电话短信接收平台：": "https://sms.example.test/latest",
+            "用户名：": "Demo User",
             "应用名: ": "Demo",
         }
 
@@ -374,6 +386,33 @@ def test_fetch_otp_selects_the_last_six_digit_code_without_copy_or_date_rules() 
         )
 
 
+def test_fetch_otp_prefers_complete_apple_message_over_embedded_history() -> None:
+    body = (
+        "Valid until 09/09/2026 04:56 PM "
+        "Your Apple Account Code is: 654321. Don't share it with anyone. "
+        "embedded history 112233"
+    ).encode()
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return body
+
+    with patch.object(
+        apple_web_workflow.urllib.request,
+        "urlopen",
+        return_value=_Response(),
+    ):
+        assert apple_web_workflow._fetch_otp(
+            "https://sms.example.test/inbox"
+        ) == "654321"
+
+
 def test_password_submit_accepts_current_sign_in_label_as_final_action() -> None:
     labels = ["Sign In", "Sign in with Passkey"]
     assert apple_web_workflow._password_final_action_candidates(
@@ -438,6 +477,86 @@ def _attempt(tmp_path: Path, state: str = "prepared") -> Attempt:
         state=state,
         prepared_at="2026-08-07T00:00:00+00:00",
     )
+
+
+def test_missing_edge_starts_then_runs_utm10_login(monkeypatch, tmp_path) -> None:
+    events: list[str] = []
+    api = FakeNotion()
+
+    monkeypatch.setattr(
+        utm_18,
+        "edge_process_present",
+        lambda *args, **kwargs: events.append("probe") or False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "verify_guest_scripts",
+        lambda *args, **kwargs: events.append("sync-utm-10"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "run_guest_stage",
+        lambda **kwargs: events.append("utm-10")
+        or SimpleNamespace(markers=("UTM_10=verified",), data={}),
+        raising=False,
+    )
+
+    assert utm_18.start_edge_and_login_if_missing(
+        _args(tmp_path), api=api, page_title="Demo-abcd"
+    ) is True
+    assert events == ["probe", "sync-utm-10", "utm-10"]
+
+
+def test_existing_edge_skips_start_and_utm10_login(monkeypatch, tmp_path) -> None:
+    api = FakeNotion()
+    monkeypatch.setattr(
+        utm_18,
+        "edge_process_present",
+        lambda *args, **kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "verify_existing_apple_session",
+        lambda *args, **kwargs: {"markers": ["APPLE_DEVELOPER_ACCOUNT=verified"]},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "run_utm10_login",
+        lambda *args, **kwargs: pytest.fail("existing Edge must not re-login"),
+        raising=False,
+    )
+
+    assert utm_18.start_edge_and_login_if_missing(
+        _args(tmp_path), api=api, page_title="Demo-abcd"
+    ) is False
+
+
+def test_utm10_login_creates_a_new_session_with_the_same_target(monkeypatch, tmp_path) -> None:
+    api = FakeNotion()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        utm_18, "verify_guest_scripts", lambda **kwargs: None, raising=False
+    )
+
+    def stage(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(markers=("UTM_10=verified",), data={})
+
+    monkeypatch.setattr(utm_18, "run_guest_stage", stage, raising=False)
+
+    utm_18.run_utm10_login(_args(tmp_path), api=api, page_title="Demo-abcd")
+
+    assert captured["stage"] == "utm-10"
+    assert captured["vm_name"] == "abcd"
+    assert captured["vm_ip"] == "192.168.64.20"
+    assert captured["vm_user"] == "abcd"
+    assert captured["payload"]["UTM_10_REUSE_EXISTING_EDGE"] is False
+    assert captured["payload"]["APPLE_ACCOUNT_USER_NAME"] == "Demo User"
 
 
 def test_apple_login_reads_notion_and_sends_secrets_only_in_ssh_stdin() -> None:
@@ -549,6 +668,264 @@ def test_apple_login_bridge_does_not_repeat_ax_membership_wait_after_dom() -> No
     assert 'backend.wait_for_text("Membership details"' not in utm_18.APPLE_LOGIN_BRIDGE
 
 
+def test_existing_session_bridge_is_read_only_and_locks_the_live_account_page() -> None:
+    source = utm_18.APPLE_EXISTING_SESSION_BRIDGE
+    for required in (
+        "currentSessionIdentity",
+        "connectLocalBrowser",
+        "context.pages()",
+        "developer.apple.com",
+        '["/account", "/account/"].includes(url.pathname)',
+        "APPLE_ACCOUNT_PAGE_COUNT_INVALID",
+        "APPLE_ACCOUNT_MEMBERSHIP_MARKER_INVALID",
+        "/Membership details/i.test(body)",
+        "input[type='password']",
+        "EDGE_SESSION_CHANGED",
+        "() => process.exit(0)",
+        "() => process.exit(1)",
+    ):
+        assert required in source
+    for forbidden in (
+        "_ensure_apple_login",
+        "open_url",
+        ".goto(",
+        ".newPage(",
+        "restartLocalBrowser",
+        "pkill",
+        "nohup",
+    ):
+        assert forbidden not in source
+
+
+def test_existing_session_bridge_accepts_the_utm10_verified_account_page(
+    tmp_path: Path,
+) -> None:
+    session_module = tmp_path / "session.mjs"
+    session_module.write_text(
+        """
+export async function currentSessionIdentity() {
+  return {
+    edge_pid: 123,
+    edge_websocket: "ws://127.0.0.1:9222/devtools/browser/abc",
+    sessionId: "stable-session",
+  };
+}
+
+export async function connectLocalBrowser() {
+  return {
+    context: {
+      pages: () => [{
+        url: () => "https://developer.apple.com/account/",
+        frames: () => [{
+          locator: () => ({ innerText: async () => "Membership details" }),
+        }],
+      }],
+    },
+  };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "/usr/bin/env",
+            "node",
+            "--input-type=module",
+            "--eval",
+            utm_18.APPLE_EXISTING_SESSION_BRIDGE,
+            session_module.as_uri(),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["markers"] == [
+        "APPLE_DEVELOPER_ACCOUNT=verified"
+    ]
+
+
+def test_existing_session_bridge_accepts_one_authenticated_business_handoff_page() -> None:
+    source = utm_18.APPLE_EXISTING_SESSION_BRIDGE
+
+    assert 'url.hostname === "appstoreconnect.apple.com"' in source
+    assert 'url.pathname.startsWith("/business")' in source
+    assert "businessPages.length !== 1" in source
+    assert "/Business/i.test(body)" in source
+    assert "/Agreements|Tax Forms|Bank Accounts/i.test(body)" in source
+    assert "input[type='password']" in source
+    assert "APPLE_BUSINESS_SESSION_MARKER_INVALID" in source
+
+
+def test_existing_session_verifier_returns_only_safe_identity_markers() -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "markers": ["APPLE_DEVELOPER_ACCOUNT=verified"],
+                    "edge_pid": 123,
+                    "edge_websocket": "ws://127.0.0.1:9222/devtools/browser/abc",
+                }
+            ).encode(),
+            stderr=b"",
+        )
+
+    result = utm_18.verify_existing_apple_session(
+        vm_name="abcd",
+        vm_ip="192.168.64.20",
+        vm_user="abcd",
+        runner=fake_run,
+    )
+
+    assert result == {
+        "markers": ["APPLE_DEVELOPER_ACCOUNT=verified"],
+        "edge_pid": 123,
+        "edge_websocket": "ws://127.0.0.1:9222/devtools/browser/abc",
+    }
+    command_text = " ".join(str(part) for part in captured["command"])
+    assert "session.mjs" in command_text
+    assert "apple_web_workflow" not in command_text
+    assert "input" not in captured["kwargs"]
+
+
+def test_new_attempt_reuses_verified_existing_apple_session_without_login_or_edge_restart(
+    monkeypatch, tmp_path
+) -> None:
+    api = FakeNotion()
+    attempt = _attempt(tmp_path)
+    events: list[str] = []
+
+    monkeypatch.setattr(utm_18, "api_from_env", lambda: api)
+    monkeypatch.setattr(
+        utm_18,
+        "_run_context",
+        lambda run_id, vm_name: ("Host", "Demo", "Demo-abcd"),
+        raising=False,
+    )
+    monkeypatch.setattr(utm_18, "load_single_attempt", lambda *args: None)
+    monkeypatch.setattr(
+        utm_18,
+        "verify_existing_apple_session",
+        lambda *args, **kwargs: events.append("verify_existing_apple_session")
+        or {"markers": ["APPLE_DEVELOPER_ACCOUNT=verified"]},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "verify_or_login_apple",
+        lambda *args, **kwargs: pytest.fail(
+            "a verified existing session must not repeat Apple login"
+        ),
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "prepare_edge",
+        lambda *args, **kwargs: pytest.fail(
+            "a verified existing session must not restart or replace Edge"
+        ),
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "create_attempt",
+        lambda *args, **kwargs: events.append("create_attempt") or attempt,
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "precommit_remote",
+        lambda value: events.append("precommit_remote"),
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "run_remote",
+        lambda value: events.append("run_remote") or 0,
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "inspect_remote",
+        lambda value: ("success", "status", False),
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "classify_attempt",
+        lambda *args, **kwargs: AttemptResult("verified", "exited_zero", 14),
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "mark_attempt",
+        lambda value, **kwargs: Attempt(
+            **{
+                **value.__dict__,
+                "state": kwargs["state"],
+                "mode": kwargs.get("mode", ""),
+            }
+        ),
+    )
+
+    assert utm_18.run(_args(tmp_path)) == 0
+    assert events == [
+        "verify_existing_apple_session",
+        "create_attempt",
+        "precommit_remote",
+        "run_remote",
+    ]
+
+
+def test_new_attempt_blocks_when_existing_apple_session_readonly_verification_fails(
+    monkeypatch, tmp_path
+) -> None:
+    api = FakeNotion()
+    events: list[str] = []
+
+    monkeypatch.setattr(utm_18, "api_from_env", lambda: api)
+    monkeypatch.setattr(
+        utm_18,
+        "_run_context",
+        lambda run_id, vm_name: ("Host", "Demo", "Demo-abcd"),
+        raising=False,
+    )
+    monkeypatch.setattr(utm_18, "load_single_attempt", lambda *args: None)
+
+    def fail_readonly_verification(*args, **kwargs):
+        events.append("verify_existing_apple_session")
+        raise utm_18.UTM18Error("APPLE_EXISTING_SESSION_NOT_VERIFIED")
+
+    monkeypatch.setattr(
+        utm_18,
+        "verify_existing_apple_session",
+        fail_readonly_verification,
+        raising=False,
+    )
+
+    def forbidden(name):
+        def call(*args, **kwargs):
+            events.append(name)
+            pytest.fail(f"{name} must not run after readonly verification fails")
+
+        return call
+
+    monkeypatch.setattr(utm_18, "verify_or_login_apple", forbidden("login"))
+    monkeypatch.setattr(utm_18, "prepare_edge", forbidden("prepare_edge"))
+    monkeypatch.setattr(utm_18, "create_attempt", forbidden("create_attempt"))
+    monkeypatch.setattr(utm_18, "precommit_remote", forbidden("precommit_remote"))
+    monkeypatch.setattr(utm_18, "run_remote", forbidden("run_remote"))
+
+    with pytest.raises(
+        utm_18.UTM18Error,
+        match=r"^APPLE_EXISTING_SESSION_NOT_VERIFIED$",
+    ):
+        utm_18.run(_args(tmp_path))
+
+    assert events == ["verify_existing_apple_session"]
+
+
 def test_run_executes_all_stages_in_order_without_confirmation(monkeypatch, tmp_path, capsys) -> None:
     api = FakeNotion()
     attempt = _attempt(tmp_path)
@@ -563,6 +940,11 @@ def test_run_executes_all_stages_in_order_without_confirmation(monkeypatch, tmp_
     )
     monkeypatch.setattr(
         utm_18,
+        "ensure_browser_session",
+        lambda *args, **kwargs: events.append("ensure_browser_session") or False,
+    )
+    monkeypatch.setattr(
+        utm_18,
         "prepare_edge",
         lambda *args, **kwargs: pytest.fail(
             "the host entry must not replace the fixed Edge launch commands"
@@ -570,8 +952,8 @@ def test_run_executes_all_stages_in_order_without_confirmation(monkeypatch, tmp_
     )
     monkeypatch.setattr(
         utm_18,
-        "verify_or_login_apple",
-        lambda *args, **kwargs: events.append("verify_or_login_apple")
+        "verify_existing_apple_session",
+        lambda *args, **kwargs: events.append("verify_existing_apple_session")
         or {"edge_pid": 123, "edge_websocket": "ws://127.0.0.1:9222/devtools/browser/abc"},
     )
     monkeypatch.setattr(utm_18, "load_single_attempt", lambda *args: None)
@@ -611,7 +993,8 @@ def test_run_executes_all_stages_in_order_without_confirmation(monkeypatch, tmp_
 
     assert utm_18.run(_args(tmp_path)) == 0
     assert events == [
-        "verify_or_login_apple",
+        "ensure_browser_session",
+        "verify_existing_apple_session",
         "create_attempt",
         "precommit_remote",
         "mark:precommitted",
@@ -664,6 +1047,77 @@ def test_existing_running_attempt_is_reconciled_and_never_rerun(monkeypatch, tmp
         lambda value, **kwargs: Attempt(**{**value.__dict__, "state": kwargs["state"], "mode": kwargs.get("mode", "")}),
     )
     assert utm_18.run(_args(tmp_path)) == 0
+
+
+def test_explicit_force_replay_archives_result_unknown_attempt_then_replays(
+    monkeypatch, tmp_path
+) -> None:
+    api = FakeNotion()
+    failed = _attempt(tmp_path, state="running")
+    fresh = Attempt(
+        **{
+            **failed.__dict__,
+            "attempt_id": "b" * 32,
+            "log_path": f"/Users/example/Downloads/utm-18-fill-description-{'b' * 32}.log",
+            "status_path": f"/Users/example/Downloads/utm-18-fill-description-{'b' * 32}.log.status",
+            "ledger_path": tmp_path / "run-12345678" / f"{'b' * 32}.json",
+            "state": "prepared",
+        }
+    )
+    events: list[str] = []
+    args = _args(tmp_path)
+    args.force_replay = True
+
+    monkeypatch.setattr(utm_18, "api_from_env", lambda: api)
+    monkeypatch.setattr(
+        utm_18,
+        "_run_context",
+        lambda run_id, vm_name: ("Host", "Demo", "Demo-abcd"),
+        raising=False,
+    )
+    monkeypatch.setattr(utm_18, "load_single_attempt", lambda *args: failed)
+    monkeypatch.setattr(
+        utm_18,
+        "archive_authorized_attempt",
+        lambda value: events.append("archive"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "verify_existing_apple_session",
+        lambda *args, **kwargs: events.append("verify-existing") or {},
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "create_attempt",
+        lambda *args, **kwargs: events.append("create") or fresh,
+    )
+    monkeypatch.setattr(utm_18, "precommit_remote", lambda value: None)
+    monkeypatch.setattr(utm_18, "run_remote", lambda value: 0)
+    monkeypatch.setattr(
+        utm_18,
+        "inspect_remote",
+        lambda value: ("success", "status", False),
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "classify_attempt",
+        lambda *args, **kwargs: AttemptResult("verified", "exited_zero", 1),
+    )
+    monkeypatch.setattr(
+        utm_18,
+        "mark_attempt",
+        lambda value, **kwargs: Attempt(
+            **{
+                **value.__dict__,
+                "state": kwargs["state"],
+                "mode": kwargs.get("mode", ""),
+            }
+        ),
+    )
+
+    assert utm_18.run(args) == 0
+    assert events == ["archive", "verify-existing", "create"]
 
 
 @pytest.mark.parametrize(
@@ -731,8 +1185,8 @@ def test_known_finished_retryable_attempt_is_archived_then_full_entry_replays(
     )
     monkeypatch.setattr(
         utm_18,
-        "verify_or_login_apple",
-        lambda *args, **kwargs: events.append("login") or {},
+        "verify_existing_apple_session",
+        lambda *args, **kwargs: events.append("verify_existing") or {},
     )
     monkeypatch.setattr(
         utm_18,
@@ -759,7 +1213,7 @@ def test_known_finished_retryable_attempt_is_archived_then_full_entry_replays(
     )
 
     assert utm_18.run(_args(tmp_path)) == 0
-    assert events[:3] == ["archive", "login", "create"]
+    assert events[:3] == ["archive", "verify_existing", "create"]
 
 
 def test_completed_transport_stop_is_verified_only_after_three_stable_reads(
@@ -978,8 +1432,14 @@ def test_direct_mode_reuses_shared_context_id_and_never_reads_or_cards_a_feishu_
     monkeypatch.setattr(utm_18, "api_from_env", lambda: api)
     monkeypatch.setattr(
         utm_18,
+        "optional_setting",
+        lambda name: "Host" if name == "SUBMISSION_HOST_MACHINE" else "",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        utm_18,
         "resolve_direct_context",
-        lambda **kwargs: context,
+        lambda **kwargs: seen.update({"parent_title": kwargs.get("parent_title")}) or context,
         raising=False,
     )
 
@@ -1023,6 +1483,7 @@ def test_direct_mode_reuses_shared_context_id_and_never_reads_or_cards_a_feishu_
     )
     assert utm_18.run(args) == 0
     assert seen["context_id"] == DIRECT_CONTEXT_ID
+    assert seen["parent_title"] == "Host"
     assert ("verify-parent", "Host") in api.calls
     assert ("read-field", "应用名: ") in api.calls
     assert "UTM_18=verified" in capsys.readouterr().out

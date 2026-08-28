@@ -7,10 +7,13 @@ import hashlib
 import inspect
 import io
 import shutil
+import subprocess
+import tarfile
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,12 +23,20 @@ sys.path.insert(0, str(ROOT))
 
 import scripts.utm_env as runner
 import scripts.utm_env_guest_finalize as guest
+from scripts.clean_cli import full_reason
 
 
 class FakeTransport:
-    def __init__(self, *, verify_hash: str = "exact") -> None:
+    def __init__(
+        self,
+        *,
+        verify_hash: str = "exact",
+        guest_code_path: str = "/Users/example/StudioProjects/FlagCue",
+    ) -> None:
         self.calls: list[tuple[str, object]] = []
+        self.payloads: list[dict] = []
         self.verify_hash = verify_hash
+        self.guest_code_path = guest_code_path
 
     def probe_identity(self) -> None:
         self.calls.append(("probe_identity", None))
@@ -35,6 +46,7 @@ class FakeTransport:
 
     def run_guest(self, mode: str, payload: dict) -> dict:
         self.calls.append(("run_guest", mode))
+        self.payloads.append(dict(payload))
         return {
             "status": "verified",
             "host_guest_asset_sha256": self.verify_hash,
@@ -42,7 +54,7 @@ class FakeTransport:
             "fire_one_env_mode": "600",
             "asset_count": 4,
             "guest_download_asset_count": 3,
-            "guest_code_path": "/Users/example/StudioProjects/FlagCue",
+            "guest_code_path": self.guest_code_path,
             "guest_code_copy": "verified_or_identical_existing",
         }
 
@@ -109,14 +121,38 @@ class UTMEnvRunnerTests(unittest.TestCase):
             hashlib.sha256(b"APP_NAME=FlagCue\n").hexdigest(),
         )
 
+    def test_build_stage_archive_contains_only_env_and_exact_application_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            shared = base / "shared"
+            shared.mkdir()
+            make_assets(shared)
+            (shared / "Fire_One_en1.3" / "keep.txt").write_text(
+                "not staged", encoding="utf-8"
+            )
+            archive = base / "stage.tar"
+
+            runner.build_stage_archive(shared, "FlagCue", archive)
+
+            with tarfile.open(archive, "r") as bundle:
+                names = set(bundle.getnames())
+        self.assertIn("Fire_One_en1.3/.env", names)
+        self.assertNotIn("Fire_One_en1.3/keep.txt", names)
+        self.assertIn("FlagCue/FlagCue1.png", names)
+        self.assertIn("FlagCue.xlsx", names)
+        self.assertIn("FlagCue.png", names)
+        self.assertIn("FlagCue-git/README.md", names)
+
     def test_finalize_guest_only_runs_copy_then_fresh_verify(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             make_assets(root)
-            transport = FakeTransport()
+            transport = FakeTransport(
+                guest_code_path="/Users/user/StudioProjects/FlagCue"
+            )
             result = runner.finalize_guest(
                 app_name="FlagCue",
-                vm_user="abcd",
+                vm_user="user",
                 shared_root=root,
                 transport=transport,
             )
@@ -135,10 +171,176 @@ class UTMEnvRunnerTests(unittest.TestCase):
         self.assertEqual(result["fire_one_env_sha256"], "exact")
         self.assertEqual(result["fire_one_env_mode"], "600")
         self.assertEqual(result["guest_download_asset_count"], 3)
-        self.assertEqual(result["guest_code_path"], "/Users/example/StudioProjects/FlagCue")
+        self.assertEqual(result["guest_code_path"], "/Users/user/StudioProjects/FlagCue")
         self.assertEqual(result["guest_code_copy"], "verified_or_identical_existing")
         self.assertNotIn("terminal_app_management", result)
         self.assertEqual(result["utm_env"], "verified")
+
+    def test_finalize_guest_uses_the_exact_ssh_staging_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            make_assets(root)
+            transport = FakeTransport(
+                guest_code_path="/Users/user/StudioProjects/FlagCue"
+            )
+            staging_root = (
+                "/Users/user/Downloads/"
+                ".utm-env-stage-0123456789abcdef0123456789abcdef"
+            )
+            result = runner.finalize_guest(
+                app_name="FlagCue",
+                vm_user="user",
+                shared_root=root,
+                transport=transport,
+                source_root=staging_root,
+            )
+
+        self.assertEqual(
+            transport.calls,
+            [
+                ("probe_identity", None),
+                ("install_helpers", None),
+                ("run_guest", "copy-staged"),
+                ("run_guest", "verify-staged"),
+                ("cleanup_helpers", None),
+            ],
+        )
+        self.assertEqual(
+            [payload["source_root"] for payload in transport.payloads],
+            [staging_root, staging_root],
+        )
+        self.assertEqual(result["utm_env"], "verified")
+
+    def test_staged_guest_cleanup_runs_when_finalization_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            make_assets(root)
+            calls: list[str] = []
+
+            class FailingTransport(FakeTransport):
+                def stage_sources(self, shared_root: Path, app_name: str) -> str:
+                    calls.append("stage")
+                    return (
+                        "/Users/user/Downloads/"
+                        ".utm-env-stage-0123456789abcdef0123456789abcdef"
+                    )
+
+                def cleanup_staging(self, source_root: str) -> None:
+                    calls.append("cleanup")
+
+                def run_guest(self, mode: str, payload: dict) -> dict:
+                    raise RuntimeError("guest failed")
+
+            with self.assertRaisesRegex(RuntimeError, "guest failed"):
+                runner.finalize_staged_guest(
+                    app_name="FlagCue",
+                    vm_user="user",
+                    shared_root=root,
+                    transport=FailingTransport(),
+                    identity_probed=True,
+                )
+
+        self.assertEqual(calls, ["stage", "cleanup"])
+
+    def test_staged_guest_cleanup_failure_redacts_internal_error_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            make_assets(root)
+
+            class FailingTransport(FakeTransport):
+                def stage_sources(self, shared_root: Path, app_name: str) -> str:
+                    return (
+                        "/Users/user/Downloads/"
+                        ".utm-env-stage-0123456789abcdef0123456789abcdef"
+                    )
+
+                def cleanup_staging(self, source_root: str) -> None:
+                    raise RuntimeError(
+                        "cleanup failed for user@192.0.2.10:/Users/user/Downloads"
+                    )
+
+                def run_guest(self, mode: str, payload: dict) -> dict:
+                    raise RuntimeError("guest failed from /private/secret")
+
+            with self.assertRaisesRegex(
+                runner.UTMEnvError,
+                "finalization failed and staging cleanup could not be verified",
+            ) as raised:
+                runner.finalize_staged_guest(
+                    app_name="FlagCue",
+                    vm_user="user",
+                    shared_root=root,
+                    transport=FailingTransport(),
+                    identity_probed=True,
+                )
+
+        self.assertEqual(
+            full_reason(raised.exception),
+            "guest finalization failed and staging cleanup could not be verified",
+        )
+        self.assertIsNone(raised.exception.__cause__)
+
+    def test_stage_sources_cleanup_failure_redacts_internal_error_chain(self) -> None:
+        transport = runner.SSHGuestTransport.__new__(runner.SSHGuestTransport)
+        transport.vm_user = "user"
+        transport.vm_ip = "192.0.2.10"
+        transport.home = "/Users/user"
+        calls = 0
+
+        def remote_run(*args: object, **kwargs: object) -> object:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise runner.UTMEnvError("stage failed at /private/secret")
+            raise runner.UTMEnvError(
+                "cleanup failed for user@192.0.2.10:/Users/user/Downloads"
+            )
+
+        with patch.object(transport, "_run", side_effect=remote_run), patch.object(
+            runner, "build_stage_archive"
+        ), patch.object(runner.secrets, "token_hex", return_value="a" * 32):
+            with self.assertRaisesRegex(
+                runner.UTMEnvError,
+                "staging failed and cleanup could not be verified",
+            ) as raised:
+                transport.stage_sources(Path("/unused"), "FlagCue")
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(
+            full_reason(raised.exception),
+            "guest staging failed and cleanup could not be verified",
+        )
+        self.assertIsNone(raised.exception.__cause__)
+
+    def test_stage_sources_redacts_scp_timeout_details(self) -> None:
+        transport = runner.SSHGuestTransport.__new__(runner.SSHGuestTransport)
+        transport.vm_user = "user"
+        transport.vm_ip = "192.0.2.10"
+        transport.home = "/Users/user"
+
+        with patch.object(
+            transport, "_run", return_value=SimpleNamespace(stdout=b"")
+        ), patch.object(runner, "build_stage_archive"), patch.object(
+            runner.secrets, "token_hex", return_value="b" * 32
+        ), patch.object(
+            runner.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(
+                cmd=["scp", "/private/secret", "user@192.0.2.10:/Users/user"],
+                timeout=1800,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                runner.UTMEnvError, "guest staging upload failed"
+            ) as raised:
+                transport.stage_sources(Path("/unused"), "FlagCue")
+
+        message = full_reason(raised.exception)
+        self.assertEqual(message, "guest staging upload failed")
+        self.assertNotIn("scp", message)
+        self.assertNotIn("/private/secret", message)
+        self.assertNotIn("user", message)
+        self.assertNotIn("192.0.2.10", message)
 
     def test_gui_is_blocked_until_fresh_three_way_hash_verification_passes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -148,7 +350,7 @@ class UTMEnvRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "three-way asset verification"):
                 runner.finalize_guest(
                     app_name="FlagCue",
-                    vm_user="abcd",
+                    vm_user="user",
                     shared_root=root,
                     transport=transport,
                 )
@@ -188,6 +390,85 @@ class UTMEnvRunnerTests(unittest.TestCase):
         self.assertLess(collect_index, download_index)
         self.assertLess(probe_index, download_index)
 
+    def test_run_stages_and_finalizes_over_one_ssh_transport(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            make_assets(root)
+            manifest = runner.collect_host_manifest(root, "FlagCue")
+            download_summary = {
+                "asset_filename_case": "exact",
+                "files": [
+                    {"name": name, **evidence}
+                    for name, evidence in manifest.items()
+                ],
+            }
+            calls: list[tuple[str, object]] = []
+
+            class Transport:
+                def probe_identity(self) -> None:
+                    calls.append(("probe", None))
+
+                def stage_sources(self, shared_root: Path, app_name: str) -> str:
+                    calls.append(("stage", (shared_root, app_name)))
+                    return (
+                        "/Users/user/Downloads/"
+                        ".utm-env-stage-0123456789abcdef0123456789abcdef"
+                    )
+
+                def cleanup_staging(self, source_root: str) -> None:
+                    calls.append(("cleanup", source_root))
+
+            transport = Transport()
+            args = SimpleNamespace(
+                parent_title="Host A",
+                app_name="FlagCue",
+                asset_app_name=None,
+                vm_ip="192.0.2.10",
+                vm_user="user",
+                output_root=root,
+                env_file=root / "credentials.env",
+                base_url="https://example.invalid/base",
+            )
+            observed: dict[str, object] = {}
+
+            def finalize(**kwargs: object) -> dict[str, object]:
+                observed.update(kwargs)
+                return {"utm_env": "verified"}
+
+            with patch.object(
+                runner,
+                "generate_env_from_notion",
+                return_value={"ENV_WRITE": "changed"},
+            ), patch.object(runner, "SSHGuestTransport", return_value=transport), patch.object(
+                runner, "load_credentials", return_value=("app", "secret")
+            ), patch.object(
+                runner, "FeishuClient", return_value=object()
+            ), patch.object(
+                runner, "GitHubRepositoryClient", return_value=object()
+            ), patch.object(
+                runner, "download_assets", return_value=download_summary
+            ), patch.object(runner, "finalize_guest", side_effect=finalize):
+                result = runner.run(args)
+
+        self.assertEqual(result["utm_env"], "verified")
+        self.assertEqual(
+            calls,
+            [
+                ("probe", None),
+                ("stage", (root, "FlagCue")),
+                (
+                    "cleanup",
+                    "/Users/user/Downloads/"
+                    ".utm-env-stage-0123456789abcdef0123456789abcdef",
+                ),
+            ],
+        )
+        self.assertEqual(
+            observed["source_root"],
+            "/Users/user/Downloads/"
+            ".utm-env-stage-0123456789abcdef0123456789abcdef",
+        )
+
     def test_cli_requires_parent_title_and_derives_exact_notion_page_title(self) -> None:
         args = runner.build_parser().parse_args([
             "--parent-title",
@@ -199,11 +480,11 @@ class UTMEnvRunnerTests(unittest.TestCase):
             "--vm-ip",
             "192.0.2.10",
             "--vm-user",
-            "abcd",
+            "user",
         ])
         self.assertEqual(args.parent_title, "Host A")
         self.assertEqual(args.asset_app_name, "OriginalFlagCue")
-        self.assertEqual(runner.notion_page_title(args.app_name, args.vm_user), "FlagCue-abcd")
+        self.assertEqual(runner.notion_page_title(args.app_name, args.vm_user), "FlagCue-user")
 
         with self.assertRaises(SystemExit):
             runner.build_parser().parse_args([
@@ -212,7 +493,7 @@ class UTMEnvRunnerTests(unittest.TestCase):
                 "--vm-ip",
                 "192.0.2.10",
                 "--vm-user",
-                "abcd",
+                "user",
             ])
 
     def test_guest_preflight_checks_shared_and_target_env_safety(self) -> None:
@@ -241,7 +522,7 @@ class UTMEnvRunnerTests(unittest.TestCase):
             "--vm-ip",
             "192.0.2.10",
             "--vm-user",
-            "abcd",
+            "user",
         ]
         output = io.StringIO()
         with patch.object(sys, "argv", argv), patch.object(
@@ -264,7 +545,7 @@ class UTMEnvRunnerTests(unittest.TestCase):
             "--vm-ip",
             "192.0.2.10",
             "--vm-user",
-            "abcd",
+            "user",
         ]
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -430,6 +711,44 @@ class UTMEnvRunnerTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(guest.GuestFinalizeError, "mode is not 600"):
                     guest.run_assets("verify", "testvm", payload)
+
+    def test_guest_helper_staged_mode_ignores_a_stale_shared_mount(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            stale_shared = base / "shared"
+            stale_shared.mkdir()
+            make_assets(stale_shared)
+            (stale_shared / "Fire_One_en1.3" / ".env").write_text(
+                "STALE=1\n", encoding="utf-8"
+            )
+            home, downloads, fire_one = make_guest_home(base)
+            staging = (
+                downloads
+                / ".utm-env-stage-0123456789abcdef0123456789abcdef"
+            )
+            staging.mkdir()
+            make_assets(staging)
+            target_env = fire_one / ".env"
+            target_env.write_text("OLD=1\n", encoding="utf-8")
+            payload = {
+                "app_name": "FlagCue",
+                "assets": runner.collect_host_manifest(staging, "FlagCue"),
+                "fire_one_env": runner.collect_host_env_manifest(staging),
+                "source_root": str(staging),
+            }
+
+            with patch.object(guest, "GUEST_SHARED_ROOT", stale_shared), patch.object(
+                guest, "_verify_identity", return_value=(home, downloads, fire_one)
+            ):
+                copied = guest.run_assets("copy-staged", "testvm", payload)
+                verified = guest.run_assets("verify-staged", "testvm", payload)
+
+            self.assertEqual(
+                target_env.read_bytes(),
+                (staging / "Fire_One_en1.3" / ".env").read_bytes(),
+            )
+            self.assertEqual(copied["status"], "verified")
+            self.assertEqual(verified["status"], "verified")
 
     def test_guest_helper_never_overwrites_a_conflicting_download(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

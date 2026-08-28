@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -50,17 +51,17 @@ def test_source_result_uses_configured_feishu_wiki_base(monkeypatch, tmp_path) -
 
 
 def test_guest_script_path_is_fixed_in_downloads_backup() -> None:
-    assert utm_image.guest_script_path("abcd") == (
-        "/Users/example/Downloads/AppleAccountScriptsBackup/utm_19_one.mjs"
+    assert utm_image.guest_script_path("user") == (
+        "/Users/user/Downloads/AppleAccountScriptsBackup/utm_19_one.mjs"
     )
 
 
 def test_guest_preflight_verifies_script_dependency_and_existing_edge() -> None:
     digest = hashlib.sha256(GUEST_SCRIPT.read_bytes()).hexdigest()
-    command = utm_image.guest_preflight_command("abcd", digest)
+    command = utm_image.guest_preflight_command("user", digest)
     for required in (
-        "/Users/example/Downloads/AppleAccountScriptsBackup/utm_19_one.mjs",
-        "/Users/example/Downloads/Fire_One_en1.3/node_modules/playwright-core/index.mjs",
+        "/Users/user/Downloads/AppleAccountScriptsBackup/utm_19_one.mjs",
+        "/Users/user/Downloads/Fire_One_en1.3/node_modules/playwright-core/index.mjs",
         "shasum -a 256",
         '--check "$target"',
         "127.0.0.1:9222/json/version",
@@ -76,7 +77,7 @@ def test_guest_preflight_verifies_script_dependency_and_existing_edge() -> None:
 
 def test_guest_execution_rechecks_canonical_script_hash_before_exec() -> None:
     digest = hashlib.sha256(GUEST_SCRIPT.read_bytes()).hexdigest()
-    command = utm_image.guest_execution_command("abcd", digest)
+    command = utm_image.guest_execution_command("user", digest)
     assert "shasum -a 256" in command
     assert "GUEST_SCRIPT_HASH_CHANGED" in command
     assert digest in command
@@ -114,7 +115,7 @@ def test_guest_execution_uses_password_ssh_stdin_and_fixed_script() -> None:
 
     payload = {
         "runId": "run-12345678",
-        "vmName": "abcd",
+        "vmName": "user",
         "appName": "Demo",
         "appStoreAppId": "123456789",
         "source": {
@@ -127,9 +128,9 @@ def test_guest_execution_uses_password_ssh_stdin_and_fixed_script() -> None:
         },
     }
     markers = utm_image.run_guest_script(
-        vm_name="abcd",
+        vm_name="user",
         vm_ip="192.0.2.10",
-        vm_user="abcd",
+        vm_user="user",
         payload=payload,
         runner=runner,
         password_env={"SSH_ASKPASS_REQUIRE": "force"},
@@ -182,9 +183,9 @@ def test_guest_execution_success_removes_stale_diagnostic(
         )
 
     utm_image.run_guest_script(
-        vm_name="abcd",
+        vm_name="user",
         vm_ip="192.0.2.10",
-        vm_user="abcd",
+        vm_user="user",
         payload={"source": {}},
         runner=runner,
         password_env={"SSH_ASKPASS_REQUIRE": "force"},
@@ -262,13 +263,16 @@ def test_skill_contract_has_only_host_ssh_entry() -> None:
     skill = (ROOT / "skills" / "utm-image" / "SKILL.md").read_text(encoding="utf-8")
     assert "$PROJECT_ROOT/scripts/utm_image.py" in skill
     assert "/Users/example/Downloads/AppleAccountScriptsBackup/utm_19_one.mjs" not in skill
-    assert "不读取或解释脚本内容" in skill
+    assert "../_shared/AUTOMATION_CONTRACT.md" in skill
+    assert "Only public host entry" in skill
+    assert "UTM_19=verified" in skill
+    assert "utm-p8" in skill
     assert "printf '%s\\n' '{}' | /usr/bin/node" not in skill
 
 
 def test_invalid_target_is_rejected_before_ssh() -> None:
     with pytest.raises(utm_image.UTMImageError, match="VM_USER_MISMATCH"):
-        utm_image.validate_target("abcd", "192.0.2.10", "wxyz")
+        utm_image.validate_target("user", "192.0.2.10", "wxyz")
 
 
 def test_host_cli_accepts_mutually_exclusive_run_or_direct_page_identity() -> None:
@@ -283,6 +287,8 @@ def test_host_cli_accepts_mutually_exclusive_run_or_direct_page_identity() -> No
         "vm_ip",
         "vm_user",
         "asset_app_name",
+        "force_development",
+        "replace_existing",
     }
     selector_sets = {
         frozenset(action.dest for action in group._group_actions)  # noqa: SLF001
@@ -295,11 +301,11 @@ def test_host_cli_accepts_mutually_exclusive_run_or_direct_page_identity() -> No
             "--run-id",
             "run-12345678",
             "--vm-name",
-            "abcd",
+            "user",
             "--vm-ip",
             "192.0.2.10",
             "--vm-user",
-            "abcd",
+            "user",
         ]
     )
     assert run_args.run_id == "run-12345678"
@@ -308,17 +314,160 @@ def test_host_cli_accepts_mutually_exclusive_run_or_direct_page_identity() -> No
     direct_args = parser.parse_args(
         [
             "--page-title",
-            "Demo-abcd",
+            "Demo-user",
             "--vm-name",
-            "abcd",
+            "user",
             "--vm-ip",
             "192.0.2.10",
             "--vm-user",
-            "abcd",
+            "user",
         ]
     )
     assert direct_args.run_id is None
-    assert direct_args.page_title == "Demo-abcd"
+    assert direct_args.page_title == "Demo-user"
+
+
+def test_host_cli_requires_explicit_flags_for_development_replacement() -> None:
+    parser = utm_image.build_parser()
+    ordinary = parser.parse_args(
+        [
+            "--page-title", "Demo-user",
+            "--vm-name", "user",
+            "--vm-ip", "192.0.2.10",
+            "--vm-user", "user",
+        ]
+    )
+    assert ordinary.force_development is False
+    assert ordinary.replace_existing is False
+
+    replacement = parser.parse_args(
+        [
+            "--page-title", "Demo-user",
+            "--vm-name", "user",
+            "--vm-ip", "192.0.2.10",
+            "--vm-user", "user",
+            "--force-development",
+            "--replace-existing",
+        ]
+    )
+    assert replacement.force_development is True
+    assert replacement.replace_existing is True
+
+
+def test_replacement_guest_markers_require_scoped_replacement_evidence() -> None:
+    ordinary = (
+        "LOCAL_EDGE_SESSION=reused\n"
+        "SCREENSHOT_SOURCE_FIELD=development_attachment\n"
+        "SCREENSHOT_PACKAGE=verified\n"
+        "APP_IDENTITY=verified\n"
+        "IPHONE_69_DISPLAY=selected\n"
+        "SCREENSHOT_UPLOAD=verified_3_of_10\n"
+        "UTM_19=verified\n"
+    )
+    with pytest.raises(utm_image.UTMImageError, match="GUEST_REPLACEMENT_MARKER_MISSING"):
+        utm_image._guest_markers(ordinary, replace_existing=True)
+
+    replacement = ordinary.replace(
+        "SCREENSHOT_PACKAGE=verified\n",
+        "SCREENSHOT_PACKAGE=verified\n"
+        "SCREENSHOT_PREUPLOAD_CLASSIFICATION=nonempty_authorized\n"
+        "SCREENSHOT_REPLACEMENT=verified\n",
+    )
+    markers = utm_image._guest_markers(replacement, replace_existing=True)
+    assert "SCREENSHOT_REPLACEMENT=verified" in markers
+
+
+def test_guest_replacement_is_scoped_and_never_submits_for_review() -> None:
+    source = GUEST_SCRIPT.read_text(encoding="utf-8")
+    for required in (
+        "replaceExisting",
+        "clearExistingScreenshots",
+        "SCREENSHOT_PREUPLOAD_CLASSIFICATION=nonempty_authorized",
+        "SCREENSHOT_REPLACEMENT=verified",
+        "development_attachment",
+    ):
+        assert required in source
+    assert "Submit for Review" not in source
+
+
+def test_guest_self_test_verifies_exact_69_display_dimension_fallback() -> None:
+    result = subprocess.run(
+        ["node", str(GUEST_SCRIPT), "--self-test"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "DISPLAY_DIMENSION_FALLBACK_SELF_TEST=verified" in result.stdout
+
+
+def test_run_force_development_replacement_selects_attachment_and_protected_payload(
+    monkeypatch,
+) -> None:
+    api = DirectNotion()
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(utm_image, "optional_setting", lambda _name: "Host")
+    monkeypatch.setattr(utm_image, "resolve_direct_context", lambda **_kwargs: _direct_context())
+    monkeypatch.setattr(utm_image, "sync_utm_image_guest_file", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        utm_image,
+        "_source_result",
+        lambda *_args, **_kwargs: pytest.fail("beauty source must not be selected"),
+    )
+    monkeypatch.setattr(
+        utm_image,
+        "_development_source_result",
+        lambda app_name, context_id: observed.update(
+            {"source_context": (app_name, context_id)}
+        ) or {
+            "kind": "attachment",
+            "source_field": "研发截图",
+            "app_name_sha256": hashlib.sha256(app_name.encode()).hexdigest(),
+            "path": "/tmp/development.zip",
+            "sha256": "a" * 64,
+            "size": 10,
+            "source_identity_sha256": "development",
+        },
+    )
+    monkeypatch.setattr(
+        utm_image,
+        "guest_source_payload",
+        lambda source, *_args, **_kwargs: {
+            "kind": source["kind"],
+            "sourceField": source["source_field"],
+        },
+    )
+
+    def guest_runner(**kwargs):
+        observed["payload"] = dict(kwargs["payload"])
+        return (
+            "LOCAL_EDGE_SESSION=reused",
+            "SCREENSHOT_SOURCE_FIELD=development_attachment",
+            "SCREENSHOT_PACKAGE=verified",
+            "SCREENSHOT_PREUPLOAD_CLASSIFICATION=nonempty_authorized",
+            "SCREENSHOT_REPLACEMENT=verified",
+            "APP_IDENTITY=verified",
+            "IPHONE_69_DISPLAY=selected",
+            "SCREENSHOT_UPLOAD=verified_3_of_10",
+            "UTM_19=verified",
+        )
+
+    monkeypatch.setattr(utm_image, "run_guest_script", guest_runner)
+    args = SimpleNamespace(
+        run_id=None,
+        page_title="Demo-user",
+        vm_name="user",
+        vm_ip="192.0.2.10",
+        vm_user="user",
+        asset_app_name=None,
+        force_development=True,
+        replace_existing=True,
+    )
+
+    assert utm_image.run(args, api=api) == 0
+    assert observed["source_context"] == ("Demo", DIRECT_CONTEXT_ID)
+    assert observed["payload"]["source"]["sourceField"] == "研发截图"
+    assert observed["payload"]["replaceExisting"] is True
 
 
 def test_main_prints_clean_start_result_and_elapsed(monkeypatch, capsys) -> None:
@@ -326,10 +475,10 @@ def test_main_prints_clean_start_result_and_elapsed(monkeypatch, capsys) -> None
     ticks = iter((200.0, 215.0))
     monkeypatch.setattr(utm_image.time, "monotonic", lambda: next(ticks))
     assert utm_image.main([
-        "--page-title", "Demo-abcd",
-        "--vm-name", "abcd",
+        "--page-title", "Demo-user",
+        "--vm-name", "user",
         "--vm-ip", "192.0.2.10",
-        "--vm-user", "abcd",
+        "--vm-user", "user",
     ]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert lines == [
@@ -346,10 +495,10 @@ def test_main_preserves_the_complete_actual_error(monkeypatch, capsys) -> None:
         lambda args: (_ for _ in ()).throw(utm_image.UTMImageError(detail)),
     )
     assert utm_image.main([
-        "--page-title", "Demo-abcd",
-        "--vm-name", "abcd",
+        "--page-title", "Demo-user",
+        "--vm-name", "user",
         "--vm-ip", "192.0.2.10",
-        "--vm-user", "abcd",
+        "--vm-user", "user",
     ]) == 1
     captured = capsys.readouterr()
     assert captured.err.splitlines() == [f"执行报错：utm-image；{detail}"]
@@ -364,9 +513,9 @@ def test_preflight_failure_prevents_guest_execution() -> None:
 
     with pytest.raises(utm_image.UTMImageError, match="GUEST_PREFLIGHT_FAILED"):
         utm_image.run_guest_script(
-            vm_name="abcd",
+            vm_name="user",
             vm_ip="192.0.2.10",
-            vm_user="abcd",
+            vm_user="user",
             payload={"source": {"url": "https://c.wss.ink/f/secret"}},
             runner=runner,
             password_env={"SSH_ASKPASS_REQUIRE": "force"},
@@ -411,9 +560,9 @@ def test_guest_execution_failure_preserves_only_safe_guest_error_marker(
         match=r"^GUEST_EXECUTION_FAILED:SCREENSHOT_APP_PAGE_COUNT=0$",
     ):
         utm_image.run_guest_script(
-            vm_name="abcd",
+            vm_name="user",
             vm_ip="192.0.2.10",
-            vm_user="abcd",
+            vm_user="user",
             payload={"source": {}},
             runner=runner,
             password_env={"SSH_ASKPASS_REQUIRE": "force"},
@@ -422,7 +571,7 @@ def test_guest_execution_failure_preserves_only_safe_guest_error_marker(
     assert utm_image.GUEST_DIAGNOSTIC_PATH.stat().st_mode & 0o777 == 0o600
 
 
-DIRECT_CONTEXT_ID = "direct-v1-abcd-0123456789abcdef01234567"
+DIRECT_CONTEXT_ID = "direct-v1-user-0123456789abcdef01234567"
 
 
 class DirectNotion:
@@ -447,11 +596,11 @@ def _direct_context() -> SimpleNamespace:
     return SimpleNamespace(
         context_id=DIRECT_CONTEXT_ID,
         parent_title="Host",
-        page_title="Demo-abcd",
+        page_title="Demo-user",
         app_name="Demo",
-        vm_name="abcd",
+        vm_name="user",
         vm_ip="192.0.2.10",
-        vm_user="abcd",
+        vm_user="user",
     )
 
 
@@ -475,6 +624,12 @@ def test_guest_classifies_rejected_dimensions_without_reupload() -> None:
     source = GUEST_SCRIPT.read_text(encoding="utf-8")
     assert "screenshotDimensionsError" in source
     assert "screenshot dimensions are wrong" in source
+
+
+def test_guest_classifies_an_expired_wenshushu_task_for_host_fallback() -> None:
+    source = GUEST_SCRIPT.read_text(encoding="utf-8")
+    assert "WENSHUSHU_TASK_EXPIRED" in source
+    assert "任务已过期销毁" in source
 
 
 def test_guest_selects_only_the_display_panel_file_input() -> None:
@@ -506,8 +661,17 @@ def test_direct_mode_uses_shared_context_id_without_feishu_run_session_or_card(
     observed: dict[str, object] = {}
     monkeypatch.setattr(
         utm_image,
+        "optional_setting",
+        lambda name: "Host" if name == "SUBMISSION_HOST_MACHINE" else "",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        utm_image,
         "resolve_direct_context",
-        lambda **kwargs: _direct_context(),
+        lambda **kwargs: observed.update(
+            {"direct_parent_title": kwargs.get("parent_title")}
+        )
+        or _direct_context(),
         raising=False,
     )
     monkeypatch.setattr(utm_image, "_verify_vm_started", lambda *args, **kwargs: None)
@@ -553,13 +717,14 @@ def test_direct_mode_uses_shared_context_id_without_feishu_run_session_or_card(
     monkeypatch.setattr(utm_image, "run_guest_script", guest_runner)
     args = SimpleNamespace(
         run_id=None,
-        page_title="Demo-abcd",
-        vm_name="abcd",
+        page_title="Demo-user",
+        vm_name="user",
         vm_ip="192.0.2.10",
-        vm_user="abcd",
+        vm_user="user",
     )
     assert utm_image.run(args, api=api) == 0
     assert observed["source_context"] == ("Demo", DIRECT_CONTEXT_ID)
+    assert observed["direct_parent_title"] == "Host"
     assert observed["guest_payload"]["runId"] == DIRECT_CONTEXT_ID
     assert observed["guest_payload"]["appName"] == "Demo"
     assert ("verify-parent", "Host") in api.calls
@@ -614,13 +779,86 @@ def test_run_mode_preserves_owned_feishu_run_id_as_the_existing_namespace(
     args = SimpleNamespace(
         run_id="run-12345678",
         page_title=None,
-        vm_name="abcd",
+        vm_name="user",
         vm_ip="192.0.2.10",
-        vm_user="abcd",
+        vm_user="user",
     )
     assert utm_image.run(args, api=api) == 0
     assert observed["source_context"] == ("Demo", "run-12345678")
     assert observed["guest_payload"]["runId"] == "run-12345678"
+
+
+def test_run_recovers_an_expired_share_with_the_same_records_development_attachment(
+    monkeypatch, capsys
+) -> None:
+    api = DirectNotion()
+    sources: list[str] = []
+    monkeypatch.setattr(utm_image, "optional_setting", lambda _name: "Host")
+    monkeypatch.setattr(utm_image, "resolve_direct_context", lambda **_kwargs: _direct_context())
+    monkeypatch.setattr(utm_image, "sync_utm_image_guest_file", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        utm_image,
+        "_source_result",
+        lambda app_name, context_id: {
+            "kind": "share_url",
+            "source_field": "美女截图 链接",
+            "app_name_sha256": hashlib.sha256(app_name.encode()).hexdigest(),
+            "url": "https://c.wss.ink/f/expired",
+            "source_identity_sha256": "share",
+        },
+    )
+    monkeypatch.setattr(
+        utm_image,
+        "_development_source_result",
+        lambda app_name, context_id: {
+            "kind": "attachment",
+            "source_field": "研发截图",
+            "app_name_sha256": hashlib.sha256(app_name.encode()).hexdigest(),
+            "path": "/tmp/development.zip",
+            "sha256": "a" * 64,
+            "size": 10,
+            "source_identity_sha256": "development",
+        },
+    )
+    monkeypatch.setattr(
+        utm_image,
+        "guest_source_payload",
+        lambda source, *args, **kwargs: {
+            "kind": source["kind"],
+            "sourceField": source["source_field"],
+        },
+    )
+
+    def guest_runner(**kwargs):
+        kind = kwargs["payload"]["source"]["kind"]
+        sources.append(kind)
+        if kind == "share_url":
+            raise utm_image.UTMImageError(
+                "GUEST_EXECUTION_FAILED:WENSHUSHU_TASK_EXPIRED"
+            )
+        return (
+            "LOCAL_EDGE_SESSION=reused",
+            "SCREENSHOT_SOURCE_FIELD=development_attachment",
+            "SCREENSHOT_PACKAGE=verified",
+            "APP_IDENTITY=verified",
+            "IPHONE_69_DISPLAY=selected",
+            "SCREENSHOT_UPLOAD=verified_3_of_10",
+            "UTM_19=verified",
+        )
+
+    monkeypatch.setattr(utm_image, "run_guest_script", guest_runner)
+    args = SimpleNamespace(
+        run_id=None,
+        page_title="Demo-user",
+        vm_name="user",
+        vm_ip="192.0.2.10",
+        vm_user="user",
+        asset_app_name=None,
+    )
+
+    assert utm_image.run(args, api=api) == 0
+    assert sources == ["share_url", "attachment"]
+    assert "UTM_19=verified" in capsys.readouterr().out
 
 
 def test_direct_mode_rejects_notion_app_mismatch_before_source_or_guest_side_effect(
@@ -646,10 +884,10 @@ def test_direct_mode_rejects_notion_app_mismatch_before_source_or_guest_side_eff
     )
     args = SimpleNamespace(
         run_id=None,
-        page_title="Demo-abcd",
-        vm_name="abcd",
+        page_title="Demo-user",
+        vm_name="user",
         vm_ip="192.0.2.10",
-        vm_user="abcd",
+        vm_user="user",
     )
     with pytest.raises(utm_image.UTMImageError, match="NOTION_PAGE_APP_MISMATCH"):
         utm_image.run(args, api=api)

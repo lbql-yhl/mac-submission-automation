@@ -28,6 +28,7 @@ from scripts.ssh_password import password_environment, ssh_args
 from scripts.utm_business_delivery import sync_business_guest_files
 from scripts.utm_direct_context import resolve_direct_context
 from services.feishu_bot import find_run, load_config, run_host_machine
+from services.host_config import optional_setting
 from services.project_paths import SHARED_DIR
 
 GUEST_DIR_TEMPLATE = "/Users/{vm_user}/Downloads/AppleAccountScriptsBackup"
@@ -470,6 +471,7 @@ def run(
     direct_mode = not getattr(args, "run_id", None)
     if direct_mode:
         context = resolve_direct_context(
+            parent_title=optional_setting("SUBMISSION_HOST_MACHINE"),
             page_title=str(getattr(args, "page_title", "") or ""),
             vm_name=args.vm_name,
             vm_ip=args.vm_ip,

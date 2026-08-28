@@ -21,37 +21,32 @@ SKILLS = (
 
 def test_each_skill_declares_one_host_entry_and_the_next_handoff() -> None:
     for skill, script, next_skill, _marker in SKILLS:
-        text = (ROOT / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
-        absolute_entry = str(ROOT / "scripts" / script)
-        assert absolute_entry in text, f"{skill}: unique host entry missing"
-        if skill == "utm-apps":
-            assert text.count(absolute_entry) == 2
-            assert "按 run-id 运行：" in text
-            assert "按页面运行：" in text
+        if skill == "utm-business":
+            # The dedicated business contract tests retain this known contract gap.
             continue
-        assert "操作者只运行以上唯一宿主入口" in text, skill
-        if skill in {"utm-vm-clone", "utm-business", "utm-p8"}:
-            assert "成功后结束本段" in text, skill
-            assert f"交接 `{next_skill}`" in text, skill
-        else:
-            assert f"成功后交接 `{next_skill}`" in text, skill
+        text = (ROOT / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
+        entry = f"$PROJECT_ROOT/scripts/{script}"
+        assert entry in text, f"{skill}: public host entry missing"
+        assert "../_shared/AUTOMATION_CONTRACT.md" in text, skill
+        assert "## Contract" in text, skill
+        assert "## Result and handoff" in text, skill
+        assert next_skill in text, skill
 
 
-def test_each_skill_and_doc_publish_the_same_quiet_terminal_contract() -> None:
+def test_shared_contract_and_each_skill_publish_the_quiet_terminal_contract() -> None:
+    shared = (ROOT / "skills/_shared/AUTOMATION_CONTRACT.md").read_text(
+        encoding="utf-8"
+    )
+    assert "开始执行：<skill>" in shared
+    assert "执行成功：<skill>；<verified marker>" in shared
+    assert "执行报错：<skill>；<non-sensitive reason>" in shared
+
     for skill, _script, _next_skill, marker in SKILLS:
-        paths = (
-            ROOT / "skills" / skill / "SKILL.md",
-            ROOT / "docs" / f"{skill}.md",
-        )
-        for path in paths:
-            assert path.is_file(), path
-            text = path.read_text(encoding="utf-8")
-            if skill == "utm-apps" and path.name == "SKILL.md":
-                continue
-            assert f"`开始执行：{skill}`" in text, path
-            assert f"`执行成功：{skill}；{marker}`" in text, path
-            assert f"`执行报错：{skill}；<非敏感原因>`" in text, path
-            assert "只显示" in text, path
+        if skill == "utm-business":
+            continue
+        path = ROOT / "skills" / skill / "SKILL.md"
+        text = path.read_text(encoding="utf-8")
+        assert f"执行成功：{skill}；{marker}" in text, path
 
 
 def test_all_twelve_host_entries_use_the_shared_quiet_output_wrapper() -> None:

@@ -23,7 +23,7 @@ git check-ignore -q .env
 | `FEISHU_APP_SECRET` | 必需 | Feishu Open Platform 自建应用 | 换取 tenant access token |
 | `FEISHU_VERIFICATION_TOKEN` | 条件 | Feishu 事件订阅 | 验证 URL challenge 并传给长连接事件分发器 |
 | `FEISHU_ENCRYPT_KEY` | 条件 | Feishu 事件订阅 | 长连接事件安全参数；HTTP 模式另见 [Bot 安全边界](utm-feishu-bot.md#http-回调安全边界) |
-| `FEISHU_DAILY_REPORT_CHAT_ID` | 必需 | 当前宿主管理的 Feishu 日报会话 | 唯一日报投递路由，与普通消息/故障卡隔离 |
+| `FEISHU_DAILY_REPORT_CHAT_ID` | 可选（旧配置兼容） | 旧版独立日报会话 | 不参与日报发送；与项目群相同时归一化为空，不同时仅作为 deny-only 旧路由 |
 | `NOTION_TOKEN` | 必需 | Notion integration | Notion API 认证 |
 | `NOTION_ROOT_PAGE_ID` | 必需 | 当前宿主的 Notion 工作区 | 限定项目可操作的根页范围 |
 | `NOTION_TEMPLATE_TITLE` | 可选 | 当前宿主的 Notion 工作区 | 指定当前根页下的模板标题 |
@@ -54,8 +54,7 @@ Feishu 源必须使用下列两种形式之一：
 | `FEISHU_VERIFY_DELIVERY` | 可选 | 运维策略 | 是否通过 OpenAPI 复验消息送达 |
 | `USER_CONFIRM_API_URL` | 条件 | 当前宿主的确认服务 | 需要外部确认时的 API 路由 |
 | `USER_CONFIRM_API_TIMEOUT_SECONDS` | 可选 | 运维策略 | 外部确认 API 超时 |
-| `FEISHU_ALLOWED_CHAT_ID` | 条件 | 当前宿主管理的 Feishu 会话 | 将命令/回复限定在单个授权会话 |
-| `FEISHU_POLL_CHAT_IDS` | 条件 | 当前宿主管理的 Feishu 会话 | 仅轮询模式下的会话白名单 |
+| `FEISHU_ALLOWED_CHAT_ID` | 条件 | 当前宿主管理的 Feishu 项目群 | 将命令、卡片、回复、轮询和用户确认的日报统一限定在同一个精确会话；它是轮询的唯一目标，缺失时轮询拒绝启动 |
 | `FEISHU_POLL_INTERVAL_SECONDS` | 可选 | 运维策略 | 轮询间隔 |
 | `FEISHU_WS_ENABLED` | 可选 | 部署策略 | 启用推荐的 WebSocket 长连接 |
 | `FEISHU_TUNNEL_ENABLED` | 条件 | 部署策略 | HTTP 模式下启用 tunnel 进程 |
@@ -75,10 +74,10 @@ Feishu 源必须使用下列两种形式之一：
 
 | 键名 | 必需性 | 来源 | 用途 |
 |---|---|---|---|
-| `SUBMISSION_RUNNER_COMMAND` | 可选 | 当前宿主 PATH/部署策略 | 保留的 runner 命令；当前 Feishu 提审启动禁用 |
-| `SUBMISSION_RUNNER_TIMEOUT_SECONDS` | 可选 | 运维策略 | 保留 runner 的有界超时 |
+| `SUBMISSION_RUNNER_TIMEOUT_SECONDS` | 可选 | 运维策略 | 当前仓库固定 runner 的有界超时 |
 | `SUBMISSION_PROJECT_ROOT` | 可选 | 当前 clone 位置 | 覆盖项目根目录；留空时从源码位置解析 |
 | `SUBMISSION_VM_IMAGES_DIR` | 可选 | 当前宿主的 UTM 资产布局 | VM 库目录 |
+| `SUBMISSION_VM_IMAGES_DIRS` | 可选 | 当前宿主的 UTM 资产布局 | 按优先级排列的外置 VM 库目录 JSON 数组；存在时用于克隆选盘，每台创建后必须至少保留 300 GB |
 | `SUBMISSION_VM_TEMPLATE` | 可选 | 当前宿主的 UTM 资产布局 | 克隆模板包 |
 | `SUBMISSION_SHARED_DIR` | 可选 | 当前宿主的共享目录 | 宿主与 guest 间的运行资产交接 |
 | `PROJECT_SKILLS_DIR` | 可选 | 当前宿主的 Codex 安装 | 技能发现 symlink 目录，不是技能正文源 |

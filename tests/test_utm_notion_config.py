@@ -37,6 +37,44 @@ def valid_runtime_settings() -> dict[str, str]:
     }
 
 
+def test_public_feishu_source_resolver_uses_secure_project_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = valid_runtime_settings()
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(
+        utm_notion,
+        "host_settings_snapshot",
+        lambda **kwargs: seen.update({"snapshot_kwargs": kwargs})
+        or MappingProxyType(settings),
+    )
+    monkeypatch.setattr(
+        utm_notion,
+        "resolve_utm_notion_source",
+        lambda token, configured: seen.update(
+            {"token": token, "configured": configured}
+        )
+        or (FIXTURE_APP_IDENTIFIER, FIXTURE_TABLE_IDENTIFIER, FIXTURE_VIEW_IDENTIFIER),
+    )
+
+    assert utm_notion.resolve_feishu_source("tenant-token") == (
+        FIXTURE_APP_IDENTIFIER,
+        FIXTURE_TABLE_IDENTIFIER,
+        FIXTURE_VIEW_IDENTIFIER,
+    )
+    assert seen["token"] == "tenant-token"
+    assert seen["configured"] == (
+        "direct",
+        FIXTURE_APP_IDENTIFIER,
+        FIXTURE_TABLE_IDENTIFIER,
+        FIXTURE_VIEW_IDENTIFIER,
+    )
+    assert seen["snapshot_kwargs"] == {
+        "env_path": utm_notion.PROJECT_ROOT / ".env",
+        "file_override_keys": utm_notion.UTM_NOTION_FEISHU_ENV_KEYS,
+    }
+
+
 @pytest.fixture(autouse=True)
 def isolate_source_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in utm_notion_source.SOURCE_ENV_KEYS:

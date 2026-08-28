@@ -258,15 +258,6 @@ def ax_actions(ax: Any, element: Any) -> list[str]:
         return []
 
 
-def ax_set_value(ax: Any, element: Any, value: Any) -> None:
-    """Set a semantic AX value only when the control accepts the write."""
-    # The setter is authoritative and returns an AX error when a control is
-    # not writable; no coordinate or keyboard fallback is permitted.
-    error = ax.AXUIElementSetAttributeValue(element, ax.kAXValueAttribute, value)
-    if error != ax.kAXErrorSuccess:
-        raise RuntimeError(f"AXValue set failed: {error}")
-
-
 def live_labeled_nodes(
     ax: Any,
     root: Any,
@@ -343,16 +334,6 @@ def reacquire_target(ax: Any, pid: int, vm_name: str) -> tuple[Any, list[Any]]:
     return target_window(ax, pid, vm_name)
 
 
-def find_ax(ax: Any, root: Any, text: str, *, exact: bool = True) -> list[Any]:
-    wanted = text.casefold()
-    found = []
-    for element in ax_tree(ax, root):
-        fields = ax_text(ax, element)
-        if any((field.casefold() == wanted if exact else wanted in field.casefold()) for field in fields if field):
-            found.append(element)
-    return found
-
-
 def press_ax(ax: Any, element: Any) -> None:
     enabled = _copy(ax, element, ax.kAXEnabledAttribute)
     if enabled is False:
@@ -397,16 +378,6 @@ def utmctl_status(vm_name: str) -> str:
         detail = getattr(error, "output", "") or str(error)
         raise RuntimeError(f"utmctl status failed for {vm_name}: {detail.strip()}") from error
     return parse_utm_status(output)
-
-
-def require_target_running(vm_name: str, *, sleep_fn: Any = time.sleep) -> list[str]:
-    """Perform two independent reads before permitting any GUI write."""
-    statuses = [utmctl_status(vm_name)]
-    sleep_fn(WAIT_SECONDS)
-    statuses.append(utmctl_status(vm_name))
-    if not running_status_verified(statuses):
-        raise RuntimeError(f"target VM is not already running: {statuses!r}")
-    return statuses
 
 
 def require_target_stopped(vm_name: str, *, sleep_fn: Any = time.sleep) -> list[str]:
@@ -491,25 +462,15 @@ def select_exact_vm_card(ax: Any, pid: int, vm_name: str) -> tuple[Any, list[Any
         raise AXTargetError(f"VM card count={count} name={vm_name!r} titles={titles}")
     main, cards = card_windows[0]
     row = _ancestor_with_role(ax, cards[0], {"AXRow"})
-    if row is None:
-        pressable = _ancestor_with_action(ax, cards[0], ax.kAXPressAction)
-        if pressable is not None:
-            press_ax(ax, pressable)
-        else:
-            selectable = _ancestor_with_settable_attribute(
-                ax, cards[0], ax.kAXSelectedAttribute
-            )
-            if selectable is not None:
-                error = ax.AXUIElementSetAttributeValue(
-                    selectable, ax.kAXSelectedAttribute, True
-                )
-                if error != ax.kAXErrorSuccess:
-                    raise RuntimeError(f"VM card selection failed: {error}")
-            else:
-                click_ax_element(cards[0])
-        wait_and_reacquire()
-    elif _copy(ax, row, ax.kAXSelectedAttribute) is not True:
-        error = ax.AXUIElementSetAttributeValue(row, ax.kAXSelectedAttribute, True)
+    selectable = row or _ancestor_with_settable_attribute(
+        ax, cards[0], ax.kAXSelectedAttribute
+    )
+    if selectable is None:
+        raise AXTargetError("VM card is not safely selectable")
+    if _copy(ax, selectable, ax.kAXSelectedAttribute) is not True:
+        error = ax.AXUIElementSetAttributeValue(
+            selectable, ax.kAXSelectedAttribute, True
+        )
         if error != ax.kAXErrorSuccess:
             raise RuntimeError(f"VM card selection failed: {error}")
         wait_and_reacquire()

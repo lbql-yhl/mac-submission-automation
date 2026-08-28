@@ -102,6 +102,80 @@ def test_utm_path_paste_waits_before_clearing_clipboard(monkeypatch) -> None:
     assert events == ["copy", "paste", "wait", "clear"]
 
 
+def test_vm_card_selection_never_presses_or_clicks_the_card(monkeypatch) -> None:
+    from scripts import utm_1_ax
+
+    main_window = object()
+    target_window = object()
+    card = object()
+    selectable = object()
+    selected_values: list[tuple[object, object, bool]] = []
+
+    class AX:
+        kAXTitleAttribute = object()
+        kAXSelectedAttribute = object()
+        kAXPressAction = object()
+        kAXErrorSuccess = 0
+
+        @staticmethod
+        def AXUIElementSetAttributeValue(element, attribute, value):
+            selected_values.append((element, attribute, value))
+            return 0
+
+    ax = AX()
+    monkeypatch.setattr(utm_1_ax, "app_windows", lambda _ax, _pid: [main_window])
+    monkeypatch.setattr(
+        utm_1_ax,
+        "_copy",
+        lambda _ax, element, attribute: (
+            "UTM" if element is main_window and attribute is ax.kAXTitleAttribute
+            else False if element is selectable and attribute is ax.kAXSelectedAttribute
+            else None
+        ),
+    )
+    monkeypatch.setattr(utm_1_ax, "ax_tree", lambda _ax, _window: [card])
+    monkeypatch.setattr(
+        utm_1_ax, "ax_role", lambda _ax, element: "AXStaticText" if element is card else ""
+    )
+    monkeypatch.setattr(
+        utm_1_ax,
+        "ax_text",
+        lambda _ax, element: ("", "abcd", "", "") if element is card else ("", "", "", ""),
+    )
+    monkeypatch.setattr(utm_1_ax, "_ancestor_with_role", lambda *_args: None)
+    monkeypatch.setattr(
+        utm_1_ax,
+        "_ancestor_with_settable_attribute",
+        lambda *_args: selectable,
+    )
+    monkeypatch.setattr(
+        utm_1_ax,
+        "_ancestor_with_action",
+        lambda *_args: pytest.fail("VM card selection must not use AXPress"),
+    )
+    monkeypatch.setattr(
+        utm_1_ax,
+        "press_ax",
+        lambda *_args: pytest.fail("VM card selection must not press the card"),
+    )
+    monkeypatch.setattr(
+        utm_1_ax,
+        "click_ax_element",
+        lambda *_args: pytest.fail("VM card selection must not click the card"),
+    )
+    monkeypatch.setattr(utm_1_ax, "wait_and_reacquire", lambda: None)
+    monkeypatch.setattr(
+        utm_1_ax,
+        "target_window",
+        lambda _ax, _pid, _name: (target_window, []),
+    )
+
+    actual, _nodes = utm_1_ax.select_exact_vm_card(ax, 123, "abcd")
+
+    assert actual is target_window
+    assert selected_values == [(selectable, ax.kAXSelectedAttribute, True)]
+
+
 def main() -> None:
     assert is_valid_vm_name("dxgg")
     assert not is_valid_vm_name("DXGG")
@@ -110,10 +184,9 @@ def main() -> None:
     assert exact_vm_card_nodes([{"role": "AXStaticText", "value": "yhlw"}], "qwer") == []
     from scripts import utm_1_ax
     selection_source = inspect.getsource(utm_1_ax.select_exact_vm_card)
-    assert "_ancestor_with_action(ax, cards[0], ax.kAXPressAction)" in selection_source
-    assert "press_ax(ax, pressable)" in selection_source
     assert "_ancestor_with_settable_attribute(" in selection_source
-    assert "click_ax_element(cards[0])" in selection_source
+    assert "_ancestor_with_action(ax, cards[0], ax.kAXPressAction)" not in selection_source
+    assert "click_ax_element(cards[0])" not in selection_source
     run_source = inspect.getsource(utm_1_ax.run)
     assert 'subprocess.run(["open", str(bundle)], check=True)' in run_source
     assert unique_ax_mac_value(

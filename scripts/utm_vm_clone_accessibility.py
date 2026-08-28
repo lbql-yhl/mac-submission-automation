@@ -349,7 +349,14 @@ def _ssh_arguments(user: str, ip: str, remote_command: str) -> list[str]:
     ]
 
 
-def run_ssh(user: str, ip: str, remote_command: str, *, timeout: float = 45.0) -> str:
+def run_ssh(
+    user: str,
+    ip: str,
+    remote_command: str,
+    *,
+    timeout: float = 45.0,
+    failure_code: str = "ssh_command_failed",
+) -> str:
     try:
         result = subprocess.run(
             _ssh_arguments(user, ip, remote_command),
@@ -365,7 +372,7 @@ def run_ssh(user: str, ip: str, remote_command: str, *, timeout: float = 45.0) -
     except OSError as error:
         raise UTMAError("ssh_process_failed") from error
     if result.returncode != 0:
-        raise UTMAError("ssh_command_failed")
+        raise UTMAError(failure_code)
     return redact_ssh_transcript(result.stdout.encode("utf-8"))
 
 
@@ -825,6 +832,22 @@ def _send_key(window: UTMWindow, key_code: int) -> None:
         Quartz.CGEventPostToPid(window.pid, event)
 
 
+def _wake_guest_display(window: UTMWindow, vm_name: str) -> UTMWindow:
+    refreshed = lock_utm_window(vm_name)
+    if (
+        refreshed.pid != window.pid
+        or refreshed.window_id != window.window_id
+    ):
+        raise UTMAError("utm_wake_target_changed")
+
+    import Quartz
+
+    for pressed in (True, False):
+        event = Quartz.CGEventCreateKeyboardEvent(None, 53, pressed)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+    return refreshed
+
+
 def _crop_around(point: tuple[float, float], image: Image.Image) -> Image.Image:
     x, y = point
     box = (
@@ -858,11 +881,74 @@ def _snapshot(
 
 
 def _accessibility_page(observations: list[OCRObservation]) -> None:
-    matches = [
-        item for item in observations if "accessibility" in item.text.casefold()
-    ]
-    if len(matches) < 1:
+    if not _has_accessibility_page(observations):
         raise UTMAError("accessibility_page_not_verified")
+
+
+def _has_accessibility_page(observations: list[OCRObservation]) -> bool:
+    return any("accessibility" in item.text.casefold() for item in observations)
+
+
+def _lock_screen_password_prompt(
+    observations: list[OCRObservation], vm_name: str
+) -> OCRObservation | None:
+    password_text = _normalize_text("Enter Password")
+    user_text = _normalize_text(vm_name)
+    prompts = [
+        item
+        for item in observations
+        if _normalize_text(item.text) == password_text
+    ]
+    users = [
+        item for item in observations if _normalize_text(item.text) == user_text
+    ]
+    pairs = [
+        (prompt, user)
+        for prompt in prompts
+        for user in users
+        if 0 < prompt.box.center[1] - user.box.center[1] <= 140
+        and abs(prompt.box.center[0] - user.box.center[0]) <= 180
+    ]
+    if len(pairs) > 1:
+        raise UTMAError("guest_lock_screen_ambiguous")
+    if len(pairs) == 1:
+        return pairs[0][0]
+    return None
+
+
+def recover_accessibility_page(
+    runtime_dir: Path,
+    counter: list[int],
+    window: UTMWindow,
+    ocr: VisionOCR,
+    vm_name: str,
+    ip: str,
+    image: Image.Image,
+    observations: list[OCRObservation],
+) -> tuple[Image.Image, list[OCRObservation]]:
+    if _has_accessibility_page(observations):
+        return image, observations
+
+    window = _wake_guest_display(window, vm_name)
+    time.sleep(WAIT_SECONDS)
+    counter[0] += 1
+    _, image, observations = _snapshot(runtime_dir, counter[0], window, ocr)
+    password_prompt = _lock_screen_password_prompt(observations, vm_name)
+    if password_prompt is not None:
+        _click(window, password_prompt.box.center, image.size)
+        _send_password(window)
+        _send_key(window, 36)
+        time.sleep(WAIT_SECONDS)
+        counter[0] += 1
+        _, image, observations = _snapshot(runtime_dir, counter[0], window, ocr)
+        if _lock_screen_password_prompt(observations, vm_name) is not None:
+            raise UTMAError("guest_unlock_failed")
+
+    open_accessibility_settings(vm_name, ip)
+    time.sleep(WAIT_SECONDS)
+    counter[0] += 1
+    _, image, observations = _snapshot(runtime_dir, counter[0], window, ocr)
+    return image, observations
 
 
 def cancel_stale_file_picker(
@@ -874,6 +960,23 @@ def cancel_stale_file_picker(
     opened = [item for item in observations if _normalize_text(item.text) == "open"]
     if len(cancel) != 1 or len(opened) != 1:
         return False
+    _send_key(window, 53)
+    return True
+
+
+def dismiss_clash_local_network_prompt(
+    window: UTMWindow,
+    observations: list[OCRObservation],
+) -> bool:
+    combined = " ".join(item.text for item in observations).casefold()
+    if "clash verge" not in combined or "local network" not in combined:
+        return False
+    choices = [
+        re.sub(r"[^a-z]", "", item.text.casefold())
+        for item in observations
+    ]
+    if choices.count("dontallow") != 1 or choices.count("allow") != 1:
+        raise UTMAError("clash_local_network_prompt_ambiguous")
     _send_key(window, 53)
     return True
 
@@ -969,7 +1072,12 @@ def ssh_accessibility_probe_source() -> str:
 def verify_ssh_accessibility(vm_name: str, ip: str) -> None:
     source = ssh_accessibility_probe_source()
     command = f"/usr/bin/python3 -c {shlex.quote(source)}"
-    run_ssh(vm_name, ip, command)
+    run_ssh(
+        vm_name,
+        ip,
+        command,
+        failure_code="ssh_accessibility_probe_failed",
+    )
 
 
 def run(vm_name: str) -> None:
@@ -991,7 +1099,19 @@ def run(vm_name: str) -> None:
         ocr = VisionOCR(runtime_dir)
         counter = [1]
         _, image, observations = _snapshot(runtime_dir, counter[0], window, ocr)
-        if cancel_stale_file_picker(window, image, observations):
+        image, observations = recover_accessibility_page(
+            runtime_dir,
+            counter,
+            window,
+            ocr,
+            vm_name,
+            ip,
+            image,
+            observations,
+        )
+        if dismiss_clash_local_network_prompt(
+            window, observations
+        ) or cancel_stale_file_picker(window, image, observations):
             time.sleep(WAIT_SECONDS)
             open_accessibility_settings(vm_name, ip)
             time.sleep(WAIT_SECONDS)

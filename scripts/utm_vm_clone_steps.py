@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import os
 import plistlib
 import subprocess
@@ -468,7 +467,7 @@ def verify_delivery(args: argparse.Namespace, bundle: Path, config_uuid: str) ->
         target / image_name,
         "IMAGE_DELIVERY_MISMATCH",
     )
-    copied = legacy.verify_copy(args.vm_name, ip)
+    copied = legacy.copy_shared(args.vm_name, ip)
     return {"ip": ip, "copy": "verified", "source_entries": copied.get("SOURCE_ENTRIES")}
 
 
@@ -528,6 +527,22 @@ def run_desktop(vm_name: str) -> None:
     ip = legacy.resolve_ip(vm_name, config_mac)
     legacy.ensure_ssh(vm_name, ip)
     desktop = legacy._enter_guest_desktop(vm_name, ip, vm_name, bundle)
+    setup_completion = legacy.parse_key_values(
+        legacy.ssh_script(
+            vm_name,
+            ip,
+            legacy.complete_setup_assistant_script(),
+        )
+    )
+    if (
+        setup_completion.get("SETUP_ASSISTANT_ACTION")
+        != "guest_state_completed"
+        or setup_completion.get("SETUP_ASSISTANT") != "absent"
+    ):
+        raise legacy.PostCloneError(
+            f"SETUP_ASSISTANT_PREVENTION_FAILED={setup_completion}"
+        )
+    desktop.update(setup_completion)
     legacy.verify_admin(vm_name, ip)
     cleanup = legacy.ssh_sudo_script(vm_name, ip, legacy.demo_cleanup_script())
     if not legacy.demo_cleanup_verified(cleanup):
@@ -558,7 +573,17 @@ def run_settings(vm_name: str) -> None:
     context, completed = _prepare_step(vm_name, 5)
     args, bundle, config_uuid, _, state_path, state = context
     if completed:
-        evidence = verify_settings(args, bundle, config_uuid)
+        try:
+            evidence = verify_settings(args, bundle, config_uuid)
+        except legacy.PostCloneError as error:
+            if not str(error).startswith("SYSTEM_SETTINGS_NOT_PERMANENT="):
+                raise
+            ip = _running_ip(vm_name, bundle, config_uuid)
+            legacy.disable_screen_lock(vm_name, ip)
+            legacy.ssh_sudo_script(
+                vm_name, ip, legacy.settings_write_script()
+            )
+            evidence = verify_settings(args, bundle, config_uuid)
         _record_reverification(state_path, state, 5, evidence)
         return
 

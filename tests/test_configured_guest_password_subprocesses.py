@@ -69,7 +69,7 @@ def test_each_ssh_or_scp_call_gets_a_fresh_password_broker_environment(
     monkeypatch.setattr(module, "password_environment", password_environment)
     monkeypatch.setattr(module.subprocess, "run", run)
 
-    assert sync(tmp_path, vm_user="submission", vm_ip="192.0.2.10") == staged
+    assert sync(tmp_path, vm_user="abcd", vm_ip="192.0.2.10") == staged
     assert broker_calls == expected_calls
     assert len(environments) == expected_calls
     assert [env["SUBMISSION_SSH_ASKPASS_CAPABILITY"] for env in environments] == [

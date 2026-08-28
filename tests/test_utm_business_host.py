@@ -37,7 +37,7 @@ class FakeNotion:
         return title
 
     def read_field(self, title: str, section: str, label: str) -> str:
-        assert title in {"Demo-abcd", "SowSheet-igec"}
+        assert title in {"Demo-user", "SowSheet-igec"}
         return self.fields[(section, label)]
 
 
@@ -84,7 +84,7 @@ def test_host_payload_comes_from_notion_without_manual_business_values() -> None
     payload = utm_business.notion_payload(
         api,
         parent_title="海淋",
-        page_title="Demo-abcd",
+        page_title="Demo-user",
         sleeper=lambda _seconds: None,
     )
     assert payload["APP_NAME"] == "Demo"
@@ -104,8 +104,8 @@ def test_host_birthday_accepts_only_notion_year_month_day_order() -> None:
 
 
 def test_guest_execution_uses_only_playwright_and_ssh_stdin() -> None:
-    command = utm_business.guest_execution_command("abcd")
-    assert "/Users/example/Downloads/AppleAccountScriptsBackup/utm_business_one.mjs" in command
+    command = utm_business.guest_execution_command("user")
+    assert "/Users/user/Downloads/AppleAccountScriptsBackup/utm_business_one.mjs" in command
     assert "exec node" in command
     for forbidden in (
         "utm_business_guest.py",
@@ -118,13 +118,13 @@ def test_guest_execution_uses_only_playwright_and_ssh_stdin() -> None:
 
 def test_guest_preflight_reads_live_playwright_session_without_legacy_ledger() -> None:
     command = utm_business.guest_preflight_command(
-        "abcd", "direct-v1-abcd-0123456789abcdef01234567"
+        "user", "direct-v1-user-0123456789abcdef01234567"
     )
     for filename in (
         "session.mjs",
         "utm_business_one.mjs",
     ):
-        assert f"/Users/example/Downloads/AppleAccountScriptsBackup/{filename}" in command
+        assert f"/Users/user/Downloads/AppleAccountScriptsBackup/{filename}" in command
     assert "currentSessionIdentity" in command
     assert ".utm-apps-state" not in command
     assert "completed_stages" not in command
@@ -189,10 +189,18 @@ def test_direct_mode_uses_context_and_clean_step_output(monkeypatch, capsys) -> 
         app_name="SowSheet",
     )
     payloads: list[dict[str, object]] = []
+    resolved: dict[str, object] = {}
 
     monkeypatch.setattr(
-        utm_business, "resolve_direct_context", lambda **_kwargs: context
+        utm_business,
+        "optional_setting",
+        lambda name: "海淋" if name == "SUBMISSION_HOST_MACHINE" else "",
     )
+    def resolve_context(**kwargs):
+        resolved.update(kwargs)
+        return context
+
+    monkeypatch.setattr(utm_business, "resolve_direct_context", resolve_context)
     monkeypatch.setattr(
         utm_business,
         "_read_guest_session",
@@ -234,6 +242,7 @@ def test_direct_mode_uses_context_and_clean_step_output(monkeypatch, capsys) -> 
     ) == 0
     assert payloads[0]["CONTEXT_ID"] == direct_id
     assert payloads[0]["EXPECTED_EDGE_PID"] == 4242
+    assert resolved["parent_title"] == "海淋"
     output = capsys.readouterr().out
     assert "UTM-Business DSA步骤检查已存在，跳过" in output
     assert "UTM-Business Legal Entity步骤已完成" in output

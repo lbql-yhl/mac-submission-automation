@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.shared_operations import browser_clipboard_value  # noqa: E402
 from services.feishu_bot import (  # noqa: E402
     build_confirmation_card,
     create_or_update_confirmation,
@@ -45,30 +44,7 @@ def callback_payload(decision: str, decision_id: str) -> dict:
     }
 
 
-def main() -> None:
-    assert browser_clipboard_value("https://example.com/a?x=1") == "example.com/a?x=1"
-    assert browser_clipboard_value("http://example.com") == "example.com"
-    assert browser_clipboard_value("HTTPS://Example.COM/A?next=https://other.test/x") == (
-        "Example.COM/A?next=https://other.test/x"
-    )
-    assert browser_clipboard_value("example.com/fixed", allow_bare=True) == "example.com/fixed"
-    for invalid, allow_bare in (
-        ("example.com", False),
-        ("ftp://example.com", False),
-        (" https://example.com", False),
-        ("https://example.com\n", False),
-        ("https://", False),
-        ("https://https://example.com", False),
-        ("https://ftp://example.com", False),
-        ("https://example.com/\x00", False),
-    ):
-        try:
-            browser_clipboard_value(invalid, allow_bare=allow_bare)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(f"unsafe browser clipboard value accepted: {invalid!r}")
-
+def test_contract() -> None:
     run = {
         "id": "confirmation-test",
         "app_name": "Xrimo",
@@ -455,52 +431,8 @@ def main() -> None:
         ensure_decision_card_delivered(delivered, config)
     duplicate_send.assert_not_called()
 
-    root = Path(__file__).resolve().parents[1]
-    browser_url_commands = {
-        "utm-script": ("developer.apple.com/account/",),
-        "utm-23": ("appstoreconnect.apple.com",),
-        "utm-24": (
-            "appstoreconnect.apple.com/apps",
-            "pbpaste | python3 scripts/shared_operations.py browser-url",
-            "developer.apple.com/contact/app-store/?topic=expedite",
-        ),
-    }
-    for skill_name, sources in browser_url_commands.items():
-        skill = (root / "skills" / skill_name / "SKILL.md").read_text(encoding="utf-8")
-        assert "OP-BROWSER-URL-NO-SCHEME" in skill, skill_name
-        assert "python3 scripts/shared_operations.py browser-url" in skill, skill_name
-        for source in sources:
-            assert source in skill, f"{skill_name}: {source}"
-    combined_browser_skills = "\n".join(
-        (root / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
-        for name in browser_url_commands
-    )
-    for simplified_step in (
-        "新开一个 tab，在地址栏原生粘贴并打开",
-        "打开无协议地址 `developer.apple.com/account/`",
-        "打开或切换到 `developer.apple.com/account/`",
-    ):
-        assert simplified_step not in combined_browser_skills, simplified_step
-
-    utm_image = (root / "skills" / "utm-image" / "SKILL.md").read_text(encoding="utf-8")
-    assert "本技能取得飞书截图来源时不使用剪贴板或浏览器 URL 操作" in utm_image
-    assert "scripts/utm_image_source.py" in utm_image
-
-    for skill_name, script_name in {
-        "utm-apps": "utm_apps.py",
-    }.items():
-        skill = (root / "skills" / skill_name / "SKILL.md").read_text(encoding="utf-8")
-        assert "OP-APPLE-WEB-SCRIPT" in skill, skill_name
-        assert str(ROOT / "scripts" / script_name) in skill
-        assert "同一 PID" in skill
-
-    for contract_file in ("AGENTS.md", "README.md"):
-        contract = (root / contract_file).read_text(encoding="utf-8")
-        assert "OP-APPLE-WEB-SCRIPT 是唯一例外" in contract, contract_file
-        assert "精确 HTTPS URL 命令" in contract, contract_file
-
     print("SHARED_OPERATIONS_AND_CONFIRMATION=verified")
 
 
 if __name__ == "__main__":
-    main()
+    test_contract()

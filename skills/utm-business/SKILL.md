@@ -5,23 +5,28 @@ description: Use when the prepared App Store Connect application needs its busin
 
 # utm-business
 
-Read and obey [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md). From the repository root run `eval "$(python3 scripts/preflight.py --project-only --emit-shell)"` before the entry command.
+执行约束：[`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRACT.md)。
 
-## Contract
+收到执行请求后，直接运行下面对应的公开命令。禁止在执行前打开、搜索、检查或分析任何技能与脚本源码；不解释、不判断流程，只报告脚本输出。
 
-- Segment: 2, environment preparation; this is the segment tail.
-- Input: exact `<run-id>` or exact `<page-title>`, plus `<vm-name>`, inherited `<vm-ip>`, `<vm-user>`, and the existing authenticated Edge/CDP session.
-- Only public host entry:
+## 使用 run-id 执行
 
-  ```bash
-  python3 "$PROJECT_ROOT/scripts/utm_business.py" \
-    --run-id '<run-id>' --vm-name '<vm-name>' --vm-ip '<vm-ip>' --vm-user '<vm-user>'
-  ```
+```bash
+eval "$(python3 scripts/preflight.py --project-only --emit-shell)"
+python3 "$PROJECT_ROOT/scripts/utm_business.py" \
+  --run-id '<run-id>' \
+  --vm-name '<vm-name>' \
+  --vm-ip '<vm-ip>' \
+  --vm-user '<vm-user>'
+```
 
-  Standalone selector: replace `--run-id '<run-id>'` with `--page-title '<page-title>'`.
-- Require one matching business/account context and independently re-read the final banking/business status. Do not start a new login or browser.
-- Retry the same failed stage at most three rounds using 0/5/10 seconds while preserving the inherited session.
+## 使用 page-title 执行
 
-## Result and handoff
-
-The canonical success summary is `执行成功：utm-business；UTM_BUSINESS=verified`. This ends segment 2. If the request includes segment 3, hand the same run, VM, application, and authenticated browser session to `utm-env`; otherwise stop at the segment boundary.
+```bash
+eval "$(python3 scripts/preflight.py --project-only --emit-shell)"
+python3 "$PROJECT_ROOT/scripts/utm_business.py" \
+  --page-title '<page-title>' \
+  --vm-name '<vm-name>' \
+  --vm-ip '<vm-ip>' \
+  --vm-user '<vm-user>'
+```

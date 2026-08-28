@@ -553,6 +553,10 @@ export function classifyMatchingUploads(items) {
 export function attemptRecoveryAction(attempt) {
   if (!attempt || attempt.state === 'preflight') return { action: 'create' };
   const uploadId = attempt.buildUploadId;
+  const fileId = attempt.buildUploadFileId;
+  if (uploadId && fileId && attempt.state === 'file_uploaded') {
+    return { action: 'commit_file', uploadId, fileId };
+  }
   if (uploadId && ['file_committed', 'processing', 'verified'].includes(attempt.state)) {
     return { action: 'poll_upload', uploadId };
   }
@@ -817,6 +821,25 @@ export async function uploadIpa(metadata, options) {
     });
     return completed;
   }
+  if (recovery.action === 'commit_file') {
+    await apiRequest('PATCH', `/buildUploadFiles/${encodeURIComponent(recovery.fileId)}`, credentials,
+      commitBuildUploadFileBody(recovery.fileId));
+    writeAttempt(options.attemptFile, {
+      ...attempt,
+      state: 'file_committed',
+      buildUploadId: recovery.uploadId,
+      buildUploadFileId: recovery.fileId,
+    });
+    const completed = await pollBuildUpload(recovery.uploadId, credentials, options.waitSeconds);
+    writeAttempt(options.attemptFile, {
+      ...attempt,
+      state: completed.state === 'COMPLETE' && completed.buildProcessingState === 'VALID' ? 'verified' : 'processing',
+      buildUploadId: recovery.uploadId,
+      buildUploadFileId: recovery.fileId,
+      buildId: completed.buildId,
+    });
+    return completed;
+  }
   if (recovery.action !== 'create') {
     throw new Error(`upload attempt cannot be safely resumed from state ${attempt.state}`);
   }
@@ -902,6 +925,12 @@ export async function uploadIpa(metadata, options) {
   if (!operations.length) throw new Error('Apple returned no upload operations');
 
   await uploadOperations(metadata.ipaPath, operations);
+  writeAttempt(options.attemptFile, {
+    ...attempt,
+    state: 'file_uploaded',
+    buildUploadId: uploadId,
+    buildUploadFileId: fileId,
+  });
   await apiRequest('PATCH', `/buildUploadFiles/${encodeURIComponent(fileId)}`, credentials,
     commitBuildUploadFileBody(fileId));
   writeAttempt(options.attemptFile, {

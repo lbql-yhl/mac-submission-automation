@@ -19,6 +19,7 @@ Read and obey [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRA
   ```
 
   Standalone selector: replace `--run-id '<run-id>'` with `--page-title '<page-title>'`. Add `--asset-app-name '<asset-app-name>'` only for an explicitly different source.
+- For a user-authorized replacement of an already populated 6.9-inch iPhone panel with the exact verified development attachment, append both `--force-development --replace-existing`. These flags are inseparable for replacement: they must pre-verify the complete development package, bind the unique application/version/display, clear only that target panel, upload the new set, and independently verify the stable final count. This variant must emit `SCREENSHOT_PREUPLOAD_CLASSIFICATION=nonempty_authorized` and `SCREENSHOT_REPLACEMENT=verified`; it never clicks `Submit for Review`.
 - Require the exact application/source binding and independently verify the expected image set and guest delivery. Do not print source credentials or unrelated asset contents.
 - Retry the same source/file checkpoint at most three rounds using 0/5/10 seconds; never substitute another application's images.
 

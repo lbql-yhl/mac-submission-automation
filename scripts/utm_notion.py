@@ -111,6 +111,16 @@ CATEGORY_MAP = {
     "游戏": "GAMES",
     "娱乐": "ENTERTAINMENT",
 }
+
+
+def resolve_feishu_source(token: str) -> tuple[str, str, str]:
+    """Resolve the configured Base source from one immutable project snapshot."""
+    settings = host_settings_snapshot(
+        env_path=PROJECT_ROOT / ".env",
+        file_override_keys=UTM_NOTION_FEISHU_ENV_KEYS,
+    )
+    configured_source = configured_utm_notion_source(settings)
+    return resolve_utm_notion_source(token, configured_source)
 VALID_CATEGORIES = frozenset(CATEGORY_MAP.values())
 CATEGORY_ALIASES = {
     "生活方式": "LIFESTYLE",
@@ -319,9 +329,134 @@ def _normalize_us_phone(value: str) -> str:
     raise RuntimeError("Feishu 账号信息 phone must contain 10 US digits")
 
 
+GENERIC_EMAIL_PATTERN = re.compile(
+    r"(?<![A-Z0-9._%+-])"
+    r"[A-Z0-9._%+-]+@"
+    r"[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?\.[A-Z]{2,63}"
+    r"(?![A-Z0-9.-])",
+    flags=re.IGNORECASE,
+)
+INLINE_HTTP_URL_PATTERN = re.compile(
+    r"https?://[^\s，；。]+",
+    flags=re.IGNORECASE,
+)
+PHONE_CANDIDATE_PATTERN = re.compile(r"(?<!\d)\+?\d{10,15}(?!\d)")
+PASSWORD_LABEL_PATTERN = re.compile(
+    r"(?:初始密码|密码|password)\s*[:：=]\s*([^\s,，;；|]+)",
+    flags=re.IGNORECASE,
+)
+ACCOUNT_METADATA_PATTERN = re.compile(
+    r"(?:初始密码|密码|账号|邮箱|电话|手机|接码|短信|链接|国家|"
+    r"password|account|email|phone|sms|url|country)",
+    flags=re.IGNORECASE,
+)
+
+
+def _has_mixed_password_characters(value: str) -> bool:
+    return bool(re.search(r"[A-Za-z]", value) and re.search(r"\d", value))
+
+
+def _generic_account_identity(identity_text: str, sms_url: str) -> dict[str, str] | None:
+    email_matches = list(GENERIC_EMAIL_PATTERN.finditer(identity_text))
+    if not email_matches:
+        return None
+    emails: dict[str, list[re.Match[str]]] = {}
+    for match in email_matches:
+        emails.setdefault(match.group(0).casefold(), []).append(match)
+    if len(emails) != 1:
+        raise RuntimeError("Feishu 账号信息 email could not be uniquely parsed")
+    selected_email_matches = next(iter(emails.values()))
+    email = selected_email_matches[0].group(0)
+    email_spans = [match.span() for match in selected_email_matches]
+
+    phone_matches = [
+        match
+        for match in PHONE_CANDIDATE_PATTERN.finditer(identity_text)
+        if not any(
+            match.start() < email_end and email_start < match.end()
+            for email_start, email_end in email_spans
+        )
+    ]
+    if not phone_matches:
+        return None
+    phones: dict[str, list[re.Match[str]]] = {}
+    for match in phone_matches:
+        phones.setdefault(_normalize_us_phone(match.group(0)), []).append(match)
+    if len(phones) != 1:
+        raise RuntimeError("Feishu 账号信息 must contain exactly one phone")
+    phone, selected_phone_matches = next(iter(phones.items()))
+
+    labelled_passwords = [
+        match.group(1)
+        for match in PASSWORD_LABEL_PATTERN.finditer(identity_text)
+        if _has_mixed_password_characters(match.group(1))
+    ]
+    labelled_passwords = list(dict.fromkeys(labelled_passwords))
+    if len(labelled_passwords) > 1:
+        raise RuntimeError(
+            "Feishu 账号信息 initial password could not be uniquely parsed"
+        )
+    if labelled_passwords:
+        initial_password = labelled_passwords[0]
+    else:
+        masked = list(identity_text)
+        for start, end in [
+            *email_spans,
+            *(match.span() for match in selected_phone_matches),
+        ]:
+            masked[start:end] = " " * (end - start)
+        residual = "".join(masked)
+        password_candidates = [
+            token
+            for token in re.split(r"[\s,，;；|:：=()\[\]{}<>]+", residual)
+            if token
+            and ACCOUNT_METADATA_PATTERN.fullmatch(token) is None
+            and _has_mixed_password_characters(token)
+        ]
+        passwords = list(dict.fromkeys(password_candidates))
+        if len(passwords) > 1:
+            raise RuntimeError(
+                "Feishu 账号信息 initial password could not be uniquely parsed"
+            )
+        if not passwords:
+            return None
+        initial_password = passwords[0]
+
+    return {
+        "email": email,
+        "initial_password": initial_password,
+        "phone": phone,
+        "sms_url": sms_url,
+}
+
+
 def parse_account_info(cell: object) -> dict[str, str]:
     text = _cell_text(cell)
     cell_link = str(cell.get("link") or "").strip() if isinstance(cell, dict) else ""
+
+    country_first_multiline_account = re.fullmatch(
+        rf"[^\r\n]+\s*\r?\n"
+        rf"(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+?\.{EMAIL_SUFFIX_PATTERN})\s*\r?\n"
+        rf"(?P<password>[A-Za-z0-9!#$%&*._-]+)\s*\r?\n"
+        rf"(?P<phone>\+?\d{{10,15}})\s*\r?\n"
+        rf"(?P<sms_url>https?://\S+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if country_first_multiline_account and text.count("@") == 1:
+        initial_password = country_first_multiline_account.group("password")
+        if not re.search(r"[A-Za-z]", initial_password) or not re.search(
+            r"\d", initial_password
+        ):
+            raise RuntimeError(
+                "Feishu 账号信息 initial password must contain letters and digits"
+            )
+        return {
+            "email": country_first_multiline_account.group("email"),
+            "initial_password": initial_password,
+            "phone": _normalize_us_phone(country_first_multiline_account.group("phone")),
+            "sms_url": country_first_multiline_account.group("sms_url"),
+        }
 
     compact_prefix = (
         rf"(?P<phone>\+\d{{10,11}})-{{4}}"
@@ -354,7 +489,31 @@ def parse_account_info(cell: object) -> dict[str, str]:
             "sms_url": compact_account.group("sms_url"),
         }
 
-    url_matches = list(re.finditer(r"https?://\S+", text, flags=re.IGNORECASE))
+    spaced_phone_first = re.fullmatch(
+        rf"(?P<phone>\+?\d{{10,15}})\s+"
+        rf"(?P<sms_url>https?://\S+)\s+"
+        rf"(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+?\.{EMAIL_SUFFIX_PATTERN})\s+"
+        rf"(?P<password>[A-Za-z0-9]+)\s+"
+        rf"(?P<country>.+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if spaced_phone_first and text.count("@") == 1:
+        initial_password = spaced_phone_first.group("password")
+        if not re.search(r"[A-Za-z]", initial_password) or not re.search(
+            r"\d", initial_password
+        ):
+            raise RuntimeError(
+                "Feishu 账号信息 initial password must contain letters and digits"
+            )
+        return {
+            "email": spaced_phone_first.group("email"),
+            "initial_password": initial_password,
+            "phone": _normalize_us_phone(spaced_phone_first.group("phone")),
+            "sms_url": spaced_phone_first.group("sms_url"),
+        }
+
+    url_matches = list(INLINE_HTTP_URL_PATTERN.finditer(text))
     if len(url_matches) > 1:
         raise RuntimeError("Feishu 账号信息 must contain at most one HTTP(S) URL")
     if url_matches:
@@ -367,7 +526,7 @@ def parse_account_info(cell: object) -> dict[str, str]:
         sms_url = cell_link
         identity_text = text
     parsed_sms_url = urllib.parse.urlsplit(sms_url)
-    if not parsed_sms_url.netloc:
+    if parsed_sms_url.scheme not in {"http", "https"} or not parsed_sms_url.netloc:
         raise RuntimeError("Feishu 账号信息 must contain an inline or cell-link HTTP(S) URL")
     space_separated = re.fullmatch(
         r"(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63})\s+"
@@ -428,6 +587,10 @@ def parse_account_info(cell: object) -> dict[str, str]:
             "sms_url": sms_url,
         }
 
+    generic_identity = _generic_account_identity(identity_text, sms_url)
+    if generic_identity is not None:
+        return generic_identity
+
     plain_email_matches = list(
         re.finditer(
             rf"[A-Z0-9._%+-]+@[A-Z0-9.-]+?\.{EMAIL_SUFFIX_PATTERN}",
@@ -467,7 +630,10 @@ def parse_account_info(cell: object) -> dict[str, str]:
         flags=re.IGNORECASE,
     )
     if not email_match:
-        raise RuntimeError("Feishu 账号信息 email could not be uniquely parsed")
+        raise RuntimeError(
+            "Feishu 账号信息 email could not be uniquely parsed "
+            f"(markers={identity_text.count('@')} candidates=0)"
+        )
     email = email_match.group("email")
     tail = email_match.group("tail")
     phone_matches = list(
@@ -799,7 +965,9 @@ class FeishuBitableClient:
         records: list[dict[str, Any]] = []
         page_token = ""
         while True:
-            query: dict[str, object] = {"view_id": self.view_id, "page_size": 500}
+            query: dict[str, object] = {
+                "page_size": 500,
+            }
             if page_token:
                 query["page_token"] = page_token
             data = self._request("GET", self._records_path, query=query)
@@ -820,14 +988,19 @@ class FeishuBitableClient:
         app_name = str(app_name).strip()
         if not run_id and not app_name:
             raise RuntimeError("run_id or app_name is required")
-        matches = []
-        for record in self.list_records():
-            fields = dict(record.get("fields") or {})
-            if run_id and _cell_text(fields.get("Run ID")) != run_id:
-                continue
-            if app_name and _cell_text(fields.get("应用名")) != app_name:
-                continue
-            matches.append(record)
+
+        def exact_matches(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+            matches = []
+            for record in records:
+                fields = dict(record.get("fields") or {})
+                if run_id and _cell_text(fields.get("Run ID")) != run_id:
+                    continue
+                if app_name and _cell_text(fields.get("应用名")) != app_name:
+                    continue
+                matches.append(record)
+            return matches
+
+        matches = exact_matches(self.list_records())
         if len(matches) != 1:
             raise RuntimeError(f"Feishu exact record match count must be one, got {len(matches)}")
         return matches[0]

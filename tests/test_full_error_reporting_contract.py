@@ -10,6 +10,8 @@ from scripts import clean_cli, utm_7_login, utm_8_change_password, utm_9
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VM_USER = "abcd"
+GUEST_DIR = f"/Users/{VM_USER}/Downloads"
 
 REMAINING_HOST_ENTRIES = (
     "utm_notion.py",
@@ -54,9 +56,7 @@ def test_edit_guest_failure_keeps_all_lines_and_only_redacts_password() -> None:
         f"first diagnostic line\nsecond line password=secret-pass {tail}\n",
         "secret-pass",
     )
-    assert detail == (
-        "first diagnostic line | second line password=<redacted> " + tail
-    )
+    assert detail == ("first diagnostic line | second line password=<redacted> " + tail)
 
 
 def test_login_guest_failure_keeps_all_lines_without_length_limit() -> None:
@@ -91,9 +91,9 @@ def test_key_guest_failure_keeps_actual_stderr_and_redacts_configured_password(
         ),
     ):
         utm_9.call_guest(
-            vm_user="abcd",
+            vm_user=VM_USER,
             vm_ip="192.0.2.10",
-            guest_dir="/Users/example/Downloads",
+            guest_dir=GUEST_DIR,
             mode="create",
             payload=b"{}",
         )
@@ -111,9 +111,9 @@ def test_key_error_does_not_rewrite_unrelated_numeric_status(
     monkeypatch.setattr(utm_9, "_run_ssh", lambda *_args, **_kwargs: completed)
     with pytest.raises(utm_9.UTM9Error, match=r"status 9876"):
         utm_9.call_guest(
-            vm_user="abcd",
+            vm_user=VM_USER,
             vm_ip="192.0.2.10",
-            guest_dir="/Users/example/Downloads",
+            guest_dir=GUEST_DIR,
             mode="verify",
             payload=b"{}",
         )

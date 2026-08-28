@@ -217,28 +217,45 @@ class UTM7LoginRunnerTests(unittest.TestCase):
         )
 
     def test_skill_contract_is_command_only(self) -> None:
-        for path in (
-            ROOT / "skills" / "utm-login" / "SKILL.md",
-            ROOT / "docs" / "utm-login.md",
+        text = (ROOT / "skills" / "utm-login" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        entry = "$PROJECT_ROOT/scripts/utm_7_login.py"
+        self.assertEqual(text.count(entry), 1)
+        self.assertIn("../_shared/AUTOMATION_CONTRACT.md", text)
+        self.assertIn("Only public host entry", text)
+        for argument in (
+            "--parent-title '<parent-title>'",
+            "--page-title '<page-title>'",
+            "--vm-ip '<vm-ip>'",
+            "--vm-user '<vm-user>'",
         ):
-            text = path.read_text(encoding="utf-8")
-            self.assertIn(str(ROOT / "scripts" / "utm_7_login.py"), text)
-            self.assertIn("不读取或解释脚本内容", text)
-            for implementation_detail in (
-                "AppleAccountScriptsBackup",
-                "初始密码：",
-                "sshd-keygen-wrapper",
-                "Open System Settings",
-                "Modify Settings",
-            ):
-                self.assertNotIn(implementation_detail, text)
+            self.assertIn(argument, text)
+        for implementation_detail in (
+            "AppleAccountScriptsBackup",
+            "初始密码：",
+            "sshd-keygen-wrapper",
+            "Open System Settings",
+            "Modify Settings",
+        ):
+            self.assertNotIn(implementation_detail, text)
 
     def test_skill_is_execution_first_and_has_no_obsolete_transport(self) -> None:
         text = (ROOT / "skills" / "utm-login" / "SKILL.md").read_text(
             encoding="utf-8"
         )
-        for heading in ("## 执行", "## 输出与交接"):
+        for heading in ("## Contract", "## Result and handoff"):
             self.assertIn(heading, text)
+        for recovery_contract in (
+            "0/5/10 seconds",
+            "CAPTCHA",
+            "lockout",
+            "ambiguous phone/OTP",
+            "external blockers",
+        ):
+            self.assertIn(recovery_contract, text)
+        self.assertIn("UTM_7=verified", text)
+        self.assertIn("utm-edit", text)
         for stale_heading in ("## 执行流程", "## 本技能自动恢复矩阵"):
             self.assertNotIn(stale_heading, text)
         for obsolete in (

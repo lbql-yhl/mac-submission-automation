@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import json
 import os
 from pathlib import Path
@@ -18,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.clean_cli import emit_progress, run_clean_cli
-from scripts.vm_inventory import get_record
+from scripts.vm_inventory import InventoryError, get_record
 PYTHON = Path(sys.executable).absolute()
 CLONE_SCRIPT = (PROJECT_ROOT / "scripts" / "utm_vm_clone_step_01_clone.py").resolve()
 POST_CLONE_SCRIPT = (PROJECT_ROOT / "scripts" / "utm_post_clone.py").resolve()
@@ -29,6 +30,10 @@ SAFE_BLOCKED_REASON_RE = re.compile(
     r"(?m)^[A-Z][A-Z0-9_]*=blocked:\s*([A-Z][A-Z0-9_:=.,;|/ -]{0,319})$"
 )
 REQUIRED_CLONE_MARKER = "STEP_01_CLONE=verified"
+VERIFIED_CLONE_RESULT_RE = re.compile(
+    r"执行成功：utm-vm-clone-step-01；"
+    r"STEP_01_CLONE=verified;VM_NAME=([a-z]{4})"
+)
 
 
 class CloneInitializeError(RuntimeError):
@@ -143,12 +148,19 @@ def verify_completed_inventory(vm_name: str) -> None:
 
 def parse_verified_clone_vm_name(output: str) -> str:
     lines = [line.strip() for line in output.splitlines() if line.strip()]
-    names = re.findall(r"VM_NAME=([A-Za-z0-9_-]+)", "\n".join(lines))
-    if len(names) != 1 or not VM_NAME_RE.fullmatch(names[0]):
-        raise CloneInitializeError(f"CLONE_VM_NAME_COUNT={len(names)}")
-    if not any(REQUIRED_CLONE_MARKER in line for line in lines):
+    result_lines = [
+        line
+        for line in lines
+        if line.startswith("执行成功：utm-vm-clone-step-01；")
+    ]
+    match = (
+        VERIFIED_CLONE_RESULT_RE.fullmatch(result_lines[0])
+        if len(result_lines) == 1
+        else None
+    )
+    if match is None:
         raise CloneInitializeError(f"CLONE_VERIFICATION_MISSING={REQUIRED_CLONE_MARKER}")
-    return names[0]
+    return match.group(1)
 
 
 def child_blocked_reason(result: subprocess.CompletedProcess[str]) -> str:
@@ -156,11 +168,12 @@ def child_blocked_reason(result: subprocess.CompletedProcess[str]) -> str:
     reasons = SAFE_BLOCKED_REASON_RE.findall(detail)
     if reasons:
         return reasons[-1]
-    lines = [line.strip() for line in detail.splitlines() if line.strip()]
-    return lines[-1] if lines else f"EXIT_{result.returncode}"
+    return "CHILD_ENTRY_FAILED"
 
 
-def run_workflow() -> int:
+def run_workflow(
+    *, on_verified_vm_name: Callable[[str], None] | None = None
+) -> int:
     # Never let a value inherited from an earlier shell/workflow select a VM.
     # The only accepted value is the unique name from this clone invocation.
     os.environ.pop("VM_NAME", None)
@@ -168,6 +181,19 @@ def run_workflow() -> int:
         active = load_active_workflow()
     except CloneInitializeError as error:
         print(f"UTM_CLONE_AND_INITIALIZE=blocked: {error}", file=sys.stderr)
+        return 1
+    except InventoryError:
+        print(
+            "UTM_CLONE_AND_INITIALIZE=blocked: "
+            "ACTIVE_WORKFLOW_INVENTORY_FAILED",
+            file=sys.stderr,
+        )
+        return 1
+    except OSError:
+        print(
+            "UTM_CLONE_AND_INITIALIZE=blocked: ACTIVE_WORKFLOW_IO_FAILED",
+            file=sys.stderr,
+        )
         return 1
     if active is not None:
         vm_name = active["vm_name"]
@@ -204,8 +230,20 @@ def run_workflow() -> int:
     if active is not None:
         emit_progress("步骤1已完成，跳过")
 
+    try:
+        binding_record = _active_inventory_record(vm_name)
+    except CloneInitializeError as error:
+        print(f"UTM_CLONE_AND_INITIALIZE=blocked: {error}", file=sys.stderr)
+        return 1
+    bundle_parent = Path(
+        str(binding_record.get("bundle_path") or "")
+    ).expanduser().resolve().parent
     os.environ["VM_NAME"] = vm_name
     child_environment = os.environ.copy()
+    child_environment["SUBMISSION_VM_IMAGES_DIR"] = str(bundle_parent)
+    child_environment["SUBMISSION_VM_IMAGES_DIRS"] = json.dumps(
+        [str(bundle_parent)], ensure_ascii=False
+    )
 
     initialize_command = [
         str(PYTHON),
@@ -230,7 +268,14 @@ def run_workflow() -> int:
         return 1
     try:
         verify_completed_inventory(vm_name)
-        clear_active_workflow()
+        if on_verified_vm_name is not None:
+            on_verified_vm_name(vm_name)
+        try:
+            clear_active_workflow()
+        except OSError:
+            # The verified inventory is authoritative; cleanup cannot erase
+            # the VM name from this completed result.
+            pass
     except CloneInitializeError as error:
         print(f"UTM_CLONE_AND_INITIALIZE=blocked: {error}", file=sys.stderr)
         return 1
@@ -242,10 +287,24 @@ def main(argv: list[str] | None = None) -> int:
         description="Clone one UTM VM and initialize that exact clone"
     )
     parser.parse_args(argv)
+    verified_vm_names: list[str] = []
+
+    def success_marker() -> str:
+        if len(verified_vm_names) != 1 or not VM_NAME_RE.fullmatch(
+            verified_vm_names[0]
+        ):
+            raise CloneInitializeError("FINAL_VM_NAME_OUTPUT_INVALID")
+        return (
+            "UTM_CLONE_AND_INITIALIZE=verified;"
+            f"VM_NAME={verified_vm_names[0]}"
+        )
+
     return run_clean_cli(
         skill_name="utm-vm-clone",
-        success_marker="UTM_CLONE_AND_INITIALIZE=verified",
-        operation=run_workflow,
+        success_marker=success_marker,
+        operation=lambda: run_workflow(
+            on_verified_vm_name=verified_vm_names.append
+        ),
         progress_pattern=(
             r"步骤(?:[1-9]|10)(?:已操作|已完成，跳过)"
         ),

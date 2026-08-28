@@ -28,6 +28,7 @@ from scripts.ssh_password import password_environment, ssh_args  # noqa: E402
 from scripts.clean_cli import run_clean_cli  # noqa: E402
 from scripts.utm_direct_context import resolve_direct_context  # noqa: E402
 from services.feishu_bot import find_run, load_config, run_host_machine  # noqa: E402
+from services.host_config import optional_setting  # noqa: E402
 from services.project_paths import SHARED_DIR  # noqa: E402
 
 
@@ -314,14 +315,6 @@ def notion_payload(values: Mapping[str, str]) -> str:
     )
 
 
-def _private_write(path: Path, value: str) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        stream.write(value)
-        stream.flush()
-        os.fsync(stream.fileno())
-
-
 def _notion_call(
     runner: Callable[..., Any],
     arguments: list[str],
@@ -473,6 +466,7 @@ def run(
         parent_title, page_title, app_name = _run_context(args.run_id, args.vm_name)
     else:
         context = resolve_direct_context(
+            parent_title=optional_setting("SUBMISSION_HOST_MACHINE"),
             page_title=args.page_title,
             vm_name=args.vm_name,
             vm_ip=args.vm_ip,

@@ -27,20 +27,20 @@ SUCCESS_LOG = """work started
 
 
 def test_attempt_ledger_and_paths_are_unique_mode_600(tmp_path: Path) -> None:
+    vm_name = "abcd"
     attempt = create_attempt(
         tmp_path,
         run_id="run-12345678",
-        vm_name="abcd",
+        vm_name=vm_name,
         vm_ip="192.168.64.20",
     )
     assert (attempt.ledger_path.stat().st_mode & 0o777) == 0o600
-    assert attempt.log_path == (
-        f"/Users/example/Downloads/utm-18-fill-description-{attempt.attempt_id}.log"
+    remote_base = (
+        f"/Users/{vm_name}/Downloads/utm-18-fill-description-{attempt.attempt_id}"
     )
+    assert attempt.log_path == f"{remote_base}.log"
     assert attempt.status_path == f"{attempt.log_path}.status"
-    assert attempt.command_path == (
-        f"/Users/example/Downloads/utm-18-fill-description-{attempt.attempt_id}.command"
-    )
+    assert attempt.command_path == f"{remote_base}.command"
     saved = json.loads(attempt.ledger_path.read_text(encoding="utf-8"))
     assert saved["state"] == "prepared"
     assert load_single_attempt(tmp_path, "run-12345678") == attempt
@@ -66,9 +66,7 @@ def test_remote_fill_description_opens_visible_terminal_with_launch_timeout(
     assert 0 < int(seen["timeout"]) <= 60
     assert "input" not in seen
     remote_command = str(seen["command"][-1])
-    assert remote_command == (
-        f"/usr/bin/open -a Terminal {attempt.command_path}"
-    )
+    assert remote_command == (f"/usr/bin/open -a Terminal {attempt.command_path}")
     assert "npm" not in remote_command
 
 
@@ -133,7 +131,9 @@ def test_multiple_ledgers_are_never_guessed_as_latest(tmp_path: Path) -> None:
         vm_ip="192.168.64.20",
     )
     duplicate = first.ledger_path.with_name("f" * 32 + ".json")
-    duplicate.write_text(first.ledger_path.read_text(encoding="utf-8"), encoding="utf-8")
+    duplicate.write_text(
+        first.ledger_path.read_text(encoding="utf-8"), encoding="utf-8"
+    )
     duplicate.chmod(0o600)
     with pytest.raises(UTM18AttemptError, match="ATTEMPT_LEDGER_NOT_UNIQUE"):
         load_single_attempt(tmp_path, "run-12345678")
@@ -142,7 +142,9 @@ def test_multiple_ledgers_are_never_guessed_as_latest(tmp_path: Path) -> None:
 def test_explicit_business_error_takes_precedence_over_success_summary() -> None:
     result = classify_attempt(
         "❌ 创建产品 Demo 失败\n" + SUCCESS_LOG,
-        "ATTEMPT_ID=" + "a" * 32 + "\nRUN_STATE=finished\nREMOTE_NPM_EXIT=0\nREMOTE_TEE_EXIT=0\n",
+        "ATTEMPT_ID="
+        + "a" * 32
+        + "\nRUN_STATE=finished\nREMOTE_NPM_EXIT=0\nREMOTE_TEE_EXIT=0\n",
         process_running=False,
         expected_attempt_id="a" * 32,
     )
@@ -284,7 +286,9 @@ def test_incomplete_result_includes_complete_final_json_error_object() -> None:
     )
 
 
-def test_mark_attempt_updates_same_ledger_without_changing_binding(tmp_path: Path) -> None:
+def test_mark_attempt_updates_same_ledger_without_changing_binding(
+    tmp_path: Path,
+) -> None:
     attempt = create_attempt(
         tmp_path,
         run_id="run-12345678",

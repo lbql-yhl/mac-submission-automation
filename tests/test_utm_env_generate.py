@@ -35,7 +35,7 @@ Second paragraph.
 """
 
 
-def main() -> None:
+def test_contract() -> None:
     assert DEFAULT_OUTPUT_DIR.name == "Fire_One_en1.3"
 
     categories = {
@@ -181,4 +181,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_contract()

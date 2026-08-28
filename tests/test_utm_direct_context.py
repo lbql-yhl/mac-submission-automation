@@ -16,7 +16,7 @@ REGISTERED_MAC = "d2:77:bd:d2:01:b6"
 def _resolver_api() -> tuple[Callable[..., Any], type[Exception]]:
     try:
         module = importlib.import_module("scripts.utm_direct_context")
-    except ModuleNotFoundError as error:
+    except ModuleNotFoundError:
         pytest.fail(
             "direct-v1 shared resolver is not implemented: "
             "scripts.utm_direct_context",

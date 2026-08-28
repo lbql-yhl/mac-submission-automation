@@ -4,18 +4,17 @@ import importlib.util
 from pathlib import Path
 import plistlib
 import subprocess
-import sys
 from types import SimpleNamespace
 
 import pytest
 
 import scripts.utm_vm_clone_steps as clone_steps
-import scripts.utm_post_clone_guest as post_clone_guest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 POST_CLONE = ROOT / "scripts" / "utm_post_clone.py"
 STEP_ONE = ROOT / "scripts" / "utm_vm_clone_step_01_clone.py"
+STEP_EIGHT = ROOT / "scripts" / "utm_vm_clone_step_08_accessibility.py"
 STEP_SCRIPTS = (
     "utm_vm_clone_step_01_clone.py",
     "utm_vm_clone_step_02_account.py",
@@ -46,6 +45,16 @@ def load_step_one():
     return module
 
 
+def load_step_eight():
+    spec = importlib.util.spec_from_file_location(
+        "utm_vm_clone_step_eight", STEP_EIGHT
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_step_one_preserves_actual_clone_error(monkeypatch, capsys) -> None:
     module = load_step_one()
 
@@ -55,10 +64,81 @@ def test_step_one_preserves_actual_clone_error(monkeypatch, capsys) -> None:
     monkeypatch.setattr(module, "clone_once", fail_clone)
 
     assert module.main() == 1
+    error_output = capsys.readouterr().err
     assert (
         "执行报错：utm-vm-clone-step-01；copy failed with lowercase detail (!)"
+        in error_output
+    )
+    assert "UTM_VM_CLONE_STEP_01=blocked: CLONE_STEP_FAILED" in error_output
+
+
+@pytest.mark.parametrize(
+    ("error_factory", "expected_code"),
+    (
+        (lambda module: module.CloneError("TEMPLATE_NOT_STOPPED"), "TEMPLATE_NOT_STOPPED"),
+        (
+            lambda module: module.CloneError("SECRET_PATH=/VOLUMES/PRIVATE/VM"),
+            "CLONE_STEP_FAILED",
+        ),
+        (lambda module: module.InventoryError("database is locked"), "CLONE_INVENTORY_FAILED"),
+        (lambda _module: OSError("external volume disappeared"), "CLONE_IO_FAILED"),
+    ),
+)
+def test_step_one_emits_a_stable_safe_failure_code(
+    monkeypatch, capsys, error_factory, expected_code
+) -> None:
+    module = load_step_one()
+
+    def fail_clone(_database):
+        raise error_factory(module)
+
+    monkeypatch.setattr(module, "clone_once", fail_clone)
+
+    assert module.main() == 1
+    assert (
+        f"UTM_VM_CLONE_STEP_01=blocked: {expected_code}"
         in capsys.readouterr().err
     )
+
+
+def test_step_eight_reverifies_desktop_before_accessibility(
+    monkeypatch, tmp_path: Path
+) -> None:
+    module = load_step_eight()
+    args = SimpleNamespace(vm_name="ocww")
+    bundle = tmp_path / "ocww.utm"
+    context = (
+        args,
+        bundle,
+        "CONFIG-UUID",
+        "config-mac",
+        tmp_path / "state.json",
+        {"steps": list(range(2, 8))},
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        module, "_prepare_step", lambda _vm_name, _step: (context, False)
+    )
+    monkeypatch.setattr(
+        module,
+        "verify_desktop",
+        lambda *_args: calls.append("desktop") or {"desktop": "verified"},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        module,
+        "enable_accessibility",
+        lambda _vm_name: calls.append("accessibility"),
+    )
+    monkeypatch.setattr(
+        module,
+        "record_accessibility",
+        lambda _vm_name: calls.append("record"),
+    )
+
+    module.run_accessibility("ocww")
+
+    assert calls == ["desktop", "accessibility", "record"]
 
 
 def test_clone_skill_has_ten_independent_step_scripts() -> None:
@@ -220,12 +300,191 @@ def test_post_clone_preserves_full_last_step_error(monkeypatch) -> None:
     )
 
 
+def test_completed_settings_step_repairs_verified_setting_drift(
+    monkeypatch, tmp_path: Path
+) -> None:
+    args = SimpleNamespace()
+    bundle = tmp_path / "ocww.utm"
+    state_path = tmp_path / "state.json"
+    state = {"steps": [2, 3, 4, 5]}
+    context = (args, bundle, "CONFIG-UUID", "mac", state_path, state)
+    monkeypatch.setattr(
+        clone_steps, "_prepare_step", lambda _vm_name, _step: (context, True)
+    )
+    verification_calls: list[str] = []
+
+    def verify_settings(_args, _bundle, _config_uuid):
+        verification_calls.append("verify")
+        if len(verification_calls) == 1:
+            raise clone_steps.legacy.PostCloneError(
+                "SYSTEM_SETTINGS_NOT_PERMANENT={'AutomaticDownload': '1'}"
+            )
+        return {"settings": "verified"}
+
+    repairs: list[str] = []
+    monkeypatch.setattr(clone_steps, "verify_settings", verify_settings)
+    monkeypatch.setattr(
+        clone_steps, "_running_ip", lambda *_args: "192.0.2.10"
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "disable_screen_lock",
+        lambda _vm_name, _ip: repairs.append("screen-lock"),
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "settings_write_script",
+        lambda: "SETTINGS_WRITE",
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "ssh_sudo_script",
+        lambda _vm_name, _ip, script: repairs.append(script) or "",
+    )
+    recorded: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        clone_steps,
+        "_record_reverification",
+        lambda _path, _state, _step, evidence: recorded.append(evidence),
+    )
+
+    clone_steps.run_settings("ocww")
+
+    assert verification_calls == ["verify", "verify"]
+    assert repairs == ["screen-lock", "SETTINGS_WRITE"]
+    assert recorded == [{"settings": "verified"}]
+
+
 def test_account_probe_checks_target_user_not_sudo_root() -> None:
     import inspect
 
     source = inspect.getsource(clone_steps._pure_account_probe)
     assert '/usr/bin/id -un {vm_name}' in source
     assert 'test "$(/usr/bin/id -un)"' not in source
+
+
+def test_completed_account_step_reverifies_with_shutdown_enabled(
+    monkeypatch, tmp_path
+) -> None:
+    state_path = tmp_path / "stgf.json"
+    state = {"steps": [2], "step_evidence": {}}
+    context = (
+        SimpleNamespace(vm_name="stgf"),
+        tmp_path / "stgf.utm",
+        "CONFIG-UUID",
+        "config-mac",
+        state_path,
+        state,
+    )
+    calls: list[object] = []
+    monkeypatch.setattr(
+        clone_steps, "_prepare_step", lambda _vm_name, _step: (context, True)
+    )
+    monkeypatch.setattr(
+        clone_steps,
+        "verify_account",
+        lambda *_args, shutdown_after: calls.append(("verify", shutdown_after))
+        or {"shutdown": "verified"},
+    )
+    monkeypatch.setattr(
+        clone_steps,
+        "_record_reverification",
+        lambda _path, _state, _step, evidence: calls.append(
+            ("record", evidence["shutdown"])
+        ),
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "perform_account_setup",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("completed account setup must not be replayed")
+        ),
+    )
+
+    clone_steps.run_account("stgf")
+
+    assert calls == [("verify", True), ("record", "verified")]
+
+
+def test_account_reverification_requests_shutdown_and_waits_for_stopped(
+    monkeypatch, tmp_path
+) -> None:
+    args = SimpleNamespace(
+        vm_name="stgf", database=tmp_path / "inventory.sqlite3"
+    )
+    bundle = tmp_path / "stgf.utm"
+    shutdown_script = "REQUEST_GUEST_SHUTDOWN"
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "config_identity",
+        lambda _bundle: ("CONFIG-UUID", "config-mac"),
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "ensure_started",
+        lambda _name: events.append("running-reverified"),
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy, "resolve_ip", lambda _name, _mac: "192.0.2.10"
+    )
+    monkeypatch.setattr(clone_steps.legacy, "ensure_ssh", lambda *_args: None)
+    monkeypatch.setattr(clone_steps.legacy, "verify_admin", lambda *_args: None)
+    monkeypatch.setattr(clone_steps.legacy, "demo_cleanup_script", lambda: "cleanup")
+    monkeypatch.setattr(
+        clone_steps.legacy, "demo_cleanup_verified", lambda output: output == "clean"
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy, "residual_demo_home_cleanup_script", lambda: "residual"
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy, "guest_shutdown_script", lambda: shutdown_script
+    )
+    monkeypatch.setattr(clone_steps, "_pure_account_probe", lambda *_args: None)
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "read_guest_identity",
+        lambda *_args: SimpleNamespace(
+            serial_number="SERIAL", platform_uuid="GUEST-UUID"
+        ),
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "get_record",
+        lambda *_args: {
+            "guest_serial_number": "SERIAL",
+            "guest_platform_uuid": "GUEST-UUID",
+        },
+    )
+
+    def ssh_sudo_script(_name: str, _ip: str, script: str) -> str:
+        if script == "cleanup":
+            return "clean"
+        if script == "residual":
+            return "DEMO_RESIDUAL_HOME=absent\n"
+        if script == shutdown_script:
+            events.append("shutdown-requested")
+            return ""
+        raise AssertionError(f"unexpected script: {script}")
+
+    monkeypatch.setattr(clone_steps.legacy, "ssh_sudo_script", ssh_sudo_script)
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "ensure_stopped",
+        lambda _name: events.append("stopped-reverified"),
+    )
+
+    evidence = clone_steps.verify_account(
+        args, bundle, "CONFIG-UUID", {}, shutdown_after=True
+    )
+
+    assert events == [
+        "running-reverified",
+        "shutdown-requested",
+        "stopped-reverified",
+    ]
+    assert evidence["shutdown"] == "verified"
 
 
 def test_registry_reopens_exact_bundle_before_declaring_target_mismatch() -> None:
@@ -293,8 +552,106 @@ def test_completed_desktop_step_is_reverified_without_replaying_side_effects(
     assert state["step_evidence"]["4"]["reverified"] == "verified"
 
 
-def test_delivery_reverification_uses_guest_copy_verifier() -> None:
-    assert getattr(clone_steps.legacy, "verify_copy", None) is post_clone_guest.verify_copy
+def test_new_desktop_step_prevents_delayed_minibuddy_launch(
+    monkeypatch, tmp_path: Path
+) -> None:
+    bundle = tmp_path / "ocww.utm"
+    state_path = tmp_path / "state.json"
+    state = {"steps": [2, 3], "step_evidence": {}}
+    context = (
+        SimpleNamespace(),
+        bundle,
+        "CONFIG-UUID",
+        "config-mac",
+        state_path,
+        state,
+    )
+    monkeypatch.setattr(
+        clone_steps, "_prepare_step", lambda _vm_name, _step: (context, False)
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "config_identity",
+        lambda _bundle: ("CONFIG-UUID", "config-mac"),
+    )
+    monkeypatch.setattr(clone_steps.legacy, "ensure_started", lambda _name: None)
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "resolve_ip",
+        lambda _name, _mac: "192.0.2.10",
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy, "ensure_ssh", lambda _name, _ip: None
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "_enter_guest_desktop",
+        lambda *_args: {"SETUP_ASSISTANT": "absent"},
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "complete_setup_assistant_script",
+        lambda: "PREVENT_DELAYED_MINIBUDDY",
+    )
+    setup_calls: list[str] = []
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "ssh_script",
+        lambda _name, _ip, script: setup_calls.append(script)
+        or (
+            "SETUP_ASSISTANT_ACTION=guest_state_completed\n"
+            "SETUP_ASSISTANT=absent\n"
+        ),
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy, "verify_admin", lambda _name, _ip: None
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "ssh_sudo_script",
+        lambda _name, _ip, _script: "DEMO_CLEANUP=verified\n",
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy, "demo_cleanup_verified", lambda _output: True
+    )
+    recorded: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        clone_steps,
+        "_record_step",
+        lambda _path, _state, _step, evidence: recorded.append(evidence),
+    )
+
+    clone_steps.run_desktop("ocww")
+
+    assert setup_calls == ["PREVENT_DELAYED_MINIBUDDY"]
+    assert recorded[0]["setup_assistant_action"] == "guest_state_completed"
+
+
+def test_completed_delivery_reverification_repairs_missing_shared_entries(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, str]] = []
+    args = SimpleNamespace(vm_name="stgf", shared_dir=tmp_path)
+    monkeypatch.setattr(clone_steps, "_running_ip", lambda *_args: "192.0.2.10")
+    monkeypatch.setattr(clone_steps, "_require_same_file", lambda *_args: None)
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "copy_shared",
+        lambda user, ip: calls.append((user, ip))
+        or {"SOURCE_ENTRIES": "1378", "verification": "passed"},
+    )
+    monkeypatch.setattr(
+        clone_steps.legacy,
+        "verify_copy",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("completed delivery must use conflict-checked repair")
+        ),
+    )
+
+    evidence = clone_steps.verify_delivery(args, tmp_path / "stgf.utm", "UUID")
+
+    assert calls == [("stgf", "192.0.2.10")]
+    assert evidence["source_entries"] == "1378"
 
 
 def test_hardware_reverification_repairs_inventory_after_mac_randomization(

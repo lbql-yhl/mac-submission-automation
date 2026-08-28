@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from scripts import utm_apps
+from scripts import utm_apps, utm_apps_delivery
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,9 +71,19 @@ def test_utm10_sms_parser_accepts_six_digits_next_to_non_digit_text() -> None:
     assert completed.stdout.strip() == "123456"
 
 
-def test_utm10_sms_parser_uses_the_last_six_digit_code_without_dates_or_copy_rules() -> None:
+def test_utm10_sms_parser_uses_the_top_six_digit_code_from_newest_first_page() -> None:
     completed = _run_utm10_parser_fixture(
-        "yes|old_112233_received\nokay|new_654321_received"
+        "yes|new_654321_received\nokay|old_112233_received"
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "654321"
+
+
+def test_utm10_sms_parser_prefers_complete_apple_message_over_other_six_digit_values() -> None:
+    completed = _run_utm10_parser_fixture(
+        "unrelated 112233 Your Apple Account Code is: 654321. "
+        "Don't share it with anyone. embedded history 445566"
     )
 
     assert completed.returncode == 0, completed.stderr
@@ -173,15 +183,25 @@ def test_utm10_no_status_waits_then_refreshes_once_before_reading_yes_status() -
 
 
 def test_preflight_checks_all_playwright_files() -> None:
-    command = utm_apps.guest_preflight_command("abcd")
+    command = utm_apps.guest_preflight_command("user")
     for filename in utm_apps.GUEST_WRAPPER_FILENAMES:
-        assert f"/Users/example/Downloads/AppleAccountScriptsBackup/{filename}" in command
+        assert f"/Users/user/Downloads/AppleAccountScriptsBackup/{filename}" in command
     assert "playwright-core/index.mjs" in command
     assert "node --check" in command
 
 
+def test_guest_delivery_materializes_exact_playwright_package_symlink() -> None:
+    script = utm_apps_delivery.guest_prepare_script("user")
+
+    assert "/Users/user/Downloads/AppleAccountScriptsBackup/node_modules/playwright-core" in script
+    assert "../../Fire_One_en1.3/node_modules/playwright-core" in script
+    assert "/bin/ln -s" in script
+    assert "/usr/bin/readlink" in script
+    assert "test -f" in script
+
+
 def test_preflight_sha256_matches_every_current_host_playwright_file() -> None:
-    command = utm_apps.guest_preflight_command("abcd")
+    command = utm_apps.guest_preflight_command("user")
 
     assert command.count("/usr/bin/shasum -a 256") == len(
         utm_apps.GUEST_WRAPPER_FILENAMES
@@ -195,16 +215,16 @@ def test_preflight_sha256_matches_every_current_host_playwright_file() -> None:
 
 def test_stage_execution_uses_node_for_all_four_stages() -> None:
     for stage, filename in utm_apps.GUEST_WRAPPERS.items():
-        command = utm_apps.guest_execution_command("abcd", stage)
-        assert f"/Users/example/Downloads/AppleAccountScriptsBackup/{filename}" in command
+        command = utm_apps.guest_execution_command("user", stage)
+        assert f"/Users/user/Downloads/AppleAccountScriptsBackup/{filename}" in command
         assert "node" in command
         assert "currentSessionIdentity" in command
 
 
 def test_utm12_stage_execution_uses_180_second_guest_timeout() -> None:
-    command = utm_apps.guest_execution_command("igec", "utm-12")
+    command = utm_apps.guest_execution_command("user", "utm-12")
     assert "/usr/bin/pkill -f" in command
-    assert "^node /Users/example/Downloads/AppleAccountScriptsBackup/utm_12_one\\.mjs$" in command
+    assert "^node /Users/user/Downloads/AppleAccountScriptsBackup/utm_12_one\\.mjs$" in command
     assert "/usr/bin/perl -e" in command
     assert "alarm shift; exec @ARGV" in command
     assert "UTM_12_ERROR=TIMEOUT_180_SECONDS" in command
@@ -212,7 +232,7 @@ def test_utm12_stage_execution_uses_180_second_guest_timeout() -> None:
 
 @pytest.mark.parametrize("stage", ("utm-11", "utm-13"))
 def test_non_utm12_stage_execution_keeps_60_second_guest_timeout(stage: str) -> None:
-    command = utm_apps.guest_execution_command("igec", stage)
+    command = utm_apps.guest_execution_command("user", stage)
 
     stage_code = stage.upper().replace("-", "_")
     assert f"{stage_code}_ERROR=TIMEOUT_60_SECONDS" in command
@@ -230,9 +250,9 @@ def test_utm10_guest_stage_uses_180_second_timeout_with_transport_grace() -> Non
     with pytest.raises(RuntimeError, match="stop after capturing utm-10 timeouts"):
         utm_apps.run_guest_stage(
             stage="utm-10",
-            vm_name="abcd",
+            vm_name="user",
             vm_ip="192.0.2.10",
-            vm_user="abcd",
+            vm_user="user",
             payload={
                 "APPLE_ACCOUNT_EMAIL": "mail@example.test",
                 "APPLE_ACCOUNT_PASSWORD": "secret",
@@ -265,16 +285,42 @@ def test_utm13_authorization_uses_the_runtime_guest_value(monkeypatch) -> None:
     )
 
 
-def test_utm12_identifier_recovery_checks_unique_app_name_before_create() -> None:
+def test_utm12_identifier_recovery_checks_bundle_then_unique_app_name() -> None:
     source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
-    start = source.index("async function recoverIdentifier(page, config)")
+    start = source.index("async function recoverIdentifier(page, config,")
     end = source.index("async function registerIdentifierFromForm", start)
     recover = source[start:end]
     name_check = recover.index("exactIdentifierNameMatches(page, config.appName)")
     bundle_check = recover.index("exactBundleMatches(page, config.bundleId)")
-    assert name_check < bundle_check
+    assert bundle_check < name_check
     assert "multiple exact App ID name matches found" in recover
     assert "if (nameMatches.length === 1) return true;" in recover
+
+
+def test_utm12_identifier_recovery_accepts_visible_exact_bundle_before_search() -> None:
+    source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
+    start = source.index("async function recoverIdentifier(page, config")
+    end = source.index("async function registerIdentifierFromForm", start)
+    recover = source[start:end]
+
+    visible_match = recover.index("exactBundleMatches(page, config.bundleId)")
+    search = recover.index("filterListByExactValue(")
+
+    assert visible_match < search
+    assert "if (visibleMatches.length === 1) return true;" in recover
+
+
+def test_utm12_identifier_recovery_does_not_accept_name_before_exact_bundle_filter() -> None:
+    source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
+    start = source.index("async function recoverIdentifier(page, config")
+    end = source.index("async function registerIdentifierFromForm", start)
+    recover = source[start:end]
+
+    search = recover.index("filterListByExactValue(")
+    exact_name = recover.index("exactIdentifierNameMatches(page, config.appName)")
+
+    assert search < exact_name
+    assert "visibleNames" not in recover
 
 
 def test_utm13_certificate_recovery_checks_notion_user_name_before_any_download() -> None:
@@ -416,6 +462,41 @@ def test_utm12_spa_filter_readiness_allows_30_seconds() -> None:
     helper = source[start:end]
     assert 'waitForLoadState("networkidle", { timeout: TIMEOUT })' in helper
     assert 'waitFor({ state: "hidden", timeout: TIMEOUT })' in helper
+
+
+def test_utm12_filter_wait_accepts_delayed_exact_existing_identifier_without_search() -> None:
+    source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
+    start = source.index("async function filterListByExactValue(")
+    end = source.index("\n}\n", start) + 2
+    helper = source[start:end]
+    script = "\n".join(
+        [
+            "const TIMEOUT = 100;",
+            "async function identifierListIsStableEmpty() { return false; }",
+            "let polls = 0;",
+            "const emptyLocator = { count: async () => 0 };",
+            "const page = {",
+            "  frames: () => [{ locator: () => emptyLocator }],",
+            "  waitForTimeout: async () => { polls += 1; },",
+            "};",
+            helper,
+            "const result = await filterListByExactValue(page, 'target', 'App ID', {",
+            "  exactMatches: async () => polls === 0 ? [] : [{ id: 'existing' }],",
+            "});",
+            "console.log(JSON.stringify({ result, polls }));",
+        ]
+    )
+    completed = subprocess.run(
+        ["/usr/bin/env", "node", "--input-type=module", "--eval", script],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+        cwd=ROOT,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {"result": "existing", "polls": 1}
 
 
 def _run_utm12_app_store_state_fixture(
@@ -879,6 +960,53 @@ def test_utm12_only_migrates_a_planned_app_agreement_ledger_input() -> None:
     assert "allowPlannedInputMigration: true" in ensure
 
 
+def test_utm12_developer_agreement_reloads_once_before_declaring_stale_banner() -> None:
+    source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
+    start = source.index("async function recoverDeveloperAgreementCompletion(page)")
+    end = source.index("\n}\n", start) + 2
+    helper = source[start:end]
+    script = "\n".join(
+        [
+            "const TIMEOUT = 100;",
+            "let present = true;",
+            "let reloads = 0;",
+            "async function developerAgreementPresent() { return present; }",
+            "async function waitForSafePage() {}",
+            "const page = {",
+            "  reload: async () => { reloads += 1; present = false; },",
+            "};",
+            helper,
+            "const result = await recoverDeveloperAgreementCompletion(page);",
+            "console.log(JSON.stringify({ result, reloads }));",
+        ]
+    )
+    completed = subprocess.run(
+        ["/usr/bin/env", "node", "--input-type=module", "--eval", script],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+        cwd=ROOT,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {"result": True, "reloads": 1}
+
+
+def test_utm12_submitted_developer_agreement_recovers_before_any_second_click() -> None:
+    source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
+    start = source.index("async function handleDeveloperAgreementIfPresent(page, run)")
+    end = source.index("\n}\n", start) + 2
+    handler = source[start:end]
+
+    ledger = handler.index('readJson(ledgerPath(run, "agreement"))')
+    submitted = handler.index('existing?.state === "submitted"', ledger)
+    recovery = handler.index("recoverDeveloperAgreementCompletion(page)", submitted)
+    ensure = handler.index("ensureAgreement(page, run)", recovery)
+
+    assert ledger < submitted < recovery < ensure
+
+
 def test_utm12_uses_explicit_no_apps_as_safe_recreate_evidence() -> None:
     source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
     helper_start = source.index("async function appStoreNoApps(page)")
@@ -988,8 +1116,8 @@ def test_utm12_unique_visible_wait_rejects_multiple_matches_immediately() -> Non
 
 
 def test_utm12_notion_fields_command_uses_read_only_recovery_mode() -> None:
-    command = utm_apps.guest_utm12_notion_fields_command("abcd")
-    assert "/Users/example/Downloads/AppleAccountScriptsBackup/utm_12_one.mjs" in command
+    command = utm_apps.guest_utm12_notion_fields_command("user")
+    assert "/Users/user/Downloads/AppleAccountScriptsBackup/utm_12_one.mjs" in command
     assert "notion-fields" in command
     assert "currentSessionIdentity" in command
 
@@ -1298,6 +1426,21 @@ def test_utm10_input_contains_the_notion_user_name() -> None:
     assert json.loads(utm_apps._stage_stdin("utm-10", payload))["userName"] == "Marius Engel"
 
 
+def test_utm10_resume_input_requires_existing_edge_session() -> None:
+    payload = {
+        "APPLE_ACCOUNT_EMAIL": "mail@example.test",
+        "APPLE_ACCOUNT_PASSWORD": "secret",
+        "APPLE_ACCOUNT_PHONE": "+15550100",
+        "APPLE_ACCOUNT_SMS_URL": "https://sms.example.test/?code=x",
+        "APPLE_ACCOUNT_USER_NAME": "Marius Engel",
+        "UTM_10_REUSE_EXISTING_EDGE": True,
+    }
+
+    value = json.loads(utm_apps._stage_stdin("utm-10", payload))
+
+    assert value["resumeExistingSession"] is True
+
+
 def test_utm10_direct_sms_inbox_does_not_require_a_query_code() -> None:
     source = (ROOT / "scripts" / "utm_10_login.mjs").read_text(encoding="utf-8")
     section = source.split("async function openSmsInbox", 1)[1].split("\n}\n", 1)[0]
@@ -1486,14 +1629,16 @@ def test_utm10_otp_entry_accepts_one_whole_input_or_six_digit_inputs() -> None:
     assert "verification code inputs must be one or six" in section
 
 
-def test_utm10_restores_the_original_browser_start_operation() -> None:
+def test_utm10_resume_reuses_the_existing_browser_without_restart() -> None:
     source = (ROOT / "scripts" / "utm_10_login.mjs").read_text(encoding="utf-8")
 
     assert "const { approvedPage, connectLocalBrowser, restartLocalBrowser }" in source
     main_source = source[source.index("async function main()") :]
-    assert main_source.index("await restartLocalBrowser();") < main_source.index(
-        "await currentApplePage()"
-    )
+    resume_guard = main_source.index("if (credentials.resumeExistingSession === true)")
+    reuse = main_source.index("await connectLocalBrowser();", resume_guard)
+    restart = main_source.index("await restartLocalBrowser();", reuse)
+    current = main_source.index("await currentApplePage()", restart)
+    assert resume_guard < reuse < restart < current
 
 
 def test_utm10_treats_the_last_code_rate_limit_page_as_otp_before_phone() -> None:
@@ -1581,11 +1726,11 @@ def test_default_guest_preflight_syncs_current_scripts_before_verification() -> 
         "_ssh_run",
         return_value=SimpleNamespace(returncode=0, stdout=b"", stderr=b""),
     ):
-        utm_apps.verify_guest_scripts("192.0.2.10", "abcd")
+        utm_apps.verify_guest_scripts("192.0.2.10", "user")
 
     sync_scripts.assert_called_once_with(
         utm_apps.SHARED_DIR,
-        vm_user="abcd",
+        vm_user="user",
         vm_ip="192.0.2.10",
     )
 
@@ -1604,7 +1749,7 @@ def test_utm12_recovers_existing_identifier_before_opening_registration_form() -
     ensure = source[ensure_start:ensure_end]
     assert "if (await recoverIdentifier(page, config))" in ensure
     assert 'await recordExistingLedger(run, "app-id-register", page' in ensure
-    run_start = source.index("export async function runUtm12()")
+    run_start = source.index("export async function runUtm12(")
     run_source = source[run_start:]
     assert "const identifierResult = await ensureIdentifier(workflowPage, run, config);" in run_source
     assert "appIdAttemptId = identifierResult.attemptId;" in run_source
@@ -1731,7 +1876,7 @@ def test_utm12_skips_app_search_when_already_on_verified_existing_detail() -> No
 
 def test_utm12_replays_verified_app_detail_from_persisted_live_session_evidence() -> None:
     source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
-    start = source.index("export async function runUtm12()")
+    start = source.index("export async function runUtm12(")
     run_source = source[start:]
     persisted = run_source.index("const persistedResult = resultFromPersistedRun(run);")
     target = run_source.index(
@@ -1753,7 +1898,7 @@ def test_utm12_persists_validated_application_input_for_utm13_handoff() -> None:
 
 def test_utm12_verified_replay_checks_live_app_detail_and_returns_before_full_flow() -> None:
     source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
-    start = source.index("export async function runUtm12()")
+    start = source.index("export async function runUtm12(")
     run_source = source[start:]
     replay = run_source.index("const replay = await replayVerifiedUtm12(context, run);")
     account = run_source.index("verifyDeveloperAccountStage(context, run)")
@@ -1772,9 +1917,9 @@ def test_utm12_guest_stage_allows_transport_grace_after_180_second_guest_timeout
     with pytest.raises(RuntimeError, match="stop after capturing"):
         utm_apps.run_guest_stage(
             stage="utm-12",
-            vm_name="abcd",
+            vm_name="user",
             vm_ip="192.0.2.10",
-            vm_user="abcd",
+            vm_user="user",
             payload={"APP_NAME": "SampleApp", "BUNDLE_ID": "com.example.sample"},
             runner=runner,
             password_env={},
@@ -1793,9 +1938,9 @@ def test_utm13_guest_stage_keeps_the_60_second_guest_limit_with_transport_grace(
     with pytest.raises(RuntimeError, match="stop after capturing"):
         utm_apps.run_guest_stage(
             stage="utm-13",
-            vm_name="abcd",
+            vm_name="user",
             vm_ip="192.0.2.10",
-            vm_user="abcd",
+            vm_user="user",
             payload={"RUN_ID": "run-1"},
             runner=runner,
             password_env={},
@@ -1817,9 +1962,9 @@ def test_guest_timeout_is_reported_instead_of_unclassified() -> None:
     ):
         utm_apps.run_guest_stage(
             stage="utm-10",
-            vm_name="abcd",
+            vm_name="user",
             vm_ip="192.0.2.10",
-            vm_user="abcd",
+            vm_user="user",
             payload={
                 "APPLE_ACCOUNT_EMAIL": "mail@example.test",
                 "APPLE_ACCOUNT_PASSWORD": "secret",
@@ -1846,9 +1991,9 @@ def test_guest_stage_preserves_the_complete_actual_error_text() -> None:
     with pytest.raises(utm_apps.AppleWebError) as captured:
         utm_apps.run_guest_stage(
             stage="utm-12",
-            vm_name="abcd",
+            vm_name="user",
             vm_ip="192.0.2.10",
-            vm_user="abcd",
+            vm_user="user",
             payload={"APP_NAME": "SampleApp", "BUNDLE_ID": "com.example.sample"},
             runner=lambda *_args, **_kwargs: completed,
             password_env={},
@@ -1869,9 +2014,9 @@ def test_guest_stage_preserves_playwright_call_log_after_error_marker() -> None:
     with pytest.raises(utm_apps.AppleWebError) as captured:
         utm_apps.run_guest_stage(
             stage="utm-12",
-            vm_name="abcd",
+            vm_name="user",
             vm_ip="192.0.2.10",
-            vm_user="abcd",
+            vm_user="user",
             payload={"APP_NAME": "SampleApp", "BUNDLE_ID": "com.example.sample"},
             runner=lambda *_args, **_kwargs: completed,
             password_env={},
@@ -1895,9 +2040,9 @@ def test_notion_fields_stage_preserves_the_complete_actual_error_text() -> None:
 
     with pytest.raises(utm_apps.AppleWebError) as captured:
         utm_apps.run_utm12_notion_fields(
-            vm_name="abcd",
+            vm_name="user",
             vm_ip="192.0.2.10",
-            vm_user="abcd",
+            vm_user="user",
             runner=lambda *_args, **_kwargs: completed,
             password_env={},
         )
@@ -1926,9 +2071,9 @@ def test_utm12_guest_timeout_reports_the_stage_specific_180_second_marker() -> N
     ):
         utm_apps.run_guest_stage(
             stage="utm-12",
-            vm_name="abcd",
+            vm_name="user",
             vm_ip="192.0.2.10",
-            vm_user="abcd",
+            vm_user="user",
             payload={"APP_NAME": "SampleApp", "BUNDLE_ID": "com.example.sample"},
             runner=lambda *_args, **_kwargs: completed,
             password_env={},
@@ -1940,13 +2085,13 @@ def test_stage_selector_can_resume_from_utm12_through_utm13() -> None:
     args = parser.parse_args(
         [
             "--page-title",
-            "SowSheet-igec",
+            "SowSheet-user",
             "--vm-name",
-            "igec",
+            "user",
             "--vm-ip",
             "192.168.64.52",
             "--vm-user",
-            "igec",
+            "user",
             "--stage",
             "utm-12-onward",
         ]
@@ -1978,18 +2123,73 @@ def test_stage_selector_can_skip_login_and_resume_from_utm11() -> None:
     args = parser.parse_args(
         [
             "--page-title",
-            "SowSheet-igec",
+            "SowSheet-user",
             "--vm-name",
-            "igec",
+            "user",
             "--vm-ip",
             "192.168.64.52",
             "--vm-user",
-            "igec",
+            "user",
             "--stage",
             "utm-11-onward",
         ]
     )
     assert args.stage == "utm-11-onward"
+
+
+def test_stage_selector_can_resume_only_utm10_without_restarting_edge() -> None:
+    parser = utm_apps.build_parser()
+    args = parser.parse_args(
+        [
+            "--page-title",
+            "SowSheet-user",
+            "--vm-name",
+            "user",
+            "--vm-ip",
+            "192.168.64.52",
+            "--vm-user",
+            "user",
+            "--stage",
+            "utm-10",
+        ]
+    )
+    assert args.stage == "utm-10"
+
+
+def test_explicit_utm10_stage_runs_only_utm10_in_resume_mode(capsys) -> None:
+    notion = FakeNotion()
+    args = SimpleNamespace(
+        run_id=None,
+        page_title="SampleApp-user",
+        vm_name="user",
+        vm_ip="192.0.2.10",
+        vm_user="user",
+        stage="utm-10",
+    )
+    calls = []
+
+    def fake_stage(**kwargs):
+        calls.append(kwargs)
+        return utm_apps.GuestWorkflowResult(
+            ("UTM_10=verified",),
+            {
+                "edge_pid": 42,
+                "edge_websocket": "ws://127.0.0.1:9222/devtools/browser/session",
+            },
+        )
+
+    with patch.object(
+        utm_apps,
+        "_resolve_context",
+        return_value=(True, "direct-v1-user-123456789012345678901234", "host", "SampleApp-user", "SampleApp"),
+    ), patch.object(utm_apps, "verify_guest_scripts"), patch.object(
+        utm_apps, "run_guest_stage", side_effect=fake_stage
+    ):
+        assert utm_apps.run(args, api=notion) == 0
+
+    assert [call["stage"] for call in calls] == ["utm-10"]
+    assert calls[0]["payload"]["UTM_10_REUSE_EXISTING_EDGE"] is True
+    assert "UTM-10 登陆账号步骤已完成" in capsys.readouterr().out
 
 
 def test_utm11_onward_never_invokes_the_login_stage() -> None:
@@ -2010,13 +2210,13 @@ def test_stage_selector_can_run_only_utm13_for_validation() -> None:
     args = parser.parse_args(
         [
             "--page-title",
-            "SowSheet-igec",
+            "SowSheet-user",
             "--vm-name",
-            "igec",
+            "user",
             "--vm-ip",
             "192.168.64.52",
             "--vm-user",
-            "igec",
+            "user",
             "--stage",
             "utm-13",
         ]
@@ -2064,7 +2264,7 @@ def test_utm12_result_reads_membership_and_numeric_app_id() -> None:
             ),
         )
     )
-    result = utm_apps._parse_playwright_guest_result("utm-12", stdout, "abcd")
+    result = utm_apps._parse_playwright_guest_result("utm-12", stdout, "user")
     assert result.markers == ("MEMBERSHIP_DETAILS=verified", "UTM_12=verified")
     assert result.data["team_id"] == "ABCDE12345"
     assert result.data["renewal_date"] == "August 11, 2027"
@@ -2138,10 +2338,10 @@ def test_explicit_utm12_stage_runs_no_other_stage(capsys) -> None:
     notion = FakeNotion()
     args = SimpleNamespace(
         run_id=None,
-        page_title="SampleApp-abcd",
-        vm_name="abcd",
+        page_title="SampleApp-user",
+        vm_name="user",
         vm_ip="192.0.2.10",
-        vm_user="abcd",
+        vm_user="user",
         stage="utm-12",
     )
     stage_calls = []
@@ -2162,7 +2362,7 @@ def test_explicit_utm12_stage_runs_no_other_stage(capsys) -> None:
     with patch.object(
         utm_apps,
         "_resolve_context",
-        return_value=(True, "direct-v1-abcd-123456789012345678901234", "host", "SampleApp-abcd", "SampleApp"),
+        return_value=(True, "direct-v1-user-123456789012345678901234", "host", "SampleApp-user", "SampleApp"),
     ), patch.object(utm_apps, "verify_guest_scripts"), patch.object(
         utm_apps, "run_guest_stage", side_effect=fake_stage
     ):
@@ -2183,10 +2383,10 @@ def test_explicit_notion_fields_stage_only_writes_and_reads_back(capsys) -> None
     notion = FakeNotion()
     args = SimpleNamespace(
         run_id=None,
-        page_title="SampleApp-abcd",
-        vm_name="abcd",
+        page_title="SampleApp-user",
+        vm_name="user",
         vm_ip="192.0.2.10",
-        vm_user="abcd",
+        vm_user="user",
         stage="notion-fields",
     )
     result = utm_apps.GuestWorkflowResult(
@@ -2203,7 +2403,7 @@ def test_explicit_notion_fields_stage_only_writes_and_reads_back(capsys) -> None
     with patch.object(
         utm_apps,
         "_resolve_context",
-        return_value=(True, "direct-v1-abcd-123456789012345678901234", "host", "SampleApp-abcd", "SampleApp"),
+        return_value=(True, "direct-v1-user-123456789012345678901234", "host", "SampleApp-user", "SampleApp"),
     ), patch.object(
         utm_apps, "verify_utm12_notion_fields_scripts"
     ) as verify, patch.object(

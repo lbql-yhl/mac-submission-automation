@@ -4,55 +4,46 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "skills/utm-23/SKILL.md"
-DOC = ROOT / "docs/utm-23.md"
+ENTRY = 'python3 "$PROJECT_ROOT/scripts/utm_23.py"'
 
 
-def main() -> None:
+def test_utm_23_skill_publishes_one_complete_script_entry_and_hands_off_to_utm_24() -> None:
     skill = SKILL.read_text(encoding="utf-8")
-    doc = DOC.read_text(encoding="utf-8")
-    active = "\n".join(
-        (
-            skill,
-            doc,
-            (ROOT / "README.md").read_text(encoding="utf-8"),
-            (ROOT / "AGENTS.md").read_text(encoding="utf-8"),
-            (ROOT / "docs/utm-feishu-bot.md").read_text(encoding="utf-8"),
-        )
-    )
 
-    for value in (
-        "先执行只读已准备恢复分支", "ALREADY_PREPARED_CHECK=verified",
-        "部分准备先建立逐项状态账本", "DETERMINISTIC_RESUME_STEP=<n>",
-        "PREPARATION_STATE=partial_recoverable", "PREPARATION_STATE=ambiguous",
-        "AUTO_RECOVERY_ATTEMPTS=3", "utm-23-partial-preparation",
-        "15/30/60/120 秒", "ADD_BUILD_VISIBILITY_POLL=exhausted",
-        "DUPLICATE_UPLOAD=forbidden", "任何决定都不得上传",
-        "Missing Compliance", "Game Center", "In-App Purchases (14)",
-        "Draft Submissions (1)", "Create New Submission",
-        'saveReviewScreenshot("02-iap-drafts.png")',
-        'saveReviewScreenshot("03-app-information.png")',
-        "删除前证据快照", "结果不明只读检查", "用 before 自动恢复错误行",
-        "APP_STORE_REGULATIONS_PERMITS=empty",
-        "APP_STORE_SERVER_NOTIFICATIONS=empty",
-        "SUBMIT_FOR_REVIEW=not_clicked", "UTM_23=verified", "`utm-24`",
+    assert len(skill.splitlines()) <= 55
+    assert skill.count(ENTRY) == 1
+    for required in (
+        "Only public host entry",
+        "owns the complete App Store Connect browser workflow",
+        "scripts/session.mjs",
+        "scripts/utm_10_login.mjs",
+        "scripts/utm_23_prepare_review.mjs",
+        "node '<guest>/session.mjs' start",
+        "EDGE_PROCESS=absent",
+        "UTM_10=verified",
+        "VISUAL_BROWSER_CONTROL=forbidden",
+        "SUBAGENT_BROWSER_CONTROL=forbidden",
+        "UTM_22=verified",
+        "BUILD_UPLOAD_FINAL_STATE=COMPLETE",
+        "BUILD_PROCESSING_STATE=VALID",
+        "DRAFT_SUBMISSIONS=1",
+        "IAP_READY_FOR_REVIEW=<N>",
+        "REVIEW_ITEMS_READY=<N+1>",
+        "02-iap-drafts.png",
+        "03-app-information.png",
+        "SUBMIT_FOR_REVIEW=not_clicked",
+        "UTM_23=verified",
+        "utm-24",
     ):
-        assert value in skill, value
-
-    for value in (
-        "有序状态账本", "从第一个未完成", "15/30/60/120 秒",
-        "SECOND_UPLOAD=forbidden", "before/after", "最后故障卡",
-        "SUBMIT_FOR_REVIEW=not_clicked", "UTM_23=verified",
-    ):
-        assert value in doc, value
-
+        assert required in skill, required
     for stale in (
-        "upload-existing", "REUPLOAD_ATTEMPT", "REUPLOAD_SOURCE",
-        "重新上传后", "部分准备或状态不明确时发送三按钮故障卡",
+        'node "$PROJECT_ROOT/scripts/session.mjs" inspect',
+        "There is no complete `utm-23` wrapper",
+        "exactly 14 IAP",
+        "14 IAP items",
+        "IAP_READY_FOR_REVIEW=14",
+        "## Browser recovery",
+        "## Scripted workflow",
+        "The entry resumes idempotently",
     ):
-        assert stale not in active, stale
-
-    print("UTM_23_DETERMINISTIC_RESUME=verified")
-
-
-if __name__ == "__main__":
-    main()
+        assert stale not in skill, stale

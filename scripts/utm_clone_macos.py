@@ -28,7 +28,7 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from services.project_paths import PROJECT_ROOT, VM_IMAGES_DIR, VM_TEMPLATE  # noqa: E402
+from services.project_paths import PROJECT_ROOT, VM_IMAGES_DIRS, VM_TEMPLATE  # noqa: E402
 from scripts.vm_inventory import (  # noqa: E402
     InventoryError,
     list_records,
@@ -42,7 +42,12 @@ UUID_RE = re.compile(r"^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
 MAC_RE = re.compile(r"^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$")
 WAIT_SECONDS = 3.0
 REGISTRATION_ATTEMPTS = 11
-STORAGE_RESERVE_BYTES = 5 * 1024 * 1024 * 1024
+MINIMUM_FREE_BYTES = 300 * 1000**3
+TEMPLATE_STATUS_RETRY_DELAYS = (0.0, 5.0, 10.0)
+TEMPLATE_STATUS_TIMEOUT_SECONDS = 15.0
+KNOWN_UTM_STATUSES = frozenset(
+    {"started", "running", "starting", "stopped", "stopping", "suspended"}
+)
 
 
 class CloneError(RuntimeError):
@@ -313,18 +318,57 @@ def template_name(template: Path) -> str:
     return str(data.get("Information", {}).get("Name") or template.stem)
 
 
+def run_template_status_command(template_name_value: str) -> str:
+    try:
+        result = subprocess.run(
+            ["utmctl", "status", template_name_value],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=TEMPLATE_STATUS_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise CloneError("TEMPLATE_STATUS_UNAVAILABLE") from None
+    if result.returncode != 0:
+        raise CloneError("TEMPLATE_STATUS_UNAVAILABLE")
+    return str(result.stdout or "")
+
+
+def read_template_status(template_name_value: str) -> str:
+    values = [
+        line.strip().lower()
+        for line in run_template_status_command(template_name_value).splitlines()
+        if line.strip()
+    ]
+    if len(values) != 1 or values[0] not in KNOWN_UTM_STATUSES:
+        raise CloneError("TEMPLATE_STATUS_AMBIGUOUS")
+    return values[0]
+
+
 def require_template_stopped(template_name_value: str) -> None:
-    statuses = []
-    for _ in range(2):
-        output = run_command(["utmctl", "status", template_name_value])
-        values = [line.strip().lower() for line in output.splitlines() if line.strip()]
-        if len(values) != 1:
-            raise CloneError(f"ambiguous template status: {values}")
-        statuses.append(values[0])
-        if len(statuses) == 1:
+    last_failure = "TEMPLATE_STATUS_UNAVAILABLE"
+    for delay in TEMPLATE_STATUS_RETRY_DELAYS:
+        if delay:
+            time.sleep(delay)
+        try:
+            statuses = [read_template_status(template_name_value)]
             time.sleep(WAIT_SECONDS)
-    if statuses != ["stopped", "stopped"]:
-        raise CloneError(f"template must be stopped: {statuses}")
+            statuses.append(read_template_status(template_name_value))
+        except (CloneError, OSError, subprocess.TimeoutExpired) as error:
+            code = str(error).strip()
+            last_failure = (
+                code
+                if code
+                in {"TEMPLATE_STATUS_UNAVAILABLE", "TEMPLATE_STATUS_AMBIGUOUS"}
+                else "TEMPLATE_STATUS_UNAVAILABLE"
+            )
+            continue
+        if statuses == ["stopped", "stopped"]:
+            return
+        last_failure = "TEMPLATE_NOT_STOPPED"
+    raise CloneError(last_failure)
 
 
 def existing_identities(images_dir: Path) -> list[dict[str, Any]]:
@@ -349,13 +393,70 @@ def package_allocated_bytes(source: Path) -> int:
     )
 
 
-def require_clone_capacity(source: Path, images_dir: Path) -> None:
-    required = package_allocated_bytes(source) + STORAGE_RESERVE_BYTES
-    available = shutil.disk_usage(images_dir).free
-    if available < required:
-        raise CloneError(
-            f"insufficient clone storage: required={required} available={available}"
-        )
+def is_external_writable_volume(candidate: Path) -> bool:
+    try:
+        try:
+            raw = subprocess.check_output(
+                ["diskutil", "info", "-plist", str(candidate)],
+                stderr=subprocess.STDOUT,
+            )
+        except subprocess.CalledProcessError:
+            filesystem = subprocess.check_output(
+                ["/bin/df", "-P", str(candidate)],
+                stderr=subprocess.STDOUT,
+            )
+            lines = [line for line in filesystem.decode().splitlines() if line.strip()]
+            if len(lines) < 2 or not lines[-1].split():
+                return False
+            device = lines[-1].split(maxsplit=1)[0]
+            raw = subprocess.check_output(
+                ["diskutil", "info", "-plist", device],
+                stderr=subprocess.STDOUT,
+            )
+        info = plistlib.loads(raw)
+        mount_value = info.get("MountPoint") if isinstance(info, dict) else None
+        if not isinstance(mount_value, str) or not mount_value:
+            return False
+        mount_point = Path(mount_value).resolve()
+        resolved_candidate = candidate.resolve()
+        resolved_candidate.relative_to(mount_point)
+    except (
+        OSError,
+        ValueError,
+        subprocess.CalledProcessError,
+        plistlib.InvalidFileException,
+    ):
+        return False
+    return bool(
+        info.get("Internal") is False
+        and info.get("Mounted") is not False
+        and info.get("MediaReadOnly") is not True
+        and info.get("VolumeReadOnly") is not True
+    )
+
+
+def valid_candidate_directory(candidate: Path) -> bool:
+    return bool(
+        candidate.is_dir()
+        and not candidate.is_symlink()
+        and os.access(candidate, os.W_OK)
+    )
+
+
+def select_clone_images_dir(source: Path, candidates: tuple[Path, ...]) -> Path:
+    clone_bytes = package_allocated_bytes(source)
+    for candidate in candidates:
+        if not valid_candidate_directory(candidate):
+            continue
+        if not is_external_writable_volume(candidate):
+            continue
+        try:
+            available = shutil.disk_usage(candidate).free
+        except OSError:
+            continue
+        if available - clone_bytes >= MINIMUM_FREE_BYTES:
+            return candidate
+    raise CloneError("CLONE_STORAGE_UNAVAILABLE")
 
 
 def verify_identity_unique(identity: dict[str, Any], existing: Iterable[dict[str, Any]]) -> None:
@@ -366,12 +467,9 @@ def verify_identity_unique(identity: dict[str, Any], existing: Iterable[dict[str
 
 def clone_once(database: Path) -> dict[str, str]:
     source = VM_TEMPLATE.expanduser().resolve()
-    images_dir = VM_IMAGES_DIR.expanduser().resolve()
     if not source.is_dir() or source.is_symlink() or not (source / "config.plist").is_file():
         raise CloneError(f"configured template is missing: {source}")
-    if not images_dir.is_dir() or images_dir.is_symlink():
-        raise CloneError(f"configured image directory is invalid: {images_dir}")
-    require_clone_capacity(source, images_dir)
+    images_dir = select_clone_images_dir(source, VM_IMAGES_DIRS)
     require_template_stopped(template_name(source))
     name = reserve_vm_name(database, images_dir)
     destination = images_dir / f"{name}.utm"

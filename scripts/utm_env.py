@@ -6,11 +6,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import secrets
 import shlex
-import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Protocol
@@ -156,6 +159,33 @@ def collect_host_env_manifest(shared_root: Path) -> dict[str, Any]:
     }
 
 
+def build_stage_archive(
+    shared_root: Path, app_name: str, archive_path: Path
+) -> None:
+    shared_root = Path(shared_root).expanduser().resolve()
+    collect_host_env_manifest(shared_root)
+    collect_host_manifest(shared_root, app_name)
+    archive_path = Path(archive_path).expanduser()
+    if archive_path.is_symlink():
+        raise UTMEnvError("staging archive path is unsafe")
+    parent = archive_path.parent.resolve()
+    if not parent.is_dir() or parent.is_symlink():
+        raise UTMEnvError("staging archive parent is unsafe")
+    members = [
+        Path("Fire_One_en1.3") / ".env",
+        *(Path(name) for name in expected_asset_names(app_name)),
+    ]
+    try:
+        with tarfile.open(archive_path, mode="w", format=tarfile.PAX_FORMAT) as bundle:
+            for relative in members:
+                source = shared_root / relative
+                bundle.add(source, arcname=relative.as_posix(), recursive=True)
+        archive_path.chmod(0o600)
+    except BaseException:
+        archive_path.unlink(missing_ok=True)
+        raise
+
+
 class GuestTransport(Protocol):
     def probe_identity(self) -> None: ...
     def install_helpers(self) -> None: ...
@@ -186,6 +216,7 @@ def finalize_guest(
     shared_root: Path,
     transport: GuestTransport,
     identity_probed: bool = False,
+    source_root: str | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[a-z]{4}", vm_user):
         raise UTMEnvError("VM user must be four lowercase letters")
@@ -197,15 +228,21 @@ def finalize_guest(
         "assets": manifest,
         "fire_one_env": env_manifest,
     }
+    copy_mode = "copy"
+    verify_mode = "verify"
+    if source_root is not None:
+        payload["source_root"] = source_root
+        copy_mode = "copy-staged"
+        verify_mode = "verify-staged"
     installed = False
     try:
         if not identity_probed:
             transport.probe_identity()
         installed = True
         transport.install_helpers()
-        copy_result = transport.run_guest("copy", payload)
+        copy_result = transport.run_guest(copy_mode, payload)
         _require_copy_result(copy_result, "copy", expected_code_path)
-        verify_result = transport.run_guest("verify", payload)
+        verify_result = transport.run_guest(verify_mode, payload)
         _require_copy_result(verify_result, "fresh", expected_code_path)
         return {
             "host_guest_asset_sha256": "exact",
@@ -305,6 +342,87 @@ class SSHGuestTransport:
             if not verify.split() or verify.split()[0] != digest:
                 raise UTMEnvError("guest helper hash verification failed")
 
+    def _validated_staging_paths(self, source_root: str) -> tuple[str, str]:
+        root = Path(source_root)
+        expected_parent = Path(self.home) / "Downloads"
+        if (
+            root.parent != expected_parent
+            or re.fullmatch(r"[.]utm-env-stage-[0-9a-f]{32}", root.name) is None
+        ):
+            raise UTMEnvError("guest staging path is unsafe")
+        return str(root), f"{root}.tar"
+
+    def cleanup_staging(self, source_root: str) -> None:
+        root, archive = self._validated_staging_paths(source_root)
+        quoted_root = shlex.quote(root)
+        quoted_archive = shlex.quote(archive)
+        self._run(
+            " && ".join(
+                (
+                    f"if test -e {quoted_root} || test -L {quoted_root}; then test -d {quoted_root} && test ! -L {quoted_root} && /bin/rm -rf {quoted_root}; fi",
+                    f"if test -e {quoted_archive} || test -L {quoted_archive}; then test -f {quoted_archive} && test ! -L {quoted_archive} && /bin/rm -f {quoted_archive}; fi",
+                    f"test ! -e {quoted_root} && test ! -L {quoted_root}",
+                    f"test ! -e {quoted_archive} && test ! -L {quoted_archive}",
+                )
+            )
+        )
+
+    def stage_sources(self, shared_root: Path, app_name: str) -> str:
+        stage_name = f".utm-env-stage-{secrets.token_hex(16)}"
+        source_root, remote_archive = self._validated_staging_paths(
+            f"{self.home}/Downloads/{stage_name}"
+        )
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix="utm-env-stage-", suffix=".tar"
+        )
+        os.close(descriptor)
+        archive = Path(temporary_name)
+        try:
+            build_stage_archive(shared_root, app_name, archive)
+            quoted_root = shlex.quote(source_root)
+            quoted_archive = shlex.quote(remote_archive)
+            self._run(
+                f"test ! -e {quoted_root} && test ! -L {quoted_root} && "
+                f"test ! -e {quoted_archive} && test ! -L {quoted_archive} && "
+                f"/bin/mkdir -m 700 {quoted_root}"
+            )
+            try:
+                result = subprocess.run(
+                    scp_args(
+                        self.vm_user,
+                        self.vm_ip,
+                        archive,
+                        remote_archive,
+                        connect_timeout=8,
+                    ),
+                    check=False,
+                    capture_output=True,
+                    timeout=1800,
+                    env=password_environment(),
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                raise UTMEnvError("guest staging upload failed") from None
+            if result.returncode != 0:
+                raise UTMEnvError("guest staging upload failed")
+            self._run(
+                f"test -f {quoted_archive} && test ! -L {quoted_archive} && "
+                f"/usr/bin/tar -xf {quoted_archive} -C {quoted_root} && "
+                f"/bin/rm -f {quoted_archive} && test -d {quoted_root} && "
+                f"test ! -L {quoted_root}",
+                timeout=1800,
+            )
+            return source_root
+        except BaseException:
+            try:
+                self.cleanup_staging(source_root)
+            except Exception:
+                raise UTMEnvError(
+                    "guest staging failed and cleanup could not be verified"
+                ) from None
+            raise
+        finally:
+            archive.unlink(missing_ok=True)
+
     @staticmethod
     def _parse_result(output: bytes) -> dict[str, Any]:
         for raw_line in reversed(output.decode("utf-8", errors="replace").replace("\r", "").splitlines()):
@@ -316,7 +434,7 @@ class SSHGuestTransport:
         raise UTMEnvError("guest helper did not return a JSON result")
 
     def run_guest(self, mode: str, payload: dict[str, Any]) -> dict[str, Any]:
-        if mode not in {"copy", "verify"}:
+        if mode not in {"copy", "verify", "copy-staged", "verify-staged"}:
             raise UTMEnvError("invalid guest file mode")
         helper = shlex.quote(self.remote_paths["utm_env_guest_finalize.py"])
         command = (
@@ -338,6 +456,37 @@ class SSHGuestTransport:
             self._run(
                 f"if test -e {quoted_remote}; then test -f {quoted_remote} && test ! -L {quoted_remote} && test \"$(/usr/bin/shasum -a 256 {quoted_remote} | /usr/bin/awk '{{print $1}}')\" = {shlex.quote(digest)} && /bin/rm -f {quoted_remote}; fi; test ! -e {quoted_remote}"
             )
+
+
+def finalize_staged_guest(
+    *,
+    app_name: str,
+    vm_user: str,
+    shared_root: Path,
+    transport: SSHGuestTransport,
+    identity_probed: bool = False,
+) -> dict[str, Any]:
+    source_root = transport.stage_sources(shared_root, app_name)
+    try:
+        result = finalize_guest(
+            app_name=app_name,
+            vm_user=vm_user,
+            shared_root=shared_root,
+            transport=transport,
+            identity_probed=identity_probed,
+            source_root=source_root,
+        )
+    except BaseException:
+        try:
+            transport.cleanup_staging(source_root)
+        except Exception:
+            raise UTMEnvError(
+                "guest finalization failed and staging cleanup could not be verified"
+            ) from None
+        raise
+    else:
+        transport.cleanup_staging(source_root)
+        return result
 
 
 def _download_summary_matches_manifest(
@@ -386,7 +535,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     manifest = collect_host_manifest(args.output_root, args.app_name)
     if not _download_summary_matches_manifest(download_summary, manifest):
         raise UTMEnvError("download summary does not match the independent host manifest")
-    final = finalize_guest(
+    final = finalize_staged_guest(
         app_name=args.app_name,
         vm_user=args.vm_user,
         shared_root=args.output_root,

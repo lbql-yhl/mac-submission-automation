@@ -15,7 +15,7 @@ def _payload() -> dict[str, str]:
     return {
         "issuer_id": "11111111-2222-3333-4444-555555555555",
         "key_id": "ABC123DEFG",
-        "private_key_path": "/Users/example/Downloads/apple-store-bm/AuthKey_ABC123DEFG.p8",
+        "private_key_path": "/Users/user/Downloads/apple-store-bm/AuthKey_ABC123DEFG.p8",
         "private_key": "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----\n",
     }
 
@@ -29,10 +29,10 @@ def test_main_preserves_the_complete_actual_error(monkeypatch, capsys) -> None:
     )
     monkeypatch.setattr(sys, "argv", [
         "utm_p8.py",
-        "--page-title", "Demo-abcd",
-        "--vm-name", "abcd",
+        "--page-title", "Demo-user",
+        "--vm-name", "user",
         "--vm-ip", "192.0.2.10",
-        "--vm-user", "abcd",
+        "--vm-user", "user",
     ])
     assert utm_p8.main() == 1
     captured = capsys.readouterr()
@@ -40,8 +40,8 @@ def test_main_preserves_the_complete_actual_error(monkeypatch, capsys) -> None:
 
 
 def test_guest_command_reads_only_the_fixed_prod_yml_and_p8() -> None:
-    command = utm_p8.guest_read_command("abcd")
-    assert "/Users/example/Downloads/apple-store-bm/config/prod.yml" in command
+    command = utm_p8.guest_read_command("user")
+    assert "/Users/user/Downloads/apple-store-bm/config/prod.yml" in command
     assert "AuthKey_" in command
     assert "Downloads/apple-store-bm" in command
     for mutating in ("os.O_WRONLY", "os.unlink", "os.replace", "os.chmod", "os.mkdir", "rm -"):
@@ -52,7 +52,7 @@ def test_guest_payload_is_validated_without_printing_secret() -> None:
     parsed = utm_p8.parse_guest_payload(json.dumps(_payload()))
     assert parsed["key_id"] == "ABC123DEFG"
     broken = _payload()
-    broken["private_key_path"] = "/Users/example/Downloads/other/AuthKey_ABC123DEFG.p8"
+    broken["private_key_path"] = "/Users/user/Downloads/other/AuthKey_ABC123DEFG.p8"
     with pytest.raises(utm_p8.UTMP8Error, match="GUEST_P8_PATH_INVALID"):
         utm_p8.parse_guest_payload(json.dumps(broken))
 
@@ -92,7 +92,7 @@ def test_notion_write_uses_before_write_after_and_independent_readback(tmp_path)
     runner = FakeNotionRunner("old")
     result = utm_p8.update_notion(
         parent_title="host",
-        page_title="App-abcd",
+        page_title="App-user",
         text=expected,
         runner=runner,
         temporary_root=tmp_path,
@@ -109,7 +109,7 @@ def test_notion_mismatch_rolls_back_and_independently_verifies(tmp_path) -> None
     with pytest.raises(utm_p8.UTMP8Error, match="NOTION_AFTER_READBACK_MISMATCH"):
         utm_p8.update_notion(
             parent_title="host",
-            page_title="App-abcd",
+            page_title="App-user",
             text=utm_p8.notion_payload(_payload()),
             runner=runner,
             temporary_root=tmp_path,
@@ -235,10 +235,24 @@ def test_cleanup_shared_app_assets_never_treats_public_directories_as_an_app(tmp
 def test_run_cleans_shared_assets_only_after_notion_registration_succeeds(monkeypatch, tmp_path) -> None:
     context = SimpleNamespace(
         parent_title="host",
-        page_title="PanSwap-CakeBaking-abcd",
+        page_title="PanSwap-CakeBaking-user",
         app_name="PanSwap-CakeBaking",
     )
-    monkeypatch.setattr(utm_p8, "resolve_direct_context", lambda **kwargs: context)
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(
+        utm_p8,
+        "optional_setting",
+        lambda name: "host" if name == "SUBMISSION_HOST_MACHINE" else "",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        utm_p8,
+        "resolve_direct_context",
+        lambda **kwargs: seen.update(
+            {"parent_title": kwargs.get("parent_title")}
+        )
+        or context,
+    )
     monkeypatch.setattr(utm_p8, "parse_guest_payload", lambda stdout: _payload())
     events: list[str] = []
     monkeypatch.setattr(
@@ -255,13 +269,14 @@ def test_run_cleans_shared_assets_only_after_notion_registration_succeeds(monkey
     args = SimpleNamespace(
         run_id=None,
         page_title=context.page_title,
-        vm_name="abcd",
+        vm_name="user",
         vm_ip="192.0.2.10",
-        vm_user="abcd",
+        vm_user="user",
     )
 
     assert utm_p8.run(args, runner=runner, password_env={}) == 0
     assert events == ["notion", "cleanup:PanSwap-CakeBaking"]
+    assert seen["parent_title"] == "host"
 
     events.clear()
     monkeypatch.setattr(

@@ -10,22 +10,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import services.feishu_bot as feishu_bot
 from services.feishu_bot import parse_submission_data
-from scripts.notion_utm_prepare import format_account_block, validate_account_block
 
 
 FIXTURE_ALLOWED_CHAT = "oc_allowed"
 
 
-def main() -> None:
+def test_contract() -> None:
     root = Path(__file__).resolve().parents[1]
     daily_docs = "\n".join(
         (root / path).read_text(encoding="utf-8")
         for path in ("AGENTS.md", "README.md", "docs/utm-feishu-bot.md")
     )
-    assert "日报必须先从本地项目证据生成预览" in daily_docs
-    assert "等待用户明确确认同一份文本后" in daily_docs
-    assert "故障卡、成功卡" in daily_docs
-    assert "不使用 Git 状态或提交历史" in daily_docs
+    assert "日报只接受用户为本次报告明确提供的业务行" in daily_docs
+    assert "要求用户确认精确预览及其摘要" in daily_docs
+    assert "日报只能投递到 `FEISHU_ALLOWED_CHAT_ID` 指定的同一项目群" in daily_docs
+    assert "VM inventory 扫描结果只允许留在本地" in daily_docs
 
     report_only_chat = "-".join(("daily", "report", "chat"))
     config = replace(
@@ -116,7 +115,6 @@ Account Number：000000000000
         config = replace(
             config,
             allowed_chat_id=FIXTURE_ALLOWED_CHAT,
-            runner_command="python3 services/submission_runner.py",
             assistant_enabled=False,
             submission_host_machine="海淋",
         )
@@ -184,10 +182,9 @@ Account Number：000000000000
             assert feishu_bot.SUBMISSION_SKILL_ORDER == current_order
             assert f"固定技能顺序（16 个）：{' -> '.join(current_order)}。" in prompt
             for required in (
-                "银行信息区块可整体省略",
-                "utm-business-bank-info-missing",
-                "重新执行 `verify-parent` 和两次 `read-field --copy`",
-                "Feishu/runtime/旧运行/对话/记忆",
+                "银行号码可留空",
+                "只有到 `utm-business` 银行资料步骤时两项才必填",
+                "只能从当前匹配 Notion 页实时读取",
             ):
                 assert required in prompt, required
         finally:
@@ -195,43 +192,6 @@ Account Number：000000000000
             feishu_bot.RUNS_FILE = old_runs_file
             feishu_bot.PROMPTS_DIR = old_prompts_dir
             feishu_bot.CODEX_APP_SESSIONS_DIR = old_codex_app_sessions_dir
-
-    account_block = format_account_block(data)
-    assert account_block.splitlines() == [
-        "用户名：",
-        "",
-        "邮箱：developer@example.com",
-        "",
-        "初始密码：InitialPass123!",
-        "",
-        "修改后的密码：",
-        "",
-        "电话：+15550101234",
-        "",
-        "电话短信接收平台：https://example.com/sms?token=test",
-        "",
-        "生日：",
-        "",
-        "team ID:",
-        "",
-        "APP_ID：",
-        "",
-        "Renewal date：",
-        "",
-        "代理ip:192.0.2.10",
-        "",
-        "代理端口:7612",
-        "",
-        "代理用户名：proxyuser",
-        "",
-        "代理用户密码：proxypass",
-        "",
-        "代码链接：https://example.com/ios/sample-app.git",
-        "",
-        "ABA Routing Number：000000000",
-        "",
-        "Account Number：000000000000",
-    ]
 
     data = parse_submission_data(text.replace("使用的宿主机", "使用的虚拟机"))
     assert data is None
@@ -260,24 +220,6 @@ Account Number：000000000000
     assert all(item is not None for item in optional_bank_data)
     for item, (_, expected_bank_info) in zip(optional_bank_data, optional_bank_cases):
         assert item["bank_info"] == expected_bank_info
-        optional_account_block = format_account_block(item)
-        validate_account_block(optional_account_block)
-        assert (
-            f"ABA Routing Number：{expected_bank_info['aba_routing_number']}"
-            in optional_account_block.splitlines()
-        )
-        assert (
-            f"Account Number：{expected_bank_info['account_number']}"
-            in optional_account_block.splitlines()
-        )
-
-    invalid_block = account_block.replace("用户名：", "旧用户名字段：", 1)
-    try:
-        validate_account_block(invalid_block)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("validator accepted a stale account label")
 
     with tempfile.TemporaryDirectory() as tmp:
         old_images_dir = feishu_bot.VM_IMAGES_DIR
@@ -302,4 +244,4 @@ Account Number：000000000000
 
 
 if __name__ == "__main__":
-    main()
+    test_contract()

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from services import project_paths
 
@@ -89,6 +92,53 @@ def test_configured_path_blank_process_value_uses_default(
     assert project_paths.configured_path(setting, default) == default
 
 
+def test_configured_paths_preserves_order(tmp_path: Path, monkeypatch) -> None:
+    setting = "SUBMISSION_TEST_CONFIGURED_PATHS"
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    monkeypatch.setattr(project_paths, "SOURCE_ROOT", tmp_path)
+    monkeypatch.setenv(setting, json.dumps([str(first), str(second)]))
+
+    assert project_paths.configured_paths(
+        setting, (tmp_path / "legacy",)
+    ) == (first, second)
+
+
+def test_configured_paths_blank_value_uses_legacy_default(
+    tmp_path: Path, monkeypatch
+) -> None:
+    setting = "SUBMISSION_TEST_CONFIGURED_PATHS"
+    legacy = tmp_path / "legacy"
+    monkeypatch.setattr(project_paths, "SOURCE_ROOT", tmp_path)
+    monkeypatch.setenv(setting, "   ")
+
+    assert project_paths.configured_paths(setting, (legacy,)) == (legacy,)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    (
+        "not-json",
+        "{}",
+        "[]",
+        '[""]',
+        '["duplicate", "duplicate"]',
+    ),
+)
+def test_configured_paths_rejects_invalid_or_duplicate_values(
+    raw: str, tmp_path: Path, monkeypatch
+) -> None:
+    setting = "SUBMISSION_TEST_CONFIGURED_PATHS"
+    monkeypatch.setattr(project_paths, "SOURCE_ROOT", tmp_path)
+    monkeypatch.setenv(setting, raw)
+
+    with pytest.raises(
+        project_paths.ConfigurationError,
+        match=f"invalid host setting: {setting}",
+    ):
+        project_paths.configured_paths(setting, (tmp_path / "legacy",))
+
+
 def test_public_path_constants_remain_paths() -> None:
     assert all(
         isinstance(value, Path)
@@ -100,3 +150,5 @@ def test_public_path_constants_remain_paths() -> None:
             project_paths.PROJECT_SKILLS_DIR,
         )
     )
+    assert isinstance(project_paths.VM_IMAGES_DIRS, tuple)
+    assert all(isinstance(path, Path) for path in project_paths.VM_IMAGES_DIRS)

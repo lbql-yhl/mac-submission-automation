@@ -158,6 +158,7 @@ MAC_PASSWORD_WAIT_ATTEMPTS = WORKFLOW_RENDER_ATTEMPTS
 MAC_PASSWORD_WAIT_INTERVAL_SECONDS = 0.5
 SMS_FETCH_INTERVAL_SECONDS = 2
 SMS_FETCH_ATTEMPTS = int(OPERATION_TIMEOUT_SECONDS / SMS_FETCH_INTERVAL_SECONDS)
+SMS_INITIAL_DELIVERY_WAIT_SECONDS = 10.0
 _MAC_PASSWORD_AUTO_HANDLER_ACTIVE = False
 _SECURITY_PROMPT_AUTO_HANDLER_ACTIVE = False
 
@@ -262,8 +263,22 @@ def _parse_sms_timestamp(value: Any) -> Optional[float]:
             number /= 1000.0
         return number
     normalized = text.replace("Z", "+00:00")
+    parsed = None
+    twelve_hour_text = re.sub(r"\s+", " ", text)
+    for pattern in (
+        "%Y-%m-%d %I:%M %p",
+        "%Y-%m-%d %I:%M:%S %p",
+        "%Y/%m/%d %I:%M %p",
+        "%Y/%m/%d %I:%M:%S %p",
+    ):
+        try:
+            parsed = datetime.strptime(twelve_hour_text, pattern)
+            break
+        except ValueError:
+            continue
     try:
-        parsed = datetime.fromisoformat(normalized)
+        if parsed is None:
+            parsed = datetime.fromisoformat(normalized)
     except ValueError:
         try:
             parsed = parsedate_to_datetime(text)
@@ -288,12 +303,14 @@ def _iter_json_objects(value: Any) -> Iterator[Dict[str, Any]]:
             yield from _iter_json_objects(child)
 
 
-def _extract_json_sms_candidates(page_text: str) -> List[Tuple[int, Optional[float], int, int]]:
+def _extract_json_sms_candidates(
+    page_text: str,
+) -> List[Tuple[int, Optional[float], int, int, bool]]:
     try:
         parsed = json.loads(page_text.strip())
     except (TypeError, ValueError):
         return []
-    candidates: List[Tuple[int, Optional[float], int, int]] = []
+    candidates: List[Tuple[int, Optional[float], int, int, bool]] = []
     order = 0
     for record in _iter_json_objects(parsed):
         text_parts = [str(record[key]) for key in SMS_TEXT_FIELDS if key in record]
@@ -307,7 +324,16 @@ def _extract_json_sms_candidates(page_text: str) -> List[Tuple[int, Optional[flo
         for match in SMS_CODE_PATTERN.finditer(body):
             context = body[max(0, match.start() - 120) : match.end() + 120].lower()
             score = sum(2 if keyword in context else 0 for keyword in SMS_CONTEXT_KEYWORDS)
-            candidates.append((order, timestamp, score, int(match.group(1))))
+            candidates.append(
+                (
+                    order,
+                    timestamp,
+                    score,
+                    int(match.group(1)),
+                    "apple account code" in context
+                    and "don't share it with anyone" in context,
+                )
+            )
             order += 1
     return candidates
 
@@ -317,7 +343,8 @@ def _extract_context_timestamp(
     code_offset: Optional[int] = None,
 ) -> Optional[float]:
     patterns = (
-        r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}[ T]\d{1,2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?\b",
+        r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}[ T]\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)\b",
+        r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}[ T]\d{1,2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?\b(?!\s*(?:AM|PM)\b)",
         r"\b\d{1,2}[-/]\d{1,2}[-/]20\d{2}[ T]\d{1,2}:\d{2}(?::\d{2})?\b",
         r"\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),?\s+[^,]{1,30},?\s+20\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?\b",
     )
@@ -343,7 +370,7 @@ def extract_latest_sms_code(
     not_before: Optional[float] = None,
     now: Optional[float] = None,
 ) -> Optional[str]:
-    """提取最新验证码；有时间按时间筛选，无时间按页面顺序取最后一条。"""
+    """提取最新验证码；有时间按时间筛选，无时间按页面顺序取顶部第一条。"""
     candidates = _extract_json_sms_candidates(page_text)
     if not candidates:
         candidates = []
@@ -363,6 +390,8 @@ def extract_latest_sms_code(
                     _extract_context_timestamp(context, start - context_start),
                     score,
                     int(match.group(1)),
+                    "apple account code" in lowered
+                    and "don't share it with anyone" in lowered,
                 )
             )
     if not candidates:
@@ -377,12 +406,19 @@ def extract_latest_sms_code(
                 if not_before - SMS_CLOCK_SKEW_SECONDS <= candidate[1] <= current + SMS_CLOCK_SKEW_SECONDS
             ]
         if not timestamped:
-            return None
+            visible_untimed_apple = [
+                candidate
+                for candidate in candidates
+                if candidate[4]
+            ]
+            if not visible_untimed_apple:
+                return None
+            return str(visible_untimed_apple[0][3]).zfill(6)
         selected = max(timestamped, key=lambda candidate: (candidate[1], candidate[0]))
         return str(selected[3]).zfill(6)
-    # 该页面没有时间字段时，按页面记录顺序取最后一条候选。
+    # 该短信页将最新消息放在顶部；无时间字段时取第一条候选。
     contextual = [candidate for candidate in candidates if candidate[2] > 0]
-    selected = (contextual or candidates)[-1]
+    selected = (contextual or candidates)[0]
     return str(selected[3]).zfill(6)
 
 
@@ -1109,22 +1145,6 @@ def _click_security_prompt_text_with_wait(
     return 5
 
 
-def _try_click_security_prompt_once(
-    pid: int,
-    targets: Tuple[str, ...],
-) -> Optional[int]:
-    """只检查一次安全提示按钮，用于处理弹窗在点击瞬间切换的竞态。"""
-    roots = current_search_roots(
-        pid,
-        auto_handle_mac_password=False,
-        auto_handle_security_prompts=False,
-    )
-    candidate = find_pressable_text_candidate_any(roots, targets)
-    if candidate is None:
-        return None
-    return activate(candidate)
-
-
 def invoke_iphone_passcode_prompt(pid: int) -> Optional[int]:
     """两个 iPhone 安全按钮任意一个出现就点击，不要求固定页面顺序。"""
     enter_later_targets = (ENTER_PASSCODE_LATER_TEXT,)
@@ -1230,17 +1250,6 @@ def invoke_mac_password_prompt(pid: int) -> Optional[int]:
     return handle_mac_password_prompt(pid)
 
 
-def wait_for_mac_password_prompt(pid: int) -> Optional[int]:
-    """验证码提交后持续调用独立弹窗模块，等待延迟出现的安全弹窗。"""
-    for attempt in range(MAC_PASSWORD_WAIT_ATTEMPTS):
-        result = invoke_mac_password_prompt(pid)
-        if result is not None:
-            return result
-        if attempt < MAC_PASSWORD_WAIT_ATTEMPTS - 1:
-            time.sleep(MAC_PASSWORD_WAIT_INTERVAL_SECONDS)
-    return None
-
-
 def invoke_post_login_prompts(pid: int, expected_email: str) -> int:
     """调用独立的 Apple Account 后置安全提示处理模块。"""
     from apple_account_post_login import handle_post_login_prompts
@@ -1276,6 +1285,17 @@ def complete_verification_code_workflow(
         )
         return 5
     print("已找到验证码输入框，正在读取短信验证码…", flush=True)
+
+    sms_request_time = (
+        verification_requested_at
+        if verification_requested_at is not None
+        else time.time()
+    )
+    sms_delivery_wait = (
+        sms_request_time + SMS_INITIAL_DELIVERY_WAIT_SECONDS - time.time()
+    )
+    if sms_delivery_wait > 0:
+        time.sleep(sms_delivery_wait)
 
     code: Optional[str] = None
     # 给短信平台留出到达时间；每次重新读取同一个当前 URL，取最新候选。
@@ -1377,17 +1397,6 @@ def find_login_field(
         ):
             return element
         if label == LOGIN_PASSWORD_FIELD_TEXT and "PASSWORD" in identifier:
-            return element
-    return None
-
-
-def find_field_by_labels(roots: List[Any], labels: Tuple[str, ...]) -> Optional[Any]:
-    """查找带有任一标签的文本输入框。"""
-    for element, _ in iter_accessibility_tree(roots):
-        info = describe_element(element)
-        if info["role"] not in TEXT_FIELD_ROLES:
-            continue
-        if any(element_contains_text(info, label) for label in labels):
             return element
     return None
 
@@ -1616,11 +1625,11 @@ def run_apple_account_login_workflow(
         if continue_candidate is None:
             print("选择电话号码后未找到 Continue 按钮。", file=sys.stderr)
             return 5
-        verification_requested_at = time.time()
         error = activate(continue_candidate)
         if error != AX.kAXErrorSuccess:
             print("提交验证码电话号码选择失败，AXError={}".format(error), file=sys.stderr)
             return 4
+        verification_requested_at = time.time()
         print("已提交电话号码选择，正在等待验证码输入框…", flush=True)
         return complete_verification_code_workflow(
             pid,

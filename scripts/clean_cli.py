@@ -59,7 +59,7 @@ def full_reason(error: BaseException) -> str:
 def run_clean_cli(
     *,
     skill_name: str,
-    success_marker: str,
+    success_marker: str | Callable[[], str],
     operation: Callable[[], int | None],
     progress_pattern: str | None = None,
     preserve_error_detail: bool = False,
@@ -67,6 +67,7 @@ def run_clean_cli(
     global _progress_fd
     print(f"开始执行：{skill_name}", flush=True)
     captured_reason = ""
+    resolved_success_marker = ""
     previous_progress_fd = _progress_fd
     try:
         sys.stdout.flush()
@@ -112,6 +113,13 @@ def run_clean_cli(
         status = int(result or 0)
         if status != 0:
             raise RuntimeError(captured_reason or f"EXIT_{status}")
+        resolved_success_marker = str(
+            success_marker() if callable(success_marker) else success_marker
+        ).strip()
+        if not resolved_success_marker or any(
+            character in resolved_success_marker for character in "\r\n"
+        ):
+            raise RuntimeError("SUCCESS_MARKER_INVALID")
     except BaseException as error:
         print(
             f"执行报错：{skill_name}；"
@@ -122,5 +130,5 @@ def run_clean_cli(
         return 1
     finally:
         _progress_fd = previous_progress_fd
-    print(f"执行成功：{skill_name}；{success_marker}", flush=True)
+    print(f"执行成功：{skill_name}；{resolved_success_marker}", flush=True)
     return 0

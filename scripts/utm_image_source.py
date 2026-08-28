@@ -142,15 +142,18 @@ def _development_attachment(value: Any) -> tuple[str, str]:
     return token, name
 
 
-def select_screenshot_source(fields: dict[str, Any]) -> ScreenshotSelection:
-    raw_beauty = fields.get(BEAUTY_FIELD)
-    beauty = _beauty_share_url(raw_beauty)
-    if beauty is not None:
-        return ScreenshotSelection(
-            source_field=BEAUTY_FIELD,
-            kind="share_url",
-            url=beauty,
-        )
+def select_screenshot_source(
+    fields: dict[str, Any], *, force_development: bool = False
+) -> ScreenshotSelection:
+    if not force_development:
+        raw_beauty = fields.get(BEAUTY_FIELD)
+        beauty = _beauty_share_url(raw_beauty)
+        if beauty is not None:
+            return ScreenshotSelection(
+                source_field=BEAUTY_FIELD,
+                kind="share_url",
+                url=beauty,
+            )
 
     token, name = _development_attachment(fields.get(DEVELOPMENT_FIELD))
     return ScreenshotSelection(
@@ -181,6 +184,7 @@ def prepare_screenshot_source(
     app_name: str,
     output_dir: Path,
     client: ScreenshotSourceClient,
+    force_development: bool = False,
 ) -> dict[str, Any]:
     if not app_name or app_name != app_name.strip():
         raise ValueError("application name must be non-empty and already normalized")
@@ -196,7 +200,9 @@ def prepare_screenshot_source(
     fields = record.get("fields")
     if not isinstance(fields, dict):
         raise ValueError("matching Base record has no fields")
-    selection = select_screenshot_source(fields)
+    selection = select_screenshot_source(
+        fields, force_development=force_development
+    )
 
     if selection.kind == "share_url":
         assert selection.url is not None

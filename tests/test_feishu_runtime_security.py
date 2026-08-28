@@ -83,6 +83,7 @@ def test_bot_main_orders_umask_and_hardening_before_dispatch(
 
 
 def test_supervisor_main_orders_umask_and_hardening_before_run(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[object] = []
@@ -106,6 +107,7 @@ def test_supervisor_main_orders_umask_and_hardening_before_run(
     monkeypatch.setattr(
         feishu_supervisor, "load_dotenv", lambda _path: calls.append("load_dotenv")
     )
+    monkeypatch.setattr(feishu_supervisor, "RUNTIME_DIR", tmp_path)
     monkeypatch.setattr(feishu_supervisor, "Supervisor", FakeSupervisor)
 
     assert feishu_supervisor.main() == 23

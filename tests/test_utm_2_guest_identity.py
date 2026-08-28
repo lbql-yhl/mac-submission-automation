@@ -13,7 +13,7 @@ from scripts.utm_2_guest_identity import (  # noqa: E402
 )
 
 
-def main() -> None:
+def test_contract() -> None:
     raw = (
         '    "IOPlatformSerialNumber" = "SERIAL-1"\n'
         '    "IOPlatformUUID" = "UUID-1"\n'
@@ -34,4 +34,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_contract()

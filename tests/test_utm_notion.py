@@ -32,6 +32,10 @@ TARGET_FEISHU_WIKI_URL = (
     "https://qv0zc1dq6qy.feishu.cn/wiki/C70TwyJevipDZakMTWYcusTwnhh"
     "?table=tbl5OOyYst8BqZ6x&view=vewjQVBVeu"
 )
+FIXTURE_APP_IDENTIFIER = "app-id"
+FIXTURE_APP_CREDENTIAL = "app-secret"
+FIXTURE_NOTION_CREDENTIAL = "notion-token"
+FIXTURE_NOTION_ROOT = "notion-root"
 
 
 @pytest.fixture(autouse=True)
@@ -387,6 +391,162 @@ def test_build_registration_fields_accepts_space_separated_international_account
     )
 
 
+@pytest.mark.parametrize(
+    "account_text",
+    [
+        (
+            "Denmark | Mix3d!Pass | +12025550123 | "
+            "stringbed@example.com | "
+            "https://sms-display.example.test/?code=visible"
+        ),
+        (
+            "https://sms-display.example.test/?code=visible，"
+            "电话：+12025550123；邮箱：stringbed@example.com；"
+            "密码：Mix3d!Pass；国家：丹麦"
+        ),
+    ],
+)
+def test_build_registration_fields_accepts_arbitrary_account_field_order(
+    account_text: str,
+) -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = account_text
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["邮箱："] == "stringbed@example.com"
+    assert account["初始密码："] == "Mix3d!Pass"
+    assert account["电话："] == "+12025550123"
+    assert account["电话短信接收平台："] == (
+        "https://sms-display.example.test/?code=visible"
+    )
+
+
+def test_build_registration_fields_accepts_unknown_email_suffix_by_structure() -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = (
+        "账号 stringbed@example.technology | +12025550123 | "
+        "Abc1D2ef! | https://sms-display.example.test/?code=visible"
+    )
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["邮箱："] == "stringbed@example.technology"
+    assert account["初始密码："] == "Abc1D2ef!"
+    assert account["电话："] == "+12025550123"
+    assert account["电话短信接收平台："] == (
+        "https://sms-display.example.test/?code=visible"
+    )
+
+
+def test_generic_account_parser_preserves_metadata_words_inside_password() -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = (
+        "stringbed@example.com | Account9Pass | +12025550123 | "
+        "https://sms-display.example.test/?code=visible"
+    )
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["初始密码："] == "Account9Pass"
+
+
+def test_generic_account_parser_deduplicates_repeated_email_occurrences() -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = (
+        "stringbed@example.com | Mix3d!Pass | +12025550123 | "
+        "STRINGBED@EXAMPLE.COM | "
+        "https://sms-display.example.test/?code=visible"
+    )
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["邮箱："] == "stringbed@example.com"
+
+
+def test_generic_account_parser_rejects_distinct_email_candidates() -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = (
+        "stringbed@example.com | Mix3d!Pass | +12025550123 | "
+        "another@example.com | "
+        "https://sms-display.example.test/?code=visible"
+    )
+
+    with pytest.raises(RuntimeError, match="email"):
+        build_registration_fields(fields)
+
+
+def test_generic_account_parser_deduplicates_repeated_phone_occurrences() -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = (
+        "stringbed@example.com | Mix3d!Pass | +12025550123 | "
+        "12025550123 | https://sms-display.example.test/?code=visible"
+    )
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["电话："] == "+12025550123"
+
+
+def test_generic_account_parser_rejects_distinct_phone_candidates() -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = (
+        "stringbed@example.com | Mix3d!Pass | +12025550123 | "
+        "+12025550124 | https://sms-display.example.test/?code=visible"
+    )
+
+    with pytest.raises(RuntimeError, match="phone"):
+        build_registration_fields(fields)
+
+
+def test_generic_account_parser_deduplicates_repeated_password_occurrences() -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = (
+        "stringbed@example.com | Mix3d!Pass | +12025550123 | "
+        "Mix3d!Pass | https://sms-display.example.test/?code=visible"
+    )
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["初始密码："] == "Mix3d!Pass"
+
+
+def test_generic_account_parser_rejects_distinct_password_candidates() -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = (
+        "stringbed@example.com | Mix3d!Pass | +12025550123 | "
+        "Other4Pass! | https://sms-display.example.test/?code=visible"
+    )
+
+    with pytest.raises(RuntimeError, match="password"):
+        build_registration_fields(fields)
+
+
+def test_generic_account_parser_ignores_phone_like_digits_inside_email() -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = (
+        "1234567890user@example.com | Mix3d!Pass | +12025550123 | "
+        "https://sms-display.example.test/?code=visible"
+    )
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["邮箱："] == "1234567890user@example.com"
+    assert account["电话："] == "+12025550123"
+
+
+def test_generic_account_parser_preserves_legal_url_punctuation() -> None:
+    fields = stringbed_fields()
+    sms_url = "https://sms-display.example.test/path,segment"
+    fields["账号信息"] = (
+        "stringbed@example.com | Mix3d!Pass | +12025550123 | " + sms_url
+    )
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["电话短信接收平台："] == sms_url
+
+
 def test_build_registration_fields_accepts_labelled_account_info_with_prefix() -> None:
     fields = stringbed_fields()
     fields["账号信息"] = {
@@ -481,6 +641,23 @@ def test_build_registration_fields_accepts_api1997_phone_url_email_without_separ
     assert account["电话短信接收平台："] == sms_url
 
 
+def test_build_registration_fields_accepts_space_separated_phone_url_email_password_country() -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = (
+        "+12025550123  https://sms-display.example.test/?code=visible "
+        "stringbed@example.com Abcdef1Gh 🇩🇰 丹麦"
+    )
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["邮箱："] == "stringbed@example.com"
+    assert account["初始密码："] == "Abcdef1Gh"
+    assert account["电话："] == "+12025550123"
+    assert account["电话短信接收平台："] == (
+        "https://sms-display.example.test/?code=visible"
+    )
+
+
 def test_build_registration_fields_accepts_xsd20vip_compact_account_format() -> None:
     fields = stringbed_fields()
     fixture_url_identifier = "PG2" + "c" * 31
@@ -498,6 +675,26 @@ def test_build_registration_fields_accepts_xsd20vip_compact_account_format() -> 
 
     assert account["邮箱："] == "haraldurposselt@icloud.com"
     assert account["初始密码："] == "Ek161121"
+    assert account["电话："] == "+12025550123"
+    assert account["电话短信接收平台："] == sms_url
+
+
+def test_build_registration_fields_accepts_country_first_multiline_account() -> None:
+    fields = stringbed_fields()
+    fixture_url_identifier = "Ab1" + "x" * 31
+    sms_url = f"https://api1997.com/sms-record?token={fixture_url_identifier}"
+    fields["账号信息"] = (
+        "英国\n"
+        "stringbed@example.com\n"
+        "Abc1D2ef!\n"
+        "12025550123\n"
+        f"{sms_url}"
+    )
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["邮箱："] == "stringbed@example.com"
+    assert account["初始密码："] == "Abc1D2ef!"
     assert account["电话："] == "+12025550123"
     assert account["电话短信接收平台："] == sms_url
 
@@ -716,6 +913,77 @@ class FakeFeishu(FeishuBitableClient):
         raise AssertionError((method, path, query, payload))
 
 
+def test_feishu_exact_match_ignores_configured_view_filter() -> None:
+    target = {"record_id": "rec-stringbed", "fields": stringbed_fields()}
+
+    class ViewFilteredFeishu(FeishuBitableClient):
+        def __init__(self) -> None:
+            super().__init__("token", "app", "table", "view")
+            self.queries: list[dict[str, object]] = []
+
+        def _request(self, method: str, path: str, *, query=None, payload=None):
+            assert method == "GET"
+            assert path.endswith("/records")
+            assert payload is None
+            self.queries.append(dict(query or {}))
+            records = [] if query and query.get("view_id") == "view" else [target]
+            return {"items": records, "has_more": False}
+
+    client = ViewFilteredFeishu()
+
+    record = client.find_exact_record(app_name="StringBed")
+
+    assert record == target
+    assert client.queries == [{"page_size": 500}]
+
+
+def test_feishu_exact_match_rejects_full_table_duplicates() -> None:
+    first = {"record_id": "rec-first", "fields": stringbed_fields()}
+    second = {"record_id": "rec-second", "fields": stringbed_fields()}
+
+    class DuplicateViewFeishu(FeishuBitableClient):
+        def __init__(self) -> None:
+            super().__init__("token", "app", "table", "view")
+            self.queries: list[dict[str, object]] = []
+
+        def _request(self, method: str, path: str, *, query=None, payload=None):
+            assert method == "GET"
+            assert path.endswith("/records")
+            assert payload is None
+            self.queries.append(dict(query or {}))
+            return {"items": [first, second], "has_more": False}
+
+    client = DuplicateViewFeishu()
+
+    with pytest.raises(RuntimeError, match=r"got 2$"):
+        client.find_exact_record(app_name="StringBed")
+    assert client.queries == [{"page_size": 500}]
+
+
+def test_feishu_exact_match_rejects_duplicates_hidden_by_configured_view() -> None:
+    first = {"record_id": "rec-first", "fields": stringbed_fields()}
+    second = {"record_id": "rec-second", "fields": stringbed_fields()}
+
+    class DuplicateTableFeishu(FeishuBitableClient):
+        def __init__(self) -> None:
+            super().__init__("token", "app", "table", "view")
+            self.queries: list[dict[str, object]] = []
+
+        def _request(self, method: str, path: str, *, query=None, payload=None):
+            assert method == "GET"
+            assert path.endswith("/records")
+            assert payload is None
+            self.queries.append(dict(query or {}))
+            items = [] if query and "view_id" in query else [first, second]
+            return {"items": items, "has_more": False}
+
+    client = DuplicateTableFeishu()
+
+    with pytest.raises(RuntimeError, match=r"got 2$"):
+        client.find_exact_record(app_name="StringBed")
+    assert client.queries == [{"page_size": 500}]
+
+
 def test_execute_preflights_vm_write_before_binding_and_notion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -752,7 +1020,21 @@ def test_execute_preflights_vm_write_before_binding_and_notion(
         events.append("notion")
         raise AssertionError("Notion must not be called after Feishu write preflight fails")
 
-    monkeypatch.setattr(utm_notion, "read_env_file", lambda _path: {})
+    runtime_config = utm_notion.UtmNotionRuntimeConfig(
+        feishu_app_id=FIXTURE_APP_IDENTIFIER,
+        feishu_app_secret=FIXTURE_APP_CREDENTIAL,
+        configured_source=("wiki", TARGET_FEISHU_WIKI_URL, "", ""),
+        notion_token=FIXTURE_NOTION_CREDENTIAL,
+        notion_root_page_id=FIXTURE_NOTION_ROOT,
+        notion_template_title="template",
+        host_title="Mac Studio",
+        images_dir=tmp_path,
+    )
+    monkeypatch.setattr(
+        utm_notion,
+        "load_runtime_config",
+        lambda **_kwargs: runtime_config,
+    )
     monkeypatch.setattr(utm_notion, "get_tenant_access_token", lambda *_args: "token")
     monkeypatch.setattr(
         utm_notion,
@@ -761,12 +1043,11 @@ def test_execute_preflights_vm_write_before_binding_and_notion(
     )
     monkeypatch.setattr(utm_notion, "FeishuBitableClient", ForbiddenClient)
     monkeypatch.setattr(utm_notion, "_bind_vm", unexpected_bind)
-    monkeypatch.setattr(utm_notion, "notion_api_from_settings", lambda _settings: unexpected_notion())
-    monkeypatch.setenv("FEISHU_APP_ID", "app-id")
-    monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
-    monkeypatch.setenv("UTM_NOTION_FEISHU_WIKI_URL", TARGET_FEISHU_WIKI_URL)
-    monkeypatch.setenv("SUBMISSION_VM_IMAGES_DIR", str(tmp_path))
-    monkeypatch.setenv("SUBMISSION_HOST_MACHINE", "Mac Studio")
+    monkeypatch.setattr(
+        utm_notion,
+        "notion_api_from_config",
+        lambda _config: unexpected_notion(),
+    )
 
     with pytest.raises(RuntimeError, match="91403"):
         utm_notion.execute(app_name="StringBed")
@@ -809,7 +1090,21 @@ def test_execute_with_explicit_vm_does_not_require_feishu_record_write(
         events.append("bind")
         return "gvby"
 
-    monkeypatch.setattr(utm_notion, "read_env_file", lambda _path: {})
+    runtime_config = utm_notion.UtmNotionRuntimeConfig(
+        feishu_app_id=FIXTURE_APP_IDENTIFIER,
+        feishu_app_secret=FIXTURE_APP_CREDENTIAL,
+        configured_source=("wiki", TARGET_FEISHU_WIKI_URL, "", ""),
+        notion_token=FIXTURE_NOTION_CREDENTIAL,
+        notion_root_page_id=FIXTURE_NOTION_ROOT,
+        notion_template_title="template",
+        host_title="Mac Studio",
+        images_dir=tmp_path,
+    )
+    monkeypatch.setattr(
+        utm_notion,
+        "load_runtime_config",
+        lambda **_kwargs: runtime_config,
+    )
     monkeypatch.setattr(utm_notion, "get_tenant_access_token", lambda *_args: "token")
     monkeypatch.setattr(
         utm_notion,
@@ -820,14 +1115,9 @@ def test_execute_with_explicit_vm_does_not_require_feishu_record_write(
     monkeypatch.setattr(utm_notion, "_bind_vm", bind_exact)
     monkeypatch.setattr(
         utm_notion,
-        "notion_api_from_settings",
-        lambda _settings: ReadOnlyNotion(),
+        "notion_api_from_config",
+        lambda _config: ReadOnlyNotion(),
     )
-    monkeypatch.setenv("FEISHU_APP_ID", "app-id")
-    monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
-    monkeypatch.setenv("UTM_NOTION_FEISHU_WIKI_URL", TARGET_FEISHU_WIKI_URL)
-    monkeypatch.setenv("SUBMISSION_VM_IMAGES_DIR", str(tmp_path))
-    monkeypatch.setenv("SUBMISSION_HOST_MACHINE", "Mac Studio")
 
     with pytest.raises(StopAfterExplicitBinding):
         utm_notion.execute(app_name="StringBed", vm_name="gvby")

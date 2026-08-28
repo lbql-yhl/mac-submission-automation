@@ -9,6 +9,8 @@ import sys
 
 import pytest
 
+from scripts.vm_inventory import InventoryError
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "utm_clone_and_initialize.py"
@@ -32,6 +34,21 @@ def verified_clone_output(vm_name: str = "abcd") -> str:
     )
 
 
+def mock_active_inventory(module, monkeypatch, tmp_path: Path, vm_name: str) -> Path:
+    images_dir = tmp_path / "fallback-images"
+    bundle = images_dir / f"{vm_name}.utm"
+    monkeypatch.setattr(
+        module,
+        "_active_inventory_record",
+        lambda actual_vm_name: {
+            "vm_name": actual_vm_name,
+            "config_uuid": "UUID",
+            "bundle_path": str(bundle),
+        },
+    )
+    return images_dir
+
+
 def test_parse_verified_clone_vm_name_requires_unique_verified_output() -> None:
     module = load_module()
     assert module.parse_verified_clone_vm_name(verified_clone_output()) == "abcd"
@@ -40,6 +57,11 @@ def test_parse_verified_clone_vm_name_requires_unique_verified_output() -> None:
         verified_clone_output().replace(";VM_NAME=abcd", ""),
         verified_clone_output() + ";VM_NAME=wxyz",
         verified_clone_output("ABC1"),
+        verified_clone_output("abcd/extra"),
+        verified_clone_output().replace(
+            "STEP_01_CLONE=verified;VM_NAME=abcd",
+            "STEP_01_CLONE=verified\nVM_NAME=abcd",
+        ),
         verified_clone_output().replace("STEP_01_CLONE=verified;", ""),
     )
     for output in invalid_outputs:
@@ -51,6 +73,60 @@ def test_parse_verified_clone_vm_name_requires_unique_verified_output() -> None:
             raise AssertionError("invalid clone output was accepted")
 
 
+def test_child_blocked_reason_preserves_a_safe_step_failure_code() -> None:
+    module = load_module()
+    result = subprocess.CompletedProcess(
+        ["python3", "step.py"],
+        1,
+        stdout="开始执行：utm-vm-clone-step-01\n",
+        stderr=(
+            "执行报错：utm-vm-clone-step-01；CLONE_STORAGE_UNAVAILABLE\n"
+            "UTM_VM_CLONE_STEP_01=blocked: CLONE_STORAGE_UNAVAILABLE\n"
+        ),
+    )
+
+    assert module.child_blocked_reason(result) == "CLONE_STORAGE_UNAVAILABLE"
+
+
+def test_child_blocked_reason_never_promotes_unmarked_output() -> None:
+    module = load_module()
+    result = subprocess.CompletedProcess(
+        ["python3", "step.py"],
+        1,
+        stdout="",
+        stderr=(
+            "执行报错：utm-vm-clone-step-01；"
+            "SECRET_PATH=/VOLUMES/PRIVATE/VM\n"
+        ),
+    )
+
+    assert module.child_blocked_reason(result) == "CHILD_ENTRY_FAILED"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_code"),
+    (
+        (OSError("active marker unavailable"), "ACTIVE_WORKFLOW_IO_FAILED"),
+        (InventoryError("inventory unavailable"), "ACTIVE_WORKFLOW_INVENTORY_FAILED"),
+    ),
+)
+def test_combined_workflow_reports_active_state_failures_safely(
+    monkeypatch, capsys, error, expected_code
+) -> None:
+    module = load_module()
+    monkeypatch.setattr(
+        module,
+        "load_active_workflow",
+        lambda: (_ for _ in ()).throw(error),
+    )
+
+    assert module.run_workflow() == 1
+    assert (
+        f"UTM_CLONE_AND_INITIALIZE=blocked: {expected_code}"
+        in capsys.readouterr().err
+    )
+
+
 def test_combined_workflow_preserves_invoked_virtualenv_interpreter() -> None:
     module = load_module()
     assert module.PYTHON == Path(sys.executable).absolute()
@@ -58,6 +134,7 @@ def test_combined_workflow_preserves_invoked_virtualenv_interpreter() -> None:
 
 def test_combined_workflow_overwrites_vm_name_for_initialization(monkeypatch, tmp_path) -> None:
     module = load_module()
+    selected_images_dir = mock_active_inventory(module, monkeypatch, tmp_path, "wxyz")
     monkeypatch.setattr(module, "ACTIVE_WORKFLOW_PATH", tmp_path / "active.json")
     monkeypatch.setattr(module, "write_active_workflow", lambda record: None)
     monkeypatch.setattr(module, "clear_active_workflow", lambda: None)
@@ -77,17 +154,79 @@ def test_combined_workflow_overwrites_vm_name_for_initialization(monkeypatch, tm
 
     monkeypatch.setenv("VM_NAME", "oldx")
     monkeypatch.setattr(module.subprocess, "run", fake_subprocess_run)
+    verified_names: list[str] = []
 
-    assert module.run_workflow() == 0
+    assert module.run_workflow(on_verified_vm_name=verified_names.append) == 0
+    assert verified_names == ["wxyz"]
     assert os.environ["VM_NAME"] == "wxyz"
     assert len(calls) == 2
     assert calls[1][1]["env"]["VM_NAME"] == "wxyz"
+    assert (
+        calls[1][1]["env"]["SUBMISSION_VM_IMAGES_DIR"]
+        == str(selected_images_dir)
+    )
+    assert json.loads(
+        calls[1][1]["env"]["SUBMISSION_VM_IMAGES_DIRS"]
+    ) == [str(selected_images_dir)]
     assert "--vm-name" not in calls[1][0]
     assert calls[1][0] == [str(module.PYTHON), str(module.POST_CLONE_SCRIPT)]
 
 
+def test_combined_entry_success_line_contains_the_unique_verified_vm_name(
+    monkeypatch, capsys
+) -> None:
+    module = load_module()
+
+    def workflow(*, on_verified_vm_name):
+        on_verified_vm_name("wxyz")
+        return 0
+
+    monkeypatch.setattr(module, "run_workflow", workflow)
+
+    assert module.main([]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "开始执行：utm-vm-clone",
+        "执行成功：utm-vm-clone；UTM_CLONE_AND_INITIALIZE=verified;VM_NAME=wxyz",
+    ]
+
+
+def test_verified_inventory_keeps_success_when_active_marker_cleanup_fails(
+    monkeypatch, tmp_path
+) -> None:
+    module = load_module()
+    mock_active_inventory(module, monkeypatch, tmp_path, "wxyz")
+    monkeypatch.setattr(module, "ACTIVE_WORKFLOW_PATH", tmp_path / "active.json")
+    monkeypatch.setattr(module, "write_active_workflow", lambda _record: None)
+    monkeypatch.setattr(module, "verify_completed_inventory", lambda _vm_name: None)
+    monkeypatch.setattr(
+        module,
+        "clear_active_workflow",
+        lambda: (_ for _ in ()).throw(OSError("cleanup unavailable")),
+    )
+    calls = 0
+
+    def fake_subprocess_run(command, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=verified_clone_output("wxyz") + "\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_subprocess_run)
+    verified_names: list[str] = []
+
+    assert module.run_workflow(on_verified_vm_name=verified_names.append) == 0
+    assert verified_names == ["wxyz"]
+
+
 def test_combined_workflow_reports_step_1_completion(monkeypatch, tmp_path, capsys) -> None:
     module = load_module()
+    mock_active_inventory(module, monkeypatch, tmp_path, "wxyz")
     monkeypatch.setattr(module, "ACTIVE_WORKFLOW_PATH", tmp_path / "active.json")
     monkeypatch.setattr(module, "write_active_workflow", lambda record: None)
     monkeypatch.setattr(module, "clear_active_workflow", lambda: None)
@@ -111,6 +250,7 @@ def test_combined_workflow_reports_step_1_completion(monkeypatch, tmp_path, caps
 
 def test_combined_workflow_delegates_retry_to_the_step_handoff(monkeypatch, tmp_path) -> None:
     module = load_module()
+    mock_active_inventory(module, monkeypatch, tmp_path, "wxyz")
     monkeypatch.setattr(module, "ACTIVE_WORKFLOW_PATH", tmp_path / "active.json")
     monkeypatch.setattr(module, "write_active_workflow", lambda record: None)
     monkeypatch.setattr(module, "clear_active_workflow", lambda: None)
@@ -141,6 +281,7 @@ def test_combined_workflow_delegates_retry_to_the_step_handoff(monkeypatch, tmp_
 
 def test_combined_workflow_reports_single_handoff_failure(monkeypatch, tmp_path, capsys) -> None:
     module = load_module()
+    mock_active_inventory(module, monkeypatch, tmp_path, "wxyz")
     monkeypatch.setattr(module, "ACTIVE_WORKFLOW_PATH", tmp_path / "active.json")
     monkeypatch.setattr(module, "write_active_workflow", lambda record: None)
     monkeypatch.setattr(module, "clear_active_workflow", lambda: None)
@@ -171,6 +312,7 @@ def test_combined_workflow_reports_single_handoff_failure(monkeypatch, tmp_path,
 
 def test_combined_workflow_captures_handoff_error_detail(monkeypatch, tmp_path) -> None:
     module = load_module()
+    mock_active_inventory(module, monkeypatch, tmp_path, "wxyz")
     monkeypatch.setattr(module, "ACTIVE_WORKFLOW_PATH", tmp_path / "active.json")
     monkeypatch.setattr(module, "write_active_workflow", lambda record: None)
     calls: list[dict[str, object]] = []
@@ -232,16 +374,22 @@ def test_combined_workflow_resumes_exact_active_vm_without_cloning(monkeypatch, 
     )
     monkeypatch.setattr(module, "verify_completed_inventory", lambda vm_name: None)
     monkeypatch.setattr(module, "clear_active_workflow", lambda: None)
-    calls: list[list[str]] = []
+    calls: list[tuple[list[str], dict[str, object]]] = []
 
     def fake_subprocess_run(command, **kwargs):
-        calls.append(command)
+        calls.append((command, kwargs))
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(module.subprocess, "run", fake_subprocess_run)
 
     assert module.run_workflow() == 0
-    assert calls == [[str(module.PYTHON), str(module.POST_CLONE_SCRIPT)]]
+    assert [call[0] for call in calls] == [
+        [str(module.PYTHON), str(module.POST_CLONE_SCRIPT)]
+    ]
+    assert calls[0][1]["env"]["SUBMISSION_VM_IMAGES_DIR"] == "/exact"
+    assert json.loads(
+        calls[0][1]["env"]["SUBMISSION_VM_IMAGES_DIRS"]
+    ) == ["/exact"]
     assert os.environ["VM_NAME"] == "stgf"
 
 
@@ -330,7 +478,7 @@ def test_combined_workflow_does_not_initialize_after_clone_failure(
     assert module.run_workflow() == 1
     assert "VM_NAME" not in os.environ
     assert len(calls) == 1
-    assert "CLONE_FAILED:clone failed" in capsys.readouterr().err
+    assert "CLONE_FAILED:CHILD_ENTRY_FAILED" in capsys.readouterr().err
 
 
 def test_combined_workflow_help_is_side_effect_free(monkeypatch, capsys) -> None:

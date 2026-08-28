@@ -59,18 +59,28 @@ print('IMPORT_OK')
     assert result.stdout.strip() == "IMPORT_OK"
 
 
-@pytest.mark.parametrize("configured", ({}, {"FEISHU_DAILY_REPORT_CHAT_ID": "   "}))
-def test_load_config_requires_daily_report_chat_without_revealing_values(
+@pytest.mark.parametrize(
+    "configured",
+    (
+        {"FEISHU_ALLOWED_CHAT_ID": "project-chat"},
+        {
+            "FEISHU_ALLOWED_CHAT_ID": "project-chat",
+            "FEISHU_DAILY_REPORT_CHAT_ID": "   ",
+        },
+        {
+            "FEISHU_ALLOWED_CHAT_ID": "project-chat",
+            "FEISHU_DAILY_REPORT_CHAT_ID": "project-chat",
+        },
+    ),
+)
+def test_load_config_allows_project_bot_without_daily_report_chat(
     feishu_bot: ModuleType,
     configured: dict[str, str],
 ) -> None:
-    with pytest.raises(ConfigurationError) as captured:
-        feishu_bot.load_config(environ=configured)
+    config = feishu_bot.load_config(environ=configured)
 
-    assert str(captured.value) == (
-        "missing required host setting: FEISHU_DAILY_REPORT_CHAT_ID"
-    )
-    assert all(value not in str(captured.value) for value in configured.values())
+    assert config.allowed_chat_id == "project-chat"
+    assert config.daily_report_chat_id == ""
 
 
 def test_load_config_reads_without_mutating_process_environment(
@@ -270,20 +280,25 @@ def test_serve_ws_registers_message_and_card_handlers_with_same_config_snapshot(
             return FakeBuilder()
 
     class FakeWSClient:
-        def __init__(self, *_args: object, **_kwargs: object) -> None:
-            pass
+        def __init__(self, *_args: object, **kwargs: object) -> None:
+            observed["ws_log_level"] = kwargs.get("log_level")
 
         def start(self) -> None:
             pass
 
     fake_lark = ModuleType("lark_oapi")
     fake_lark.EventDispatcherHandler = FakeEventDispatcherHandler
-    fake_lark.LogLevel = SimpleNamespace(INFO="INFO")
+    fake_lark.LogLevel = SimpleNamespace(INFO="INFO", WARNING="WARNING")
     fake_lark.ws = SimpleNamespace(Client=FakeWSClient)
     monkeypatch.setitem(sys.modules, "lark_oapi", fake_lark)
     monkeypatch.setattr(feishu_bot, "patch_lark_ws_card_dispatch", lambda: None)
     monkeypatch.setattr(feishu_bot, "RUNTIME_DIR", tmp_path / "runtime")
-    monkeypatch.setattr(feishu_bot, "claim_message", lambda _message_id: True)
+    monkeypatch.setattr(
+        feishu_bot,
+        "claim_message",
+        lambda _message_id, **_kwargs: True,
+    )
+    monkeypatch.setattr(feishu_bot, "complete_message", lambda _message_id: None)
     monkeypatch.setattr(feishu_bot.threading, "Thread", ImmediateThread)
     monkeypatch.setattr(feishu_bot, "load_config", lambda: config_v2)
 
@@ -314,6 +329,7 @@ def test_serve_ws_registers_message_and_card_handlers_with_same_config_snapshot(
 
     assert observed["message_config"] is config_v1
     assert observed["card_route"] == ("host-v1", "report-v1")
+    assert observed["ws_log_level"] == "WARNING"
 
 
 def test_serve_registers_http_handler_with_startup_config_snapshot(
@@ -387,12 +403,12 @@ def test_daily_report_chat_is_loaded_and_used_by_routing_guards(
         )
         == ""
     )
-    assert "提审机器人命令" in feishu_bot.handle_incoming_text(
+    assert feishu_bot.handle_incoming_text(
         config,
         "/提审 帮助",
         "workflow-chat",
         source="test",
-    )
+    ) == ""
     with pytest.raises(RuntimeError, match="original workflow chat"):
         feishu_bot.local_original_chat(
             {

@@ -42,7 +42,7 @@ def callback_payload(decision: str, decision_id: str) -> dict:
     }
 
 
-def main() -> None:
+def test_contract() -> None:
     run = {
         "id": "review-card-test",
         "app_name": "Xrimo",
@@ -55,10 +55,10 @@ def main() -> None:
             "decision_id": "review-request-1",
             "app_version": "1.0",
             "build_number": "1",
-            "iap_count": 14,
+            "iap_count": 7,
             "evidence": (
                 "APP_INFORMATION_CLEAN=verified;"
-                "REVIEW_SCREENSHOTS=verified_5;ITEMS_READY=15"
+                "REVIEW_SCREENSHOTS=verified_5;ITEMS_READY=8"
             ),
             "image_keys": [
                 "img_media-manager",
@@ -163,7 +163,7 @@ def main() -> None:
     assert approval["decision_id"] == "review-request-1"
     assert approval["app_version"] == "1.0"
     assert approval["build_number"] == "1"
-    assert approval["iap_count"] == 14
+    assert approval["iap_count"] == 7
     assert approval["evidence"] == run["pending_decision"]["evidence"]
     assert approval["answered_at"]
     assert approval["operator_id"] == "approver"
@@ -264,8 +264,8 @@ def main() -> None:
             run_id="review-card-test",
             app_version="1.0",
             build_number="1",
-            iap_count=14,
-            evidence="REVIEW_SCREENSHOTS=verified_5;ITEMS_READY=15",
+            iap_count=7,
+            evidence="REVIEW_SCREENSHOTS=verified_5;ITEMS_READY=8",
             screenshot=screenshots,
         )
         config = SimpleNamespace(submission_host_machine="海淋")
@@ -436,4 +436,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_contract()

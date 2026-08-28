@@ -26,7 +26,6 @@ def test_utm_apps_contracts_require_immediate_action_not_fixed_waits() -> None:
         "AGENTS.md",
         "skills/_shared/AUTOMATION_CONTRACT.md",
         "skills/utm-apps/SKILL.md",
-        "docs/utm-apps.md",
     ):
         source = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
         assert "等待至少 3 秒" not in source, relative_path

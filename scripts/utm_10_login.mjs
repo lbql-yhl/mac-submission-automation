@@ -49,6 +49,9 @@ async function readCredentials() {
   if (!fields.every((field) => typeof value[field] === "string" && value[field].length > 0)) {
     throw new Error("Credential fields are incomplete");
   }
+  if ("resumeExistingSession" in value && typeof value.resumeExistingSession !== "boolean") {
+    throw new Error("Browser resume flag is invalid");
+  }
   return value;
 }
 
@@ -252,11 +255,15 @@ async function currentApplePage() {
 function extractLatestSixDigitCode(text) {
   const normalized = String(text || "");
   if (/^\s*no\|/i.test(normalized)) return null;
+  const appleMessage = normalized.match(
+    /Your\s+Apple\s+Account\s+Code\s+is\s*:\s*(\d{6})\s*\.\s*Don['’]t\s+share\s+it\s+with\s+anyone/i,
+  );
+  if (appleMessage) return appleMessage[1];
   const codes = Array.from(
     normalized.matchAll(/(?<!\d)(\d{6})(?!\d)/g),
     (match) => match[1],
   );
-  return codes.at(-1) || null;
+  return codes[0] || null;
 }
 
 async function readMessages(smsPage) {
@@ -409,7 +416,8 @@ async function main() {
   let smsPage = null;
 
   try {
-    await restartLocalBrowser();
+    if (credentials.resumeExistingSession === true) await connectLocalBrowser();
+    else await restartLocalBrowser();
     let { context, page, sessionId } = await currentApplePage();
 
     if (await accountIdentityMatches(page, credentials)) {

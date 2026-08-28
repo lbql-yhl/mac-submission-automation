@@ -35,6 +35,7 @@ Fall back to `rg` only for string literals, error messages, configuration values
 
 ## API routing
 
+- Run ID 语义：项目中的 `Run ID` 只指飞书表格精确应用行的 `Run ID` 字段。它不是全流程统一必填项；只有当前技能的 `SKILL.md` 或公开入口明确声明需要时才读取和校验，未声明需要的技能不得因其缺失而阻断，也不得按“最新”或其他模糊规则猜测 Run ID。
 - Feishu 硬规则：消息、图片、Base 与 Wiki 数据只通过 Feishu Bot/OpenAPI 和项目封装访问；不读飞书桌面客户端，不用浏览器、坐标、剪贴板或页面 DOM 抓取数据。Wiki URL 路由和 Base 三元组路由必须二选一且不得混用。
 - Notion API 硬规则：`utm-notion`、`utm-login`、`utm-edit`、`utm-key`、`utm-apps`、`utm-business`、`utm-env`、`utm-script`、`utm-image`、`utm-p8`、`utm-21`、`utm-24` 所有 Notion 读写都必须通过项目 `scripts/notion_api.py` 或其内部直接封装；先验证精确父页/目标页，再字段级读写并独立回读。不得用宿主 Chrome、Notion 插件、CUA、坐标或浏览器剪贴板读写 Notion。
 - 只有 Feishu OpenAPI 接口可读取 Feishu 资源；只有 Notion API 接口可读写 Notion 资源。两者的 token、key、ID 和 URL 均由当前宿主本地配置提供。

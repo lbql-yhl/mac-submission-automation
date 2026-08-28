@@ -171,6 +171,15 @@ def guest_preflight_command(vm_user: str) -> str:
                     module,
                 )
             ),
+            shlex.join(
+                (
+                    "node",
+                    "--input-type=module",
+                    "-e",
+                    "await import(process.argv[1])",
+                    f"file://{base}/session.mjs",
+                )
+            ),
         )
     )
     checks.append(shlex.join(("/bin/zsh", "-lic", "\n".join(node_checks))))
@@ -512,6 +521,7 @@ def _stage_stdin(stage: str, payload: Mapping[str, Any]) -> bytes:
             "phone": str(payload.get("APPLE_ACCOUNT_PHONE") or ""),
             "smsUrl": str(payload.get("APPLE_ACCOUNT_SMS_URL") or ""),
             "userName": str(payload.get("APPLE_ACCOUNT_USER_NAME") or ""),
+            "resumeExistingSession": payload.get("UTM_10_REUSE_EXISTING_EDGE") is True,
         }
     elif stage == "utm-11":
         return b""
@@ -967,6 +977,24 @@ def run(
         edge_session = _session_from_result(stage_13)
         _print_stage_result("utm-13", skipped_existing=bool(stage_13.data.get("existing")))
         return 0
+    if requested_stage == "utm-10":
+        _print_stage_start("utm-10")
+        resume_payload = dict(payload)
+        resume_payload["UTM_10_REUSE_EXISTING_EDGE"] = True
+        stage_10 = run_guest_stage(
+            stage="utm-10",
+            vm_name=args.vm_name,
+            vm_ip=args.vm_ip,
+            vm_user=args.vm_user,
+            payload=resume_payload,
+            runner=runner,
+            password_env=password_env,
+        )
+        _session_from_result(stage_10)
+        _print_stage_result(
+            "utm-10", skipped_existing=bool(stage_10.data.get("existing"))
+        )
+        return 0
     if requested_stage not in {"all", "utm-11-onward"}:
         raise AppleWebError("UTM_APPS_STAGE_SELECTOR_INVALID")
 
@@ -1070,6 +1098,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--stage",
         choices=(
             "all",
+            "utm-10",
             "utm-11-onward",
             "utm-12",
             "utm-12-onward",

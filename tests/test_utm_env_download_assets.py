@@ -134,6 +134,24 @@ def record_with_store_image_name(source_name: str) -> dict:
 
 
 class UTMEnvDownloadAssetsTests(unittest.TestCase):
+    def test_feishu_client_reads_the_full_table_without_applying_view_filters(self) -> None:
+        client = utm_env.FeishuClient.__new__(utm_env.FeishuClient)
+        client._token = FIXTURE_TENANT_VALUE
+        client._media_download_urls = {}
+
+        with mock.patch.object(
+            utm_env,
+            "_json_request",
+            return_value={"data": {"items": [record("FilterKey")], "has_more": False}},
+        ) as request:
+            records = client.list_records(parse_base_url(BASE_URL))
+
+        self.assertEqual(len(records), 1)
+        requested_url = request.call_args.args[0]
+        query = __import__("urllib.parse").parse.urlparse(requested_url).query
+        self.assertNotIn("view_id=", query)
+        self.assertIn("page_size=500", query)
+
     def test_feishu_client_reuses_record_attachment_url_with_required_context(self) -> None:
         server_url = (
             "https://open.feishu.cn/open-apis/drive/v1/medias/dev-token/download"

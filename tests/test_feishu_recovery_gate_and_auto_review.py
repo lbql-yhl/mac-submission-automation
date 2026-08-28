@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -26,7 +28,7 @@ def recovery_args(**overrides):
     return SimpleNamespace(**values)
 
 
-def main() -> None:
+def test_contract() -> None:
     ok, reason = validate_fault_recovery_evidence(recovery_args())
     assert ok is False
     assert "recovery" in reason.lower()
@@ -95,13 +97,25 @@ def main() -> None:
         return mutable_run
 
     hashes = [f"{index:064x}" for index in range(1, 6)]
+    iap_count = 7
+    items_ready = iap_count + 1
+    evidence = f"REVIEW_SCREENSHOTS=verified_5;ITEMS_READY={items_ready}"
+    with pytest.raises(ValueError, match="evidence"):
+        record_automatic_review_approval(
+            run_id="auto-review-test",
+            app_version="1.0",
+            build_number="7",
+            iap_count=iap_count,
+            evidence="REVIEW_SCREENSHOTS=verified_5;ITEMS_READY=9",
+            screenshot_hashes=hashes,
+        )
     with patch("services.feishu_bot.mutate_run", side_effect=fake_mutate):
         updated = record_automatic_review_approval(
             run_id="auto-review-test",
             app_version="1.0",
             build_number="7",
-            iap_count=14,
-            evidence="REVIEW_SCREENSHOTS=verified_5;ITEMS_READY=15",
+            iap_count=iap_count,
+            evidence=evidence,
             screenshot_hashes=hashes,
         )
 
@@ -126,8 +140,8 @@ def main() -> None:
                 run_id="auto-review-test",
                 app_version="1.0",
                 build_number="7",
-                iap_count=14,
-                evidence="REVIEW_SCREENSHOTS=verified_5;ITEMS_READY=15",
+                iap_count=iap_count,
+                evidence=evidence,
                 screenshot_hashes=["not-a-sha256"] * 5,
             )
         except ValueError as exc:
@@ -140,8 +154,8 @@ def main() -> None:
             run_id="auto-review-test",
             app_version="1.0",
             build_number="7",
-            iap_count=14,
-            evidence="REVIEW_SCREENSHOTS=verified_5;ITEMS_READY=15",
+            iap_count=iap_count,
+            evidence=evidence,
             screenshot_hashes=hashes,
         )
     assert repeated["review_submission_approval"]["decision_id"] == first_decision_id
@@ -155,7 +169,7 @@ def main() -> None:
             decision_id=first_decision_id,
             app_version="1.0",
             build_number="7",
-            items_ready=15,
+            items_ready=items_ready,
             status="prepared",
         )
     submit_attempt = mutable_run["review_submit_attempt"]
@@ -169,7 +183,7 @@ def main() -> None:
             decision_id=first_decision_id,
             app_version="1.0",
             build_number="7",
-            items_ready=15,
+            items_ready=items_ready,
             status="clicking",
         )
     assert mutable_run["review_submit_attempt"]["status"] == "clicking"
@@ -179,8 +193,8 @@ def main() -> None:
                 run_id="auto-review-test",
                 app_version="1.0",
                 build_number="7",
-                iap_count=14,
-                evidence="REVIEW_SCREENSHOTS=verified_5;ITEMS_READY=15;CHANGED=1",
+                iap_count=iap_count,
+                evidence=f"{evidence};CHANGED=1",
                 screenshot_hashes=hashes,
             )
         except ValueError as exc:
@@ -192,4 +206,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_contract()

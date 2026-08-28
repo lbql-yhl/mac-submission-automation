@@ -4,19 +4,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "skills/utm-business/SKILL.md"
+SHARED_CONTRACT = ROOT / "skills/_shared/AUTOMATION_CONTRACT.md"
 
 
-def main() -> None:
+def test_contract() -> None:
     skill = SKILL.read_text(encoding="utf-8")
-    guide = (ROOT / "docs/utm-business.md").read_text(encoding="utf-8")
     combined = "\n".join(
         (
             skill,
-            guide,
+            SHARED_CONTRACT.read_text(encoding="utf-8"),
             (ROOT / "README.md").read_text(encoding="utf-8"),
             (ROOT / "AGENTS.md").read_text(encoding="utf-8"),
             (ROOT / "docs/utm-feishu-bot.md").read_text(encoding="utf-8"),
-            (ROOT / "docs/feishu-host-routing.md").read_text(encoding="utf-8"),
         )
     )
 
@@ -38,7 +37,7 @@ def main() -> None:
         "one-shot ledger",
         "UTM_BUSINESS=verified",
     ):
-        assert value in guide, value
+        assert value in skill, value
 
     for stale in (
         "utm-20-bank-info-missing",
@@ -51,4 +50,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_contract()

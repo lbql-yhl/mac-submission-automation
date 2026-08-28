@@ -8,11 +8,11 @@ SKILL = ROOT / "skills" / "utm-notion" / "SKILL.md"
 def test_utm_notion_skill_is_a_thin_deterministic_script_entry() -> None:
     text = SKILL.read_text(encoding="utf-8")
     run_id_command = (
-        "python3 $PROJECT_ROOT/scripts/utm_notion.py "
+        'python3 "$PROJECT_ROOT/scripts/utm_notion.py" '
         "--run-id '<run-id>'"
     )
     app_name_command = (
-        "python3 $PROJECT_ROOT/scripts/utm_notion.py "
+        'python3 "$PROJECT_ROOT/scripts/utm_notion.py" '
         "--app-name '<app-name>'"
     )
 
@@ -22,8 +22,11 @@ def test_utm_notion_skill_is_a_thin_deterministic_script_entry() -> None:
     assert app_name_command in text
     assert text.count(app_name_command) == 1
     assert "--vm-name '<vm-name>'" in text
-    assert "两个选择器二选一" in text
-    assert "不读取或解释脚本内容" in text
+    assert "selectors are mutually exclusive" in text
+    assert "../_shared/AUTOMATION_CONTRACT.md" in text
+    assert "## Result and handoff" in text
+    assert "status=verified" in text
+    assert "utm-clash-ip" in text
     for redundant in ("Computer Use", "浏览器", "剪贴板", "视觉", "LIFESTYLE", "初始密码"):
         assert redundant not in text
 

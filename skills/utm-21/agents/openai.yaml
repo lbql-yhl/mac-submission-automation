@@ -1,4 +1,4 @@
 interface:
-  display_name: "UTM 21"
-  short_description: "Prepare the cloned project for its Xcode handoff"
-  default_prompt: "Use $utm-21 to clone and prepare the current project for Xcode."
+  display_name: "UTM 21 代码准备"
+  short_description: "选择代码分支、复制到 UTM，并替换应用标识符"
+  default_prompt: "使用 $utm-21 获取精确应用所选的代码分支，复制到同一台 UTM 虚拟机，并替换固定的 App ID 与正式包名字符串。"

@@ -82,10 +82,12 @@ def test_delivery_does_not_delete_shared_or_guest_legacy_files() -> None:
     assert "/tmp/utm10-native-press" not in source
 
 
-def test_utm12_does_not_recheck_login() -> None:
+def test_utm12_only_rejects_a_login_form_during_session_adoption() -> None:
     source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
-    assert "input[type='password']" not in source
-    assert "input[autocomplete~='username']" not in source
+    assert source.count("input[type='password']") == 1
+    assert source.count("input[autocomplete~='username']") == 1
+    assert "current-session adoption found an Apple login form" in source
+    assert "adoptCurrentAuthenticatedSession" in source
     assert "rerun utm-10 first" not in source
 
 
@@ -101,8 +103,13 @@ def test_utm_apps_contracts_name_only_playwright_stage_files() -> None:
         assert "utm_13.py" not in source, relative
         assert "utm_12_one.mjs" not in source, relative
         assert "utm_13_one.mjs" not in source, relative
-        assert "skills/<skill>/SKILL.md" in source, relative
-    docs = (ROOT / "docs/utm-apps.md").read_text(encoding="utf-8")
-    assert "$PROJECT_ROOT/scripts/utm_apps.py" in docs
-    assert "utm_12_one.mjs" not in docs
-    assert "utm_13_one.mjs" not in docs
+    assert "项目内 `skills/` 是 16 个主线技能的唯一正文源" in (
+        ROOT / "AGENTS.md"
+    ).read_text(encoding="utf-8")
+    assert "skills/<skill>/SKILL.md" in (ROOT / "README.md").read_text(
+        encoding="utf-8"
+    )
+    skill = (ROOT / "skills/utm-apps/SKILL.md").read_text(encoding="utf-8")
+    assert "$PROJECT_ROOT/scripts/utm_apps.py" in skill
+    assert "utm_12_one.mjs" not in skill
+    assert "utm_13_one.mjs" not in skill
