@@ -9,7 +9,7 @@ def test_proxy_work_is_one_clash_ip_stage_without_development_environment() -> N
 
     assert ORDERED[:4] == ("utm-vm-clone", "utm-notion", "utm-clash-ip", "utm-login")
     assert not {"utm-5", "files", "utm-clash", "utm-6"}.intersection(ORDERED)
-    assert STANDALONE == ()
+    assert STANDALONE == ("utm-iap",)
 
     text = (ROOT / "skills" / "utm-clash-ip" / "SKILL.md").read_text(encoding="utf-8")
     for forbidden in (

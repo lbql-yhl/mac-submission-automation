@@ -16,7 +16,7 @@ skills=(
   utm-env utm-script utm-image utm-p8 utm-21 utm-22 utm-23 utm-24
 )
 typeset -a standalone_skills
-standalone_skills=()
+standalone_skills=(utm-iap)
 removed_skills=(utm-a notion-utm notion-utm-1 utm-clone-macos utm-1 utm-2 utm-3 vm-down utm-4 utm-5 files utm-clash utm-6 utm-10 utm-11 utm-12 utm-13 utm-14 utm-15 utm-16 utm-17 utm-19 utm-20)
 typeset -a install_entries
 install_entries=("${skills[@]}" "${standalone_skills[@]}" "_shared")
@@ -57,7 +57,7 @@ validate_all_sources() {
       return 3
     }
   done
-  [[ ${#standalone_skills[@]} -eq 0 ]] || { print -u2 -- "standalone skill count is not 0"; return 3; }
+  [[ ${#standalone_skills[@]} -eq 1 ]] || { print -u2 -- "standalone skill count is not 1"; return 3; }
   [[ -d "$canonical_root/_shared" && ! -L "$canonical_root/_shared" \
       && -f "$canonical_root/_shared/AUTOMATION_CONTRACT.md" ]] || {
     print -u2 -- "missing canonical shared contract"
@@ -120,7 +120,7 @@ if [[ "$mode" == "--check" ]]; then
     [[ ! -e "$target" && ! -L "$target" ]] || { print -u2 -- "removed skill still installed: $target"; exit 4; }
   done
   print -- "PROJECT_SKILLS_INSTALLED=16"
-  print -- "PROJECT_STANDALONE_SKILLS_INSTALLED=0"
+  print -- "PROJECT_STANDALONE_SKILLS_INSTALLED=1"
   print -- "PROJECT_SHARED_CONTRACT=linked"
   print -- "PROJECT_SKILLS_ROOT=$canonical_root"
   print -- "CODEX_SKILLS_ROOT=$install_root"
@@ -182,7 +182,7 @@ trap - EXIT INT TERM
 /bin/rm -rf -- "$backup_root"
 
 print -- "PROJECT_SKILLS_INSTALLED=16"
-print -- "PROJECT_STANDALONE_SKILLS_INSTALLED=0"
+print -- "PROJECT_STANDALONE_SKILLS_INSTALLED=1"
 print -- "PROJECT_SHARED_CONTRACT=linked"
 print -- "PROJECT_SKILLS_ROOT=$canonical_root"
 print -- "CODEX_SKILLS_ROOT=$install_root"

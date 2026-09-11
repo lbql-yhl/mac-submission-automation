@@ -32,7 +32,9 @@ def test_named_skills_are_the_only_mainline_names() -> None:
     discovered = tuple(
         path.parent.name for path in sorted((ROOT / "skills").glob("*/SKILL.md"))
     )
-    assert set(discovered) == set(ORDERED)
+    assert set(discovered) == set(ORDERED) | set(preflight.STANDALONE)
+    assert "utm-iap" in discovered
+    assert "utm-iap" not in ORDERED
 
     for name in ("utm-login", "utm-edit", "utm-key", "utm-script"):
         skill = ROOT / "skills" / name / "SKILL.md"

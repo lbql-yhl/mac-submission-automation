@@ -25,7 +25,7 @@ ORDERED = (
     "utm-23",
     "utm-24",
 )
-STANDALONE = ()
+STANDALONE = ("utm-iap",)
 REMOVED = (
     "notion-utm", "notion-utm-1", "utm-clone-macos", "utm-1", "utm-2", "utm-3", "vm-down", "utm-4",
     "utm-5", "files", "utm-clash", "utm-6", "utm-10", "utm-11", "utm-12", "utm-13", "utm-14", "utm-15", "utm-16", "utm-17", "utm-19", "utm-20",
@@ -56,8 +56,8 @@ def test_proxy_cutover_starts_with_clone_and_has_no_legacy_proxy_stages() -> Non
     for old_name in ("utm-10", "utm-11", "utm-12", "utm-13", "utm-14", "utm-17", "utm-19", "utm-20"):
         assert old_name in removed_block
     assert installer.count("PROJECT_SKILLS_INSTALLED=16") == 2
-    assert installer.count("PROJECT_STANDALONE_SKILLS_INSTALLED=0") == 2
-    assert "standalone_skills=()" in installer.replace("\n", "")
+    assert installer.count("PROJECT_STANDALONE_SKILLS_INSTALLED=1") == 2
+    assert "standalone_skills=(utm-iap)" in installer.replace("\n", "")
 
 
 def test_feishu_submission_start_entry_is_disabled(tmp_path, monkeypatch) -> None:

@@ -54,6 +54,7 @@ class Attempt:
     state: str
     prepared_at: str
     mode: str = ""
+    skip_iap: bool = True
 
 
 @dataclass(frozen=True)
@@ -125,8 +126,11 @@ def create_attempt(
     run_id: str,
     vm_name: str,
     vm_ip: str,
+    skip_iap: bool = True,
 ) -> Attempt:
     _validate_binding(run_id, vm_name, vm_ip)
+    if not isinstance(skip_iap, bool):
+        raise UTM18AttemptError("ATTEMPT_SKIP_IAP_INVALID")
     attempt_id = uuid.uuid4().hex
     base = f"/Users/{vm_name}/Downloads/utm-18-fill-description-{attempt_id}"
     ledger_path = Path(root) / run_id / f"{attempt_id}.json"
@@ -141,6 +145,7 @@ def create_attempt(
         ledger_path=ledger_path,
         state="prepared",
         prepared_at=datetime.now(timezone.utc).isoformat(),
+        skip_iap=skip_iap,
     )
     _write_atomic(ledger_path, _payload(attempt), create=True)
     return attempt
@@ -167,6 +172,7 @@ def _load_attempt(path: Path) -> Attempt:
             ledger_path=path,
             state=payload["state"],
             prepared_at=payload["prepared_at"],
+            skip_iap=payload.get("skip_iap", True),
             mode=(
                 payload.get("mode")
                 or ("legacy_hidden_ssh" if legacy_attempt else "")
@@ -175,6 +181,8 @@ def _load_attempt(path: Path) -> Attempt:
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         raise UTM18AttemptError("ATTEMPT_LEDGER_INVALID") from error
     _validate_binding(attempt.run_id, attempt.vm_name, attempt.vm_ip)
+    if not isinstance(attempt.skip_iap, bool):
+        raise UTM18AttemptError("ATTEMPT_SKIP_IAP_INVALID")
     if not ATTEMPT_ID_RE.fullmatch(attempt.attempt_id):
         raise UTM18AttemptError("ATTEMPT_ID_INVALID")
     expected_log = (
@@ -301,12 +309,20 @@ def classify_attempt(
     *,
     process_running: bool,
     expected_attempt_id: str,
+    skip_iap: bool = False,
 ) -> AttemptResult:
     values = _parse_status(status, expected_attempt_id)
     if any(signature.casefold() in log.casefold() for signature in BUSINESS_ERROR_SIGNATURES):
         return AttemptResult("blocked_business_error", "business_error")
     counts = [int(match) for match in SUMMARY_RE.findall(log)]
-    if COMPLETION_MARKER not in log or len(counts) != 1 or counts[0] < 1:
+    if skip_iap and (COMPLETION_MARKER in log or counts):
+        return AttemptResult("blocked_business_error", "unexpected_iap_activity")
+    complete = (
+        log.splitlines().count("IAP_CREATION=skipped_by_request") == 1
+        and log.splitlines().count("FILL_DESCRIPTION=completed_without_iap") == 1
+        if skip_iap else COMPLETION_MARKER in log and len(counts) == 1 and counts[0] >= 1
+    )
+    if not complete:
         details = [f"RUN_STATE={values.get('RUN_STATE', 'missing')}"]
         for key in ("REMOTE_NPM_EXIT", "REMOTE_TEE_EXIT"):
             if key in values:
@@ -330,7 +346,7 @@ def classify_attempt(
             "incomplete",
             reason=";".join(details),
         )
-    count = counts[0]
+    count = 0 if skip_iap else counts[0]
     if process_running and values.get("RUN_STATE") in {"running", "completion_observed"}:
         return AttemptResult("verified", "resident_after_summary", count)
     if (
@@ -386,6 +402,7 @@ def precommit_remote(
 
 
 def _remote_run_script(attempt: Attempt) -> str:
+    command_prefix = "UTM_SKIP_IAP=1 " if attempt.skip_iap else ""
     return f'''#!/bin/zsh -l
 set -o pipefail
 attempt_id={attempt.attempt_id!r}
@@ -401,7 +418,7 @@ if ! cd "$HOME"; then
   exec /bin/zsh -l
 fi
 printf 'ATTEMPT_ID=%s\nRUNNER_PID=%s\nRUN_STATE=running\n' "$attempt_id" "$runner_pid" > "$status_path"
-cd Downloads/Fire_One_en1.3 && npm run fill:description 2>&1 | /usr/bin/tee "{attempt.log_path}"
+cd Downloads/Fire_One_en1.3 && {command_prefix}npm run fill:description 2>&1 | /usr/bin/tee "{attempt.log_path}"
 statuses=("${{pipestatus[@]}}")
 npm_rc="${{statuses[1]}}"; tee_rc="${{statuses[2]}}"
 printf 'ATTEMPT_ID=%s\nRUNNER_PID=%s\nRUN_STATE=finished\nREMOTE_NPM_EXIT=%s\nREMOTE_TEE_EXIT=%s\n' "$attempt_id" "$runner_pid" "$npm_rc" "$tee_rc" > "$status_path"

@@ -45,7 +45,7 @@ ORDERED = (
     "utm-23",
     "utm-24",
 )
-STANDALONE: tuple[str, ...] = ()
+STANDALONE: tuple[str, ...] = ("utm-iap",)
 
 
 def executable_exists(command: str) -> bool:
@@ -86,7 +86,7 @@ def check(project_only: bool) -> dict[str, object]:
         "skill_set_exact": discovered == set(ORDERED) | set(STANDALONE),
         "skill_names_unique": (
             len(ORDERED) == len(set(ORDERED)) == 16
-            and len(STANDALONE) == len(set(STANDALONE)) == 0
+            and len(STANDALONE) == len(set(STANDALONE)) == 1
             and set(ORDERED).isdisjoint(STANDALONE)
         ),
         "shared_contract": (
@@ -137,7 +137,7 @@ def check(project_only: bool) -> dict[str, object]:
         (
             value == 16
             if key == "skills_count"
-            else value == 0
+            else value == len(STANDALONE)
             if key == "standalone_skills_count"
             else bool(value)
         )

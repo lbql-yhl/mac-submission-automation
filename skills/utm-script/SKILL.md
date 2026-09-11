@@ -34,6 +34,7 @@ nohup "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" \
   ```
 
   Standalone selector: replace `--run-id '<run-id>'` with `--page-title '<page-title>'`.
+- Default behavior skips in-app purchase creation: the entry enables the guest source guard, skips the IAP workbook/screenshot moves and `iap-enhanced` command, and requires both `IAP_CREATION=skipped_by_request` and `FILL_DESCRIPTION=completed_without_iap` plus full-script completion. Other application setup and API configuration steps still run. Add `--with-iap` only for the legacy opt-in that creates IAP inside this skill. Prefer the optional standalone skill `utm-iap` when an already-ready app needs IAP later.
 - Do not call its guest scripts or attempt helpers directly. Preserve the current attempt ledger and browser identity.
 - Retry the same failed checkpoint at most three rounds using 0/5/10 seconds. Once login is verified, never run the VM restart block during recovery.
 

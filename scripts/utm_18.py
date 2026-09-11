@@ -37,6 +37,8 @@ from scripts.utm_18_attempt import (  # noqa: E402
 )
 from scripts.utm_18_edge import UTM18EdgeError, prepare_edge  # noqa: E402
 from scripts.utm_18_ssh import build_invocation  # noqa: E402
+from scripts.utm_18_skip_iap import prepare_guest_skip_iap  # noqa: E402
+from scripts.utm_18_existing import run_existing_browser  # noqa: E402
 from scripts.utm_apps import (  # noqa: E402
     AppleWebError,
     run_guest_stage,
@@ -441,12 +443,14 @@ def _classify_with_resident_rechecks(
     *,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> AttemptResult:
+    mode_options = {"skip_iap": bool(getattr(attempt, "skip_iap", True))}
     log, status, process_running = inspect_remote(attempt)
     result = classify_attempt(
         log,
         status,
         process_running=process_running,
         expected_attempt_id=attempt.attempt_id,
+        **mode_options,
     )
     max_polls = FILL_DESCRIPTION_WAIT_SECONDS // FILL_DESCRIPTION_POLL_SECONDS
     for _ in range(max_polls):
@@ -470,6 +474,7 @@ def _classify_with_resident_rechecks(
             status,
             process_running=process_running,
             expected_attempt_id=attempt.attempt_id,
+            **mode_options,
         )
     else:
         return AttemptResult(
@@ -490,6 +495,7 @@ def _classify_with_resident_rechecks(
                 next_status,
                 process_running=next_running,
                 expected_attempt_id=attempt.attempt_id,
+                **mode_options,
             )
             if (
                 next_result.mode != "completed_after_transport_stop"
@@ -511,6 +517,7 @@ def _classify_with_resident_rechecks(
             next_status,
             process_running=next_running,
             expected_attempt_id=attempt.attempt_id,
+            **mode_options,
         )
         if next_result.mode != "resident_after_summary":
             return AttemptResult("ambiguous", "resident_recheck_mismatch")
@@ -550,6 +557,9 @@ def archive_authorized_attempt(attempt: Any) -> Path:
 
 
 def run(args: argparse.Namespace) -> int:
+    if getattr(args, "existing_browser", False):
+        return run_existing_browser(args)
+    skip_iap = getattr(args, "skip_iap", True)
     if args.vm_user != args.vm_name:
         raise UTM18Error("VM_USER_MISMATCH")
     attempts_root = Path(args.attempts_root)
@@ -592,6 +602,8 @@ def run(args: argparse.Namespace) -> int:
 
     attempt = load_single_attempt(attempts_root, context_id)
     if attempt is not None:
+        if getattr(attempt, "skip_iap", True) != skip_iap:
+            raise UTM18Error("ATTEMPT_IAP_MODE_MISMATCH")
         if (
             attempt.vm_name != args.vm_name
             or attempt.vm_ip != args.vm_ip
@@ -628,11 +640,20 @@ def run(args: argparse.Namespace) -> int:
                 attempt = mark_attempt(attempt, state="precommitted")
 
     if attempt is None:
+        verify_existing_apple_session(
+            vm_name=args.vm_name, vm_ip=args.vm_ip, vm_user=args.vm_user,
+        )
+
+    if skip_iap and (attempt is None or attempt.state == "prepared"):
+        prepare_guest_skip_iap(args.vm_name, args.vm_ip, args.vm_user)
+
+    if attempt is None:
         attempt = create_attempt(
             attempts_root,
             run_id=context_id,
             vm_name=args.vm_name,
             vm_ip=args.vm_ip,
+            skip_iap=skip_iap,
         )
 
     if attempt.state == "prepared":
@@ -671,6 +692,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vm-name", required=True)
     parser.add_argument("--vm-ip", required=True)
     parser.add_argument("--vm-user", required=True)
+    parser.add_argument("--existing-browser", action="store_true", help="Use the current Edge accessibility session without a debugging port or restart")
+    parser.add_argument(
+        "--skip-iap",
+        action="store_true",
+        default=True,
+        help="Skip in-app purchase creation (default). Use standalone utm-iap later if needed.",
+    )
+    parser.add_argument(
+        "--with-iap",
+        action="store_false",
+        dest="skip_iap",
+        help="Include in-app purchase creation in this utm-script attempt (legacy opt-in).",
+    )
     parser.add_argument("--force-replay", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--attempts-root",

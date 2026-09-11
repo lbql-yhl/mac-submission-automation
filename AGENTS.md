@@ -33,6 +33,12 @@ Fall back to `rg` only for string literals, error messages, configuration values
 - 每段结束时可停止；需继续时才交接下一段入口。单技能失败并完成修复后，重新运行该技能的唯一宿主入口。
 - 连续交接必须保持同一精确 run、应用、VM、网络身份、SSH 身份、浏览器会话和工作目录；禁止按“最新”模糊重选。
 
+
+## Optional standalone skills
+
+- `utm-iap` is optional and on-demand. It is not part of the exact 16-skill mainline and must not be inserted into the required order.
+- Use it only when an already-ready app needs in-app purchase creation after `utm-script` completed without IAP. Public entry: `scripts/utm_iap.py`.
+
 ## API routing
 
 - Run ID 语义：项目中的 `Run ID` 只指飞书表格精确应用行的 `Run ID` 字段。它不是全流程统一必填项；只有当前技能的 `SKILL.md` 或公开入口明确声明需要时才读取和校验，未声明需要的技能不得因其缺失而阻断，也不得按“最新”或其他模糊规则猜测 Run ID。

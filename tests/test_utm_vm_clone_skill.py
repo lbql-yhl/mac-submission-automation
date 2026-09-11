@@ -42,9 +42,9 @@ def test_utm_vm_clone_starts_the_16_skill_mainline_without_utm_a() -> None:
 
     assert len(preflight.ORDERED) == 16
     assert preflight.ORDERED[0] == "utm-vm-clone"
-    assert preflight.STANDALONE == ()
+    assert preflight.STANDALONE == ("utm-iap",)
     assert result["skills_count"] == 16
-    assert result["standalone_skills_count"] == 0
+    assert result["standalone_skills_count"] == 1
     assert result["skill_set_exact"] is True
     assert result["ok"] is True
 
@@ -56,7 +56,7 @@ def test_utm_vm_clone_starts_the_16_skill_mainline_without_utm_a() -> None:
         in installer
     )
     assert installer.count("PROJECT_SKILLS_INSTALLED=16") == 2
-    assert installer.count("PROJECT_STANDALONE_SKILLS_INSTALLED=0") == 2
+    assert installer.count("PROJECT_STANDALONE_SKILLS_INSTALLED=1") == 2
     assert "PROJECT_SKILLS_INSTALLED=25" not in installer
 
 

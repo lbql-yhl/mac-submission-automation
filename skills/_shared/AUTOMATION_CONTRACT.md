@@ -1,6 +1,6 @@
 # Portable Automation Contract
 
-This contract applies to all 16 UTM skills. A skill body supplies the business-specific inputs, entry point, evidence, and handoff; this file supplies only shared execution rules.
+This contract applies to all 16 mainline UTM skills and any optional standalone skills such as `utm-iap`. A skill body supplies the business-specific inputs, entry point, evidence, and handoff; this file supplies only shared execution rules.
 
 ## Portable bootstrap
 

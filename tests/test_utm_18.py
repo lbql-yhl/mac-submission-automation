@@ -22,6 +22,12 @@ def _skip_browser_recovery_for_existing_run_tests(monkeypatch):
         lambda *args, **kwargs: False,
         raising=False,
     )
+    monkeypatch.setattr(
+        utm_18,
+        "prepare_guest_skip_iap",
+        lambda *args, **kwargs: None,
+        raising=False,
+    )
 
 
 class FakeNotion:
@@ -458,6 +464,7 @@ def _args(tmp_path: Path) -> argparse.Namespace:
         vm_ip="192.168.64.20",
         vm_user="abcd",
         attempts_root=tmp_path,
+        skip_iap=True,
     )
 
 
@@ -717,7 +724,7 @@ export async function connectLocalBrowser() {
       pages: () => [{
         url: () => "https://developer.apple.com/account/",
         frames: () => [{
-          locator: () => ({ innerText: async () => "Membership details" }),
+          locator: () => ({ innerText: async () => "Membership details", count: async () => 0 }),
         }],
       }],
     },
@@ -1315,6 +1322,9 @@ def test_cli_uses_run_id_or_page_title_as_required_mutually_exclusive_selectors(
         "vm_ip",
         "vm_user",
         "attempts_root",
+        "force_replay",
+        "skip_iap",
+        "existing_browser",
     }
     assert frozenset({"run_id", "page_title"}) in _selector_sets(parser)
 

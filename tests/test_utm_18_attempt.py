@@ -112,7 +112,10 @@ def test_visible_command_runs_npm_with_tee_statuses_and_leaves_login_shell(
 
     script = _remote_run_script(attempt)
 
-    assert "cd Downloads/Fire_One_en1.3 && npm run fill:description" in script
+    assert (
+        "cd Downloads/Fire_One_en1.3 && UTM_SKIP_IAP=1 npm run fill:description"
+        in script
+    )
     assert f'/usr/bin/tee "{attempt.log_path}"' in script
     assert "RUN_STATE=launching" in script
     assert "RUN_STATE=running" in script

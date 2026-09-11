@@ -28,16 +28,21 @@ ORDERED = (
 )
 
 
+STANDALONE = ("utm-iap",)
+
+
 def test_project_owns_exactly_the_sixteen_canonical_skills() -> None:
     discovered = tuple(
         sorted(path.parent.name for path in SKILL_ROOT.glob("*/SKILL.md"))
     )
 
-    assert discovered == tuple(sorted(ORDERED))
+    assert set(discovered) == set(ORDERED) | set(STANDALONE)
     assert len(ORDERED) == len(set(ORDERED)) == 16
+    assert "utm-iap" in discovered
+    assert "utm-iap" not in ORDERED
 
 
-@pytest.mark.parametrize("skill_name", ORDERED)
+@pytest.mark.parametrize("skill_name", ORDERED + STANDALONE)
 def test_every_skill_inherits_the_portable_contract(skill_name: str) -> None:
     skill_file = SKILL_ROOT / skill_name / "SKILL.md"
     text = skill_file.read_text(encoding="utf-8")
@@ -89,7 +94,7 @@ def test_skill_installer_validates_sources_and_rolls_back_partial_installs() -> 
         "rollback_install",
         "unsafe install root",
         "PROJECT_SKILLS_INSTALLED=16",
-        "PROJECT_STANDALONE_SKILLS_INSTALLED=0",
+        "PROJECT_STANDALONE_SKILLS_INSTALLED=1",
         "PROJECT_SHARED_CONTRACT=linked",
     ):
         assert required in installer

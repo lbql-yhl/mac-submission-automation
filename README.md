@@ -64,6 +64,19 @@
 
 每段可单独运行，每个技能也可人工单独指定执行。精确技能链接和交接边界见 [项目流程](docs/project-workflow.md)。
 
+
+## 可选技能（按需，不进主线）
+
+主线仍固定 16 个技能。需要给**已完成无内购主线**的应用补内购时，单独执行可选技能 [`utm-iap`](skills/utm-iap/SKILL.md)，不要把它插入 `utm-script` → `utm-image` 之间的必经顺序。
+
+```bash
+eval "$(python3 scripts/preflight.py --project-only --emit-shell)"
+python3 "$PROJECT_ROOT/scripts/utm_iap.py" \
+  --run-id '<run-id>' --vm-name '<vm-name>' --vm-ip '<vm-ip>' --vm-user '<vm-user>'
+```
+
+也可用 `--page-title '<page-title>'` 代替 `--run-id`。前置与验收见该技能 `SKILL.md`。
+
 ## Feishu 运行状态
 
 飞书支持带明确技能清单的结构化 `/提审 <应用名>`，同一宿主同时只运行一个应用；旧版完整登记消息和 `/提审 开始` 仍然禁用。项目群还支持 `/创建虚拟机 <数量>台`，单次最多 10 台，并严格逐台串行调用现有 `utm-vm-clone`。卡片、查询、日报、命令格式与验收边界见 [Feishu Bot 指南](docs/utm-feishu-bot.md)。

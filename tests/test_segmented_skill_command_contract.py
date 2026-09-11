@@ -25,6 +25,7 @@ SEGMENTS = (
 )
 
 ORDERED = tuple(name for _, _, skills in SEGMENTS for name in skills)
+STANDALONE = ("utm-iap",)
 
 ENTRY_SCRIPTS = {
     "utm-vm-clone": "scripts/utm_clone_and_initialize.py",
@@ -118,4 +119,6 @@ def test_all_mainline_skills_are_owned_by_the_repository_skill_tree() -> None:
     discovered = tuple(
         sorted(path.parent.name for path in SKILL_ROOT.glob("*/SKILL.md"))
     )
-    assert discovered == tuple(sorted(ORDERED))
+    assert set(discovered) == set(ORDERED) | set(STANDALONE)
+    assert "utm-iap" not in ORDERED
+    assert "utm-iap" in discovered
