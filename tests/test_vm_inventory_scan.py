@@ -101,5 +101,62 @@ def test_inventory_module_has_no_feishu_delivery_dependencies(
     assert not hasattr(vm_inventory_scan, "host_settings_snapshot")
 
 
+def test_inventory_cli_scans_every_configured_directory(
+    vm_inventory_scan: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    configured = ModuleType("services.project_paths")
+    configured.PROJECT_ROOT = tmp_path
+    configured.VM_IMAGES_DIRS = (tmp_path / "first", tmp_path / "second")
+    configured.VM_IMAGES_DIR = configured.VM_IMAGES_DIRS[0]
+    for directory in configured.VM_IMAGES_DIRS:
+        directory.mkdir()
+    monkeypatch.setitem(sys.modules, "services.project_paths", configured)
+    seen = []
+    monkeypatch.setattr(vm_inventory_scan, "scan_inventory", lambda database, directories: seen.append(directories) or {})
+
+    assert vm_inventory_scan.main([]) == 0
+    assert seen == [configured.VM_IMAGES_DIRS]
+
+
+def test_inventory_cli_accepts_repeated_explicit_directories(
+    vm_inventory_scan: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    seen = []
+    monkeypatch.setattr(vm_inventory_scan, "scan_inventory", lambda database, directories: seen.append(directories) or {})
+
+    assert vm_inventory_scan.main([
+        "--database", str(tmp_path / "inventory.sqlite3"),
+        "--images-dir", str(first), "--images-dir", str(second),
+    ]) == 0
+    assert seen == [(first, second)]
+
+
+def test_inventory_cli_explicit_recovery_does_not_scan_unrelated_rows(
+    vm_inventory_scan: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(vm_inventory_scan, "scan_inventory", lambda *_args: pytest.fail("recovery must not modify unrelated rows"))
+    seen = []
+    monkeypatch.setattr(vm_inventory_scan, "restore_available_vms", lambda database, directories, names: seen.extend(names) or names, raising=False)
+
+    assert vm_inventory_scan.main([
+        "--database", str(tmp_path / "inventory.sqlite3"),
+        "--images-dir", str(tmp_path), "--restore-available", "abcd", "efgh",
+    ]) == 0
+    assert seen == ["abcd", "efgh"]
+    captured = capsys.readouterr()
+    assert "RESTORED_AVAILABLE_VM_COUNT=2" in captured.out
+    assert str(tmp_path) not in captured.out + captured.err
+
+
 if __name__ == "__main__":
     raise SystemExit(0)

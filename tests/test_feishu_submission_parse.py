@@ -103,12 +103,14 @@ Account Number：000000000000
 
     with tempfile.TemporaryDirectory() as tmp:
         old_images_dir = feishu_bot.VM_IMAGES_DIR
+        old_images_dirs = feishu_bot.VM_IMAGES_DIRS
         old_runs_file = feishu_bot.RUNS_FILE
         old_prompts_dir = feishu_bot.PROMPTS_DIR
         old_codex_app_sessions_dir = feishu_bot.CODEX_APP_SESSIONS_DIR
         tmp_path = Path(tmp)
         feishu_bot.VM_IMAGES_DIR = tmp_path / "images"
         feishu_bot.VM_IMAGES_DIR.mkdir()
+        feishu_bot.VM_IMAGES_DIRS = (feishu_bot.VM_IMAGES_DIR,)
         feishu_bot.RUNS_FILE = tmp_path / "runs.json"
         feishu_bot.PROMPTS_DIR = tmp_path / "prompts"
         feishu_bot.CODEX_APP_SESSIONS_DIR = tmp_path / "codex-app-sessions"
@@ -189,6 +191,7 @@ Account Number：000000000000
                 assert required in prompt, required
         finally:
             feishu_bot.VM_IMAGES_DIR = old_images_dir
+            feishu_bot.VM_IMAGES_DIRS = old_images_dirs
             feishu_bot.RUNS_FILE = old_runs_file
             feishu_bot.PROMPTS_DIR = old_prompts_dir
             feishu_bot.CODEX_APP_SESSIONS_DIR = old_codex_app_sessions_dir
@@ -223,6 +226,7 @@ Account Number：000000000000
 
     with tempfile.TemporaryDirectory() as tmp:
         old_images_dir = feishu_bot.VM_IMAGES_DIR
+        old_images_dirs = feishu_bot.VM_IMAGES_DIRS
         old_runs_file = feishu_bot.RUNS_FILE
         tmp_path = Path(tmp)
         images_dir = tmp_path / "images"
@@ -231,11 +235,13 @@ Account Number：000000000000
         runs_file = tmp_path / "runs.json"
         runs_file.write_text('{"runs":[{"vm_name":"efgh"}]}', encoding="utf-8")
         feishu_bot.VM_IMAGES_DIR = images_dir
+        feishu_bot.VM_IMAGES_DIRS = (images_dir,)
         feishu_bot.RUNS_FILE = runs_file
         try:
             vm_name = feishu_bot.generate_vm_name()
         finally:
             feishu_bot.VM_IMAGES_DIR = old_images_dir
+            feishu_bot.VM_IMAGES_DIRS = old_images_dirs
             feishu_bot.RUNS_FILE = old_runs_file
         assert len(vm_name) == 4
         assert vm_name.islower()

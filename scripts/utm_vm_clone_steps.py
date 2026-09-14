@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from services.project_paths import SHARED_DIR, VM_IMAGES_DIR, VM_TEMPLATE  # noqa: E402
+from services.project_paths import SHARED_DIR, VM_IMAGES_DIRS, VM_TEMPLATE  # noqa: E402
 from scripts.clean_cli import emit_progress, run_clean_cli  # noqa: E402
 from scripts.utm_apps_delivery import PLAYWRIGHT_GUEST_FILES  # noqa: E402
 from scripts.utm_image_delivery import GUEST_FILE as IMAGE_GUEST_FILE  # noqa: E402
@@ -54,7 +54,7 @@ def step_marker(step: int) -> str:
 def _arguments(vm_name: str) -> argparse.Namespace:
     return argparse.Namespace(
         vm_name=vm_name,
-        images_dir=VM_IMAGES_DIR.resolve(),
+        images_dir=VM_IMAGES_DIRS,
         shared_dir=SHARED_DIR.resolve(),
         database=DATABASE,
     )

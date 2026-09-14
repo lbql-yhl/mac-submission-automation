@@ -84,6 +84,12 @@ def _validate_payload(
     app_name = payload.get("app_name")
     assets = payload.get("assets")
     fire_one_env = payload.get("fire_one_env")
+    skip_coin_image = payload.get("skip_coin_image", False)
+    if not isinstance(skip_coin_image, bool):
+        raise GuestFinalizeError("skip_coin_image must be an explicit boolean")
+    skip_source_code = payload.get("skip_source_code", False)
+    if not isinstance(skip_source_code, bool):
+        raise GuestFinalizeError("skip_source_code must be an explicit boolean")
     if (
         not isinstance(app_name, str)
         or not app_name
@@ -98,6 +104,10 @@ def _validate_payload(
         f"{app_name}.png",
         f"{app_name}-git",
     ]
+    if skip_coin_image:
+        expected_names.remove(f"{app_name}.png")
+    if skip_source_code:
+        expected_names.remove(f"{app_name}-git")
     if list(assets) != expected_names:
         raise GuestFinalizeError(
             "asset payload does not preserve exact application-name case"
@@ -286,15 +296,16 @@ def run_assets(mode: str, vm_user: str, payload: dict[str, Any]) -> dict[str, An
         raise GuestFinalizeError("fresh shared Fire_One_en1.3/.env verification failed")
     if _summary(target_env, "file") != env_evidence:
         raise GuestFinalizeError("fresh Downloads Fire_One_en1.3/.env verification failed")
+    skip_source_code = bool(payload.get("skip_source_code", False))
     return {
         "status": "verified",
-        "asset_count": 4,
+        "asset_count": len(assets),
         "host_guest_asset_sha256": "exact",
         "fire_one_env_sha256": "exact",
         "fire_one_env_mode": "600",
-        "guest_download_asset_count": 3,
-        "guest_code_path": str(code_target),
-        "guest_code_copy": "verified_or_identical_existing",
+        "guest_download_asset_count": len(assets) if skip_source_code else len(assets) - 1,
+        "guest_code_path": "skipped" if skip_source_code else str(code_target),
+        "guest_code_copy": "skipped" if skip_source_code else "verified_or_identical_existing",
     }
 
 

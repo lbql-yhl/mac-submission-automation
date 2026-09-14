@@ -204,11 +204,17 @@ def _attachment_plan(
     )
 
 
-def plan_assets(record: dict[str, Any], app_name: str) -> list[AssetPlan]:
+def plan_assets(
+    record: dict[str, Any], app_name: str, *, skip_coin_image: bool = False
+) -> list[AssetPlan]:
     fields = record.get("fields")
     if not isinstance(fields, dict):
         raise ValueError("matching Base record has no fields")
-    plans = [_attachment_plan(fields, field_name, app_name) for field_name in REQUIRED_FIELDS]
+    plans = [
+        _attachment_plan(fields, field_name, app_name)
+        for field_name in REQUIRED_FIELDS
+        if not (skip_coin_image and field_name == "金币商店截图")
+    ]
     target_names = [plan.target_name.casefold() for plan in plans]
     if len(target_names) != len(set(target_names)):
         raise ValueError("target filename collision after renaming attachments")
@@ -674,17 +680,21 @@ def download_assets(
     output_root: Path,
     client: AssetClient,
     github_client: GitHubClientProtocol,
+    skip_coin_image: bool = False,
+    skip_source_code: bool = False,
 ) -> dict[str, Any]:
     app_name = _safe_app_name(app_name)
     record_app_name = _safe_app_name(record_app_name or app_name)
     location = parse_base_url(base_url)
     record = select_exact_record(client.list_records(location), record_app_name)
-    plans = plan_assets(record, app_name)
+    plans = plan_assets(record, app_name, skip_coin_image=skip_coin_image)
     fields = record.get("fields")
     if not isinstance(fields, dict):
         raise ValueError("matching Base record has no fields")
-    code_url = _link_value(fields.get(CODE_URL_FIELD), CODE_URL_FIELD)
-    parse_github_repo_url(code_url)
+    code_url = None
+    if not skip_source_code:
+        code_url = _link_value(fields.get(CODE_URL_FIELD), CODE_URL_FIELD)
+        parse_github_repo_url(code_url)
 
     output_root = Path(output_root).expanduser().resolve()
     if output_root.exists() and (output_root.is_symlink() or not output_root.is_dir()):
@@ -696,7 +706,8 @@ def download_assets(
         if plan.field_name != "研发截图"
     ]
     known_targets.append(output_root / app_name)
-    known_targets.append(output_root / f"{app_name}-git")
+    if not skip_source_code:
+        known_targets.append(output_root / f"{app_name}-git")
     existing = [target.name for target in known_targets if target.exists()]
     if existing:
         raise FileExistsError(f"target already exists: {', '.join(existing)}")
@@ -740,15 +751,18 @@ def download_assets(
             _validate_download(plan, target_path)
             final_assets.append((plan.field_name, target_path))
 
-        code_path = output_root / f"{app_name}-git"
-        created.append(code_path)
-        code_commit_sha, code_download_method = github_client.retrieve_repository(
-            code_url, code_path
-        )
-        if code_download_method != "github_zip":
-            raise ValueError("GitHub code download method is invalid")
-        _directory_files(code_path)
-        final_assets.append((CODE_URL_FIELD, code_path))
+        code_commit_sha = None
+        code_download_method = "skipped"
+        if not skip_source_code:
+            code_path = output_root / f"{app_name}-git"
+            created.append(code_path)
+            code_commit_sha, code_download_method = github_client.retrieve_repository(
+                code_url, code_path
+            )
+            if code_download_method != "github_zip":
+                raise ValueError("GitHub code download method is invalid")
+            _directory_files(code_path)
+            final_assets.append((CODE_URL_FIELD, code_path))
 
         expected_names = {
             "研发截图": app_name,
@@ -756,6 +770,10 @@ def download_assets(
             "金币商店截图": f"{app_name}.png",
             CODE_URL_FIELD: f"{app_name}-git",
         }
+        if skip_coin_image:
+            del expected_names["金币商店截图"]
+        if skip_source_code:
+            del expected_names[CODE_URL_FIELD]
         actual_names = {field_name: path.name for field_name, path in final_assets}
         if actual_names != expected_names:
             raise ValueError("final asset filenames do not preserve the exact application name case")
@@ -787,7 +805,7 @@ def download_assets(
             "record_id": record.get("record_id"),
             "attachment_count": len(plans),
             "development_image_count": development_image_count,
-            "code_repository_count": 1,
+            "code_repository_count": 0 if skip_source_code else 1,
             "code_commit_sha": code_commit_sha,
             "code_download_method": code_download_method,
             "asset_count": len(files),

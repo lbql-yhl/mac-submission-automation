@@ -2,7 +2,7 @@
 """Daily reconciliation/preview for the standalone UTM VM inventory.
 
 The scan is deliberately separate from cloning.  It only compares the local
-SQLite inventory with the configured image directory; unknown bundles are
+SQLite inventory with all configured image directories; unknown bundles are
 reported for human review and are never inserted automatically.  Inventory
 evidence is local-only and cannot be delivered as a Feishu daily report.
 """
@@ -20,7 +20,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from scripts.vm_inventory import InventoryError, register_existing, scan_inventory  # noqa: E402
+from scripts.vm_inventory import InventoryError, register_existing, restore_available_vms, scan_inventory  # noqa: E402
 
 
 VM_NAME_RE = re.compile(r"^[a-z]{4}$")
@@ -55,6 +55,9 @@ def build_report(result: dict[str, Any]) -> str:
         lines.append(f"master模板：{', '.join(master_paths)}")
     lines.extend(["", "本次新发现已清理、名称可复用："])
     lines.extend(f"- {name}" for name in reusable) if reusable else lines.append("- 无")
+    conflicts = sorted(str(name) for name in result.get("location_conflicts", []))
+    lines.extend(["", "非空闲虚拟机路径不一致（未修改，需精确身份核验）："])
+    lines.extend(f"- {name}" for name in conflicts) if conflicts else lines.append("- 无")
     lines.extend(["", "目录存在但数据库未登记（需人工检查；可用标记固定为 0）："])
     if unregistered:
         lines.extend(
@@ -131,13 +134,20 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     parser = argparse.ArgumentParser(description="Scan and report the standalone UTM VM inventory")
-    parser.add_argument("--images-dir", type=Path)
+    parser.add_argument("--images-dir", type=Path, action="append")
     parser.add_argument("--database", type=Path)
-    parser.add_argument(
+    recovery = parser.add_mutually_exclusive_group()
+    recovery.add_argument(
         "--register-existing",
         nargs="+",
         metavar="VM_NAME",
         help="register only these manually confirmed existing four-letter VM bundles",
+    )
+    recovery.add_argument(
+        "--restore-available",
+        nargs="+",
+        metavar="VM_NAME",
+        help="restore only approved completed unused VMs after exact identity verification",
     )
     parser.add_argument(
         "--application-name",
@@ -148,24 +158,30 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.images_dir is None or args.database is None:
-            from services.project_paths import PROJECT_ROOT, VM_IMAGES_DIR
+            from services.project_paths import PROJECT_ROOT, VM_IMAGES_DIRS
 
-            images_dir = args.images_dir or VM_IMAGES_DIR
+            images_dirs = tuple(args.images_dir or VM_IMAGES_DIRS)
             database = args.database or PROJECT_ROOT / "runtime" / "vm-inventory.sqlite3"
         else:
-            images_dir = args.images_dir
+            images_dirs = tuple(args.images_dir)
             database = args.database
-        images_dir = images_dir.expanduser()
-        if images_dir.is_symlink():
-            raise InventoryError("images directory must be an existing non-symlink directory")
-        images_dir = images_dir.resolve()
-        _register_confirmed_bundles(
-            database,
-            images_dir,
-            list(args.register_existing or []),
-            args.application_name,
-        )
-        result = scan_inventory(database, images_dir)
+        if args.restore_available:
+            restored = restore_available_vms(database, images_dirs, args.restore_available)
+            print(f"RESTORED_AVAILABLE_VM_COUNT={len(restored)}")
+            return 0
+        if args.register_existing:
+            if len(images_dirs) != 1:
+                raise InventoryError("registration requires one explicit image directory")
+            images_dir = images_dirs[0].expanduser()
+            if images_dir.is_symlink() or not images_dir.is_dir():
+                raise InventoryError("images directory must be an existing non-symlink directory")
+            _register_confirmed_bundles(
+                database,
+                images_dir.resolve(),
+                args.register_existing,
+                args.application_name,
+            )
+        result = scan_inventory(database, images_dirs)
         report = build_report(result)
         digest = report_sha256(report)
         print(report, end="")
@@ -173,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
         print("REPORT_PREVIEW_ONLY=verified")
         return 0
     except (InventoryError, OSError, RuntimeError) as error:
-        print(f"VM_INVENTORY_SCAN=failed reason={type(error).__name__}: {error}", file=sys.stderr)
+        print(f"VM_INVENTORY_SCAN=failed reason={type(error).__name__}", file=sys.stderr)
         return 2
 
 

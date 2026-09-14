@@ -16,12 +16,12 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from services.project_paths import PROJECT_ROOT, SHARED_DIR, VM_IMAGES_DIR  # noqa: E402
+from services.project_paths import PROJECT_ROOT, SHARED_DIR, VM_IMAGES_DIRS  # noqa: E402
 from scripts.utm_1_ax import normalize_mac  # noqa: E402
 from scripts.utm_business_delivery import (  # noqa: E402
     BUSINESS_GUEST_FILES,
@@ -145,17 +145,31 @@ def _enter_guest_desktop(
     return _guest_enter_desktop(user, ip, vm_name, bundle)
 def _verify_admin(user: str, ip: str) -> None:
     verify_admin(user, ip)
-def target_bundle(images_dir: Path, vm_name: str) -> Path:
+def target_bundle(images_dir: Path | Sequence[Path], vm_name: str) -> Path:
     if not VM_RE.fullmatch(vm_name):
         raise PostCloneError("VM name must be four lowercase letters")
-    images = Path(images_dir).expanduser()
-    if images.is_symlink() or not images.is_dir():
-        raise PostCloneError(f"images directory is invalid: {images}")
-    images = images.resolve()
-    bundle = images / f"{vm_name}.utm"
-    if bundle.is_symlink() or not bundle.is_dir() or not (bundle / "config.plist").is_file():
-        raise PostCloneError(f"exact target bundle/config.plist is missing: {bundle}")
-    return bundle.resolve()
+    if isinstance(images_dir, (str, Path)):
+        directories: Sequence[Path] = (Path(images_dir),)
+    else:
+        directories = tuple(Path(path) for path in images_dir)
+    if not directories:
+        raise PostCloneError("images directory is invalid: empty")
+    matches: list[Path] = []
+    for images in directories:
+        images = Path(images).expanduser()
+        if images.is_symlink() or not images.is_dir():
+            raise PostCloneError(f"images directory is invalid: {images}")
+        images = images.resolve()
+        bundle = images / f"{vm_name}.utm"
+        if bundle.is_symlink() or not bundle.is_dir() or not (bundle / "config.plist").is_file():
+            continue
+        matches.append(bundle.resolve())
+    unique = list(dict.fromkeys(matches))
+    if len(unique) != 1:
+        raise PostCloneError(
+            f"exact target bundle/config.plist is missing: {vm_name}.utm"
+        )
+    return unique[0]
 def config_identity(bundle: Path) -> tuple[str, str]:
     try:
         data = plistlib.loads((bundle / "config.plist").read_bytes())
@@ -251,7 +265,7 @@ def _choose_utm_run_control(controls: list[dict[str, Any]], vm_name: str) -> Any
 
 
 def _start_stopped_vm(vm_name: str) -> None:
-    bundle = target_bundle(VM_IMAGES_DIR, vm_name)
+    bundle = target_bundle(VM_IMAGES_DIRS, vm_name)
     subprocess.run(["open", str(bundle)], check=True)
     time.sleep(WAIT_SECONDS)
 
@@ -572,7 +586,7 @@ def perform_hardware_setup(
             "--share-path",
             str(args.shared_dir),
             "--images-dir",
-            str(args.images_dir),
+            str(Path(bundle).resolve().parent),
             "--random-mac-rounds",
             "3",
         ]

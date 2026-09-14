@@ -16,7 +16,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 from scripts.vm_inventory import InventoryError, get_record, normalize_guest_mac
 
@@ -80,9 +80,69 @@ def _config_identity(bundle: Path) -> tuple[str, str]:
     return config_uuid, mac_address
 
 
+def _normalize_images_dirs(images_dir: Path | Sequence[Path]) -> tuple[Path, ...]:
+    """Accept one directory or an ordered authorized list from SUBMISSION_VM_IMAGES_DIRS."""
+    if isinstance(images_dir, (str, Path)):
+        candidates: Sequence[Path] = (Path(images_dir),)
+    else:
+        candidates = tuple(Path(path) for path in images_dir)
+    if not candidates:
+        raise TargetVMError("VM images directory is missing or unsafe")
+    normalized: list[Path] = []
+    for directory in candidates:
+        directory = Path(directory).expanduser()
+        if directory.is_symlink() or not directory.is_dir():
+            raise TargetVMError("VM images directory is missing or unsafe")
+        resolved = directory.resolve()
+        if resolved in normalized:
+            raise TargetVMError("VM images directory is missing or unsafe")
+        normalized.append(resolved)
+    return tuple(normalized)
+
+
+
+def resolve_existing_vm_bundle(
+    images_dir: Path | Sequence[Path],
+    vm_name: str,
+    *,
+    registered_bundle: Path | None = None,
+) -> Path:
+    """Locate the unique existing ``{vm_name}.utm`` under authorized images dirs.
+
+    When ``registered_bundle`` is provided (inventory ``bundle_path``), the match
+    must equal that resolved path under the authorized list. Otherwise the unique
+    existing non-symlink ``{vm_name}.utm`` directory is returned.
+    """
+    if not NAME_RE.fullmatch(vm_name):
+        raise TargetVMError("exact VM name must contain four lowercase letters")
+    images_dirs = _normalize_images_dirs(images_dir)
+    expected_name = f"{vm_name}.utm"
+    present: list[Path] = []
+    for directory in images_dirs:
+        candidate = directory / expected_name
+        if candidate.is_symlink() or not candidate.is_dir():
+            continue
+        present.append(candidate.resolve())
+    unique = list(dict.fromkeys(present))
+    if registered_bundle is not None:
+        registered = Path(registered_bundle).expanduser()
+        if not str(registered):
+            raise TargetVMError("exact VM bundle path does not match inventory")
+        if registered.is_symlink():
+            raise TargetVMError("exact VM bundle path does not match inventory")
+        registered_resolved = registered.resolve()
+        matches = [path for path in unique if path == registered_resolved]
+        if len(matches) != 1:
+            raise TargetVMError("exact VM bundle path does not match inventory")
+        return matches[0]
+    if len(unique) != 1:
+        raise TargetVMError("exact VM bundle is missing or unsafe")
+    return unique[0]
+
+
 def require_exact_bound_vm(
     database: Path,
-    images_dir: Path,
+    images_dir: Path | Sequence[Path],
     vm_name: str,
     application_name: str,
 ) -> BoundVM:
@@ -94,10 +154,7 @@ def require_exact_bound_vm(
     database = Path(database).expanduser()
     if database.is_symlink() or not database.is_file():
         raise TargetVMError("inventory database is missing or unsafe")
-    images_dir = Path(images_dir).expanduser()
-    if images_dir.is_symlink() or not images_dir.is_dir():
-        raise TargetVMError("VM images directory is missing or unsafe")
-    images_dir = images_dir.resolve()
+    images_dirs = _normalize_images_dirs(images_dir)
     record = get_record(database.resolve(), vm_name)
     if record.get("application_name") != application_name:
         raise TargetVMError("exact VM application binding does not match")
@@ -108,10 +165,19 @@ def require_exact_bound_vm(
         or int(record.get("available") or 0) != 0
     ):
         raise TargetVMError("exact VM inventory state is not bound and complete")
-    expected_bundle = (images_dir / f"{vm_name}.utm").resolve()
     registered_bundle = Path(str(record.get("bundle_path") or "")).expanduser()
-    if registered_bundle.is_symlink() or registered_bundle.resolve() != expected_bundle:
+    if registered_bundle.is_symlink():
         raise TargetVMError("exact VM bundle path does not match inventory")
+    registered_resolved = registered_bundle.resolve()
+    expected_name = f"{vm_name}.utm"
+    matches = [
+        (images_dir / expected_name).resolve()
+        for images_dir in images_dirs
+        if (images_dir / expected_name).resolve() == registered_resolved
+    ]
+    if len(matches) != 1:
+        raise TargetVMError("exact VM bundle path does not match inventory")
+    expected_bundle = matches[0]
     if expected_bundle.is_symlink() or not expected_bundle.is_dir():
         raise TargetVMError("exact VM bundle is missing or unsafe")
     config_uuid, mac_address = _config_identity(expected_bundle)
@@ -146,15 +212,26 @@ def ensure_exact_vm_started(
     *,
     run_command: CommandRunner = _run_command,
     sleep_fn: Callable[[float], None] = time.sleep,
+    bound: BoundVM | None = None,
 ) -> bool:
     """Start only an explicitly named stopped VM and verify three fresh reads.
 
     Returns ``True`` when this call issued the one permitted start command and
     ``False`` when the target was already running.
+
+    If ``utmctl`` cannot see the VM name (common when the ``.utm`` bundle was
+    opened outside the library) but ``bound`` has a unique live ARP MAC, treat
+    the guest as already running without issuing start.
     """
     if not NAME_RE.fullmatch(vm_name):
         raise TargetVMError("exact VM name must contain four lowercase letters")
-    current = _status(vm_name, run_command)
+    try:
+        current = _status(vm_name, run_command)
+    except TargetVMError:
+        if bound is None:
+            raise
+        resolve_exact_vm_ip(bound, run_command=run_command, sleep_fn=sleep_fn)
+        return False
     started_here = False
     if current == "stopped":
         result = run_command([UTMCTL, "start", vm_name])
@@ -194,18 +271,35 @@ def resolve_exact_vm_ip(
     run_command: CommandRunner = _run_command,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> str:
-    """Resolve one IP jointly identified by exact ``utmctl`` name and MAC."""
+    """Resolve one IP jointly identified by exact ``utmctl`` name and MAC.
+
+    When the guest was opened outside UTM's controllable library, ``utmctl`` may
+    not see the name; a unique ARP match for the inventory MAC is then accepted.
+    """
     for delay in (0.0, 5.0, 10.0):
         if delay:
             sleep_fn(delay)
-        ip_result = run_command([UTMCTL, "ip-address", target.vm_name])
+        try:
+            ip_result = run_command([UTMCTL, "ip-address", target.vm_name])
+            utm_stdout = ip_result.stdout if ip_result.returncode == 0 else ""
+        except TargetVMError:
+            utm_stdout = ""
         utm_ips = {
             str(ipaddress.IPv4Address(value))
-            for value in IP_RE.findall(ip_result.stdout if ip_result.returncode == 0 else "")
+            for value in IP_RE.findall(utm_stdout)
         }
         for candidate in sorted(utm_ips):
             subprocess.run(
                 ["/sbin/ping", "-c", "1", "-W", "1000", candidate],
+                text=True,
+                capture_output=True,
+                timeout=3,
+                check=False,
+            )
+        # Probe inventory MAC via broadcast ping path when utmctl has no IPs.
+        if not utm_ips:
+            subprocess.run(
+                ["/sbin/ping", "-c", "1", "-W", "1000", "192.168.64.255"],
                 text=True,
                 capture_output=True,
                 timeout=3,

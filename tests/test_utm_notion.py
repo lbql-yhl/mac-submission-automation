@@ -439,6 +439,71 @@ def test_build_registration_fields_accepts_unknown_email_suffix_by_structure() -
     )
 
 
+def test_build_registration_fields_accepts_lixsms_rich_text_account() -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = [
+        {"text": "2025550123"},
+        {"text": "查看短信", "link": "https://lixsms.com/sms?id=synthetic"},
+        {"text": "stringbed@example.", "link": "https://lixsms.com/ignored"},
+        {"text": "comAbc1D2ef", "link": "https://ignored.example/b"},
+    ]
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["邮箱："] == "stringbed@example.com"
+    assert account["初始密码："] == "Abc1D2ef"
+    assert account["电话："] == "+12025550123"
+    assert account["电话短信接收平台："] == (
+        "https://lixsms.com/sms?id=synthetic"
+    )
+
+
+def test_build_registration_fields_accepts_lixsms_four_line_account() -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = (
+        "2025550123\r\n"
+        "https://lixsms.com/sms?id=synthetic\r\n"
+        "stringbed@example.com\r\n"
+        "Abc1D2ef"
+    )
+
+    account, _ = build_registration_fields(fields)
+
+    assert account["邮箱："] == "stringbed@example.com"
+    assert account["初始密码："] == "Abc1D2ef"
+    assert account["电话："] == "+12025550123"
+    assert account["电话短信接收平台："] == (
+        "https://lixsms.com/sms?id=synthetic"
+    )
+
+
+@pytest.mark.parametrize(
+    "account_cell",
+    [
+        [
+            {"text": "202555012"},
+            {"text": "查看短信", "link": "https://lixsms.com/sms?id=synthetic"},
+            {"text": "stringbed@example.", "link": "https://ignored.example/a"},
+            {"text": "comAbc1D2ef", "link": "https://ignored.example/b"},
+        ],
+        [
+            {"text": "2025550123"},
+            {"text": "查看短信", "link": "https://lixsms.com/sms?id=synthetic"},
+            {"text": "first@example.comsecond@example.", "link": "https://ignored.example/a"},
+            {"text": "comAbc1D2ef", "link": "https://ignored.example/b"},
+        ],
+    ],
+)
+def test_build_registration_fields_rejects_ambiguous_lixsms_account(
+    account_cell: object,
+) -> None:
+    fields = stringbed_fields()
+    fields["账号信息"] = account_cell
+
+    with pytest.raises(RuntimeError, match="Lixsms"):
+        build_registration_fields(fields)
+
+
 def test_generic_account_parser_preserves_metadata_words_inside_password() -> None:
     fields = stringbed_fields()
     fields["账号信息"] = (

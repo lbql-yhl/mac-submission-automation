@@ -42,7 +42,7 @@ EGRESS_SOURCES: tuple[tuple[str, str], ...] = (
 sys.path.insert(0, str(PROJECT_ROOT))
 from scripts.clean_cli import run_clean_cli  # noqa: E402
 from scripts.notion_api import load_dotenv  # noqa: E402
-from services.project_paths import VM_IMAGES_DIR  # noqa: E402
+from services.project_paths import VM_IMAGES_DIR, VM_IMAGES_DIRS  # noqa: E402
 from scripts.utm_clash_ip_target import (  # noqa: E402
     TargetVMError,
     ensure_exact_vm_started,
@@ -351,7 +351,7 @@ class Runner:
         page_title: str | None,
         proxy_stdin: bool,
         database: Path = INVENTORY_DATABASE,
-        images_dir: Path = VM_IMAGES_DIR,
+        images_dir: Path | Sequence[Path] = VM_IMAGES_DIRS,
     ) -> None:
         if not re.fullmatch(r"[a-z]{4}", vm_name):
             raise ValueError("vm_name must contain four lowercase letters")
@@ -371,7 +371,7 @@ class Runner:
         self.page_title = page_title
         self.proxy_stdin = proxy_stdin
         self.database = Path(database)
-        self.images_dir = Path(images_dir)
+        self.images_dir = images_dir
         self.console_state: str | None = None
         self.system_dns_fingerprint: str | None = None
         self.profile_uid = f"{PROFILE_UID_PREFIX}{vm_name}Socks5"
@@ -389,7 +389,7 @@ class Runner:
             self.application_name,
         )
         print("VM_INVENTORY_BINDING=verified")
-        started_here = ensure_exact_vm_started(self.vm_name)
+        started_here = ensure_exact_vm_started(self.vm_name, bound=target)
         print(f"VM_POWER={'started' if started_here else 'already_running'}")
         resolved_ip = resolve_exact_vm_ip(target)
         if self.vm_ip is not None and self.vm_ip != resolved_ip:
@@ -1014,10 +1014,25 @@ print('CONFIG_RECOVERY_DIAGNOSTIC_3=verified')
         if self.console_state not in {"interactive", "headless"}:
             raise ClashIPError("guest console state is unavailable")
         if self.console_state == "interactive":
+            # Install/load Clash Verge privileged service via configured guest
+            # admin password (SUBMISSION_GUEST_PASSWORD / sudo -S), so Tun Mode
+            # setup does not depend on a GUI password dialog.
             helper_script = r'''
 set -e
+installer='/Applications/Clash Verge.app/Contents/Resources/resources/clash-verge-service-install'
 plist='/Library/LaunchDaemons/io.github.clash-verge-rev.clash-verge-rev.service.plist'
-if [ ! -f "$plist" ] || [ -L "$plist" ]; then exit 2; fi
+if [ ! -x "$installer" ]; then
+  printf 'CLASH_SERVICE_INSTALLER=missing\n' >&2
+  exit 2
+fi
+if [ ! -f "$plist" ] || [ -L "$plist" ] || ! /bin/launchctl print system/io.github.clash-verge-rev.clash-verge-rev.service >/dev/null 2>&1; then
+  "$installer"
+  printf 'CLASH_SERVICE_INSTALL=verified\n'
+fi
+if [ ! -f "$plist" ] || [ -L "$plist" ]; then
+  printf 'CLASH_SERVICE_PLIST=missing\n' >&2
+  exit 3
+fi
 if ! /bin/launchctl print system/io.github.clash-verge-rev.clash-verge-rev.service >/dev/null 2>&1; then
   /bin/launchctl bootstrap system "$plist"
 fi
@@ -1025,9 +1040,11 @@ fi
 /bin/launchctl print system/io.github.clash-verge-rev.clash-verge-rev.service >/dev/null
 printf 'CLASH_HELPER=loaded_verified\n'
 '''
-            helper_output = self._run_sudo(helper_script, timeout=20)
+            helper_output = self._run_sudo(helper_script, timeout=60)
             if "CLASH_HELPER=loaded_verified" not in helper_output.splitlines():
                 raise ClashIPError("Clash helper bootstrap failed")
+            if "CLASH_SERVICE_INSTALL=verified" in helper_output.splitlines():
+                print("CLASH_SERVICE_INSTALL=verified")
             print("CLASH_HELPER=loaded_verified")
             app_script = rf'''set -e
 /usr/bin/open -gja 'Clash Verge'
@@ -1358,7 +1375,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--page-title")
     parser.add_argument("--proxy-stdin", action="store_true")
     parser.add_argument("--database", type=Path, default=INVENTORY_DATABASE)
-    parser.add_argument("--images-dir", type=Path, default=VM_IMAGES_DIR)
+    parser.add_argument(
+        "--images-dir",
+        type=Path,
+        default=None,
+        help="Override with one images directory; default uses SUBMISSION_VM_IMAGES_DIRS",
+    )
     return parser
 
 
@@ -1381,7 +1403,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         page_title=page_title,
         proxy_stdin=args.proxy_stdin,
         database=args.database,
-        images_dir=args.images_dir,
+        images_dir=args.images_dir if args.images_dir is not None else VM_IMAGES_DIRS,
     )
     return run_clean_cli(
         skill_name="utm-clash-ip",

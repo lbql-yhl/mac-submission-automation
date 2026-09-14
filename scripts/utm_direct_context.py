@@ -11,7 +11,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from scripts.utm_clash_ip_target import (
     UTMCTL,
@@ -22,7 +22,7 @@ from scripts.utm_clash_ip_target import (
     resolve_exact_vm_ip,
 )
 from scripts.vm_inventory import InventoryError
-from services.project_paths import PROJECT_ROOT, VM_IMAGES_DIR
+from services.project_paths import PROJECT_ROOT, VM_IMAGES_DIRS
 
 
 INVENTORY_DATABASE = PROJECT_ROOT / "runtime" / "vm-inventory.sqlite3"
@@ -80,7 +80,7 @@ def resolve_direct_context(
     vm_ip: str,
     vm_user: str,
     database: Path = INVENTORY_DATABASE,
-    images_dir: Path = VM_IMAGES_DIR,
+    images_dir: Path | Sequence[Path] = VM_IMAGES_DIRS,
     bound_loader: Callable[..., BoundVM] = require_exact_bound_vm,
     status_loader: Callable[[str], str] = _read_status,
     ip_loader: Callable[[BoundVM], str] = resolve_exact_vm_ip,
@@ -109,7 +109,7 @@ def resolve_direct_context(
         raise DirectContextError("DIRECT_CONTEXT_IP_INVALID") from error
     try:
         target = bound_loader(
-            Path(database), Path(images_dir), vm_name, app_name
+            Path(database), images_dir, vm_name, app_name
         )
     except (InventoryError, OSError, TargetVMError, ValueError) as error:
         raise DirectContextError("DIRECT_CONTEXT_BINDING_BLOCKED") from error

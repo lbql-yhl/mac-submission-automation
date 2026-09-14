@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import plistlib
 import re
@@ -995,15 +996,68 @@ def print_inspection(ax: Any, window: Any, vm_name: str) -> None:
             )
 
 
+
+def resolve_images_dirs(cli_images_dir: str | None) -> tuple[Path, ...]:
+    """Resolve authorized images directories for existing-VM lookup.
+
+    An explicit ``--images-dir`` remains a single-directory override. Otherwise
+    prefer ``SUBMISSION_VM_IMAGES_DIRS``, then singular ``SUBMISSION_VM_IMAGES_DIR``,
+    then ``services.project_paths.VM_IMAGES_DIRS``.
+    """
+    if cli_images_dir and str(cli_images_dir).strip():
+        return (Path(str(cli_images_dir)).expanduser().resolve(),)
+    raw_dirs = os.environ.get("SUBMISSION_VM_IMAGES_DIRS", "").strip()
+    if raw_dirs:
+        try:
+            values = json.loads(raw_dirs)
+        except (TypeError, ValueError) as error:
+            raise RuntimeError("SUBMISSION_VM_IMAGES_DIRS is invalid JSON") from error
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(not isinstance(value, str) or not value.strip() for value in values)
+        ):
+            raise RuntimeError("SUBMISSION_VM_IMAGES_DIRS is invalid")
+        return tuple(Path(value).expanduser().resolve() for value in values)
+    singular = os.environ.get("SUBMISSION_VM_IMAGES_DIR", "").strip()
+    if singular:
+        return (Path(singular).expanduser().resolve(),)
+    try:
+        from services.project_paths import VM_IMAGES_DIRS
+    except Exception as error:  # pragma: no cover - import surface only
+        raise RuntimeError(
+            "SUBMISSION_VM_IMAGES_DIR or SUBMISSION_VM_IMAGES_DIRS is required"
+        ) from error
+    if not VM_IMAGES_DIRS:
+        raise RuntimeError(
+            "SUBMISSION_VM_IMAGES_DIR or SUBMISSION_VM_IMAGES_DIRS is required"
+        )
+    return tuple(Path(path).expanduser().resolve() for path in VM_IMAGES_DIRS)
+
+
+def resolve_existing_ax_bundle(vm_name: str, cli_images_dir: str | None) -> Path:
+    directories = resolve_images_dirs(cli_images_dir)
+    matches: list[Path] = []
+    for images_dir in directories:
+        if images_dir.is_symlink() or not images_dir.is_dir():
+            continue
+        bundle = images_dir / f"{vm_name}.utm"
+        if bundle.is_symlink() or not bundle.is_dir() or not (bundle / "config.plist").is_file():
+            continue
+        matches.append(bundle.resolve())
+    unique = list(dict.fromkeys(matches))
+    if len(unique) != 1:
+        raise RuntimeError("target VM bundle/config.plist is missing")
+    return unique[0]
+
+
 def run(args: argparse.Namespace) -> int:
     if not is_valid_vm_name(args.vm_name):
         raise RuntimeError("vm-name must be four lowercase letters")
     share = Path(args.share_path).expanduser().resolve()
     if not share.is_dir() or share.is_symlink():
         raise RuntimeError("share-path must be an existing non-symlink directory")
-    bundle = Path(args.images_dir).expanduser().resolve() / f"{args.vm_name}.utm"
-    if not bundle.is_dir() or bundle.is_symlink() or not (bundle / "config.plist").is_file():
-        raise RuntimeError("target VM bundle/config.plist is missing")
+    bundle = resolve_existing_ax_bundle(args.vm_name, args.images_dir)
     target_uuid = config_uuid(bundle)
     before_mac = config_mac(bundle)
     statuses = require_target_stopped(args.vm_name)
@@ -1046,13 +1100,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Prototype UTM-1 Accessibility helper")
     parser.add_argument("--vm-name", required=True)
     parser.add_argument("--share-path", required=True)
-    parser.add_argument("--images-dir", default=os.environ.get("SUBMISSION_VM_IMAGES_DIR", ""))
+    parser.add_argument(
+        "--images-dir",
+        default="",
+        help="Optional single images directory override; default searches SUBMISSION_VM_IMAGES_DIRS",
+    )
     parser.add_argument("--random-mac-rounds", type=int, default=3)
     parser.add_argument("--inspect-only", action="store_true")
     args = parser.parse_args()
-    if not args.images_dir:
-        print("SUBMISSION_VM_IMAGES_DIR is required", file=sys.stderr)
-        return 2
     try:
         return run(args)
     except Exception as error:

@@ -33,10 +33,11 @@ from scripts.ssh_password import (  # noqa: E402
     ssh_args as configured_guest_password_ssh_args,
 )
 from scripts.utm_clash_ip_target import (  # noqa: E402
+    TargetVMError,
     require_exact_bound_vm,
     resolve_exact_vm_ip,
 )
-from services.project_paths import PROJECT_ROOT, VM_IMAGES_DIR  # noqa: E402
+from services.project_paths import PROJECT_ROOT, VM_IMAGES_DIRS  # noqa: E402
 
 
 INVENTORY_DATABASE = PROJECT_ROOT / "runtime" / "vm-inventory.sqlite3"
@@ -122,6 +123,27 @@ def resolve_manual_target(database: Path, target: str) -> UploadTarget:
     if len(rows) != 1:
         raise UploadTargetError(f"TARGET_MATCH_COUNT={len(rows)}")
     return UploadTarget(app_name, vm_name, f"manual:{app_name}-{vm_name}")
+
+
+def _resolve_bound_vm(database: Path, target: UploadTarget):
+    matches = []
+    for images_dir in VM_IMAGES_DIRS:
+        try:
+            matches.append(
+                require_exact_bound_vm(
+                    database,
+                    images_dir,
+                    target.vm_name,
+                    target.app_name,
+                )
+            )
+        except TargetVMError:
+            continue
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise UploadTargetError("TARGET_VM_BINDING_NOT_FOUND")
+    raise UploadTargetError("TARGET_VM_BINDING_AMBIGUOUS")
 
 
 def choose_archive(
@@ -708,12 +730,7 @@ def main(argv: list[str] | None = None) -> int:
             target = resolve_run_target(_read_json(RUNS_FILE), args.run_id, local_host)
         else:
             target = resolve_manual_target(INVENTORY_DATABASE, args.target)
-        bound = require_exact_bound_vm(
-            INVENTORY_DATABASE,
-            VM_IMAGES_DIR,
-            target.vm_name,
-            target.app_name,
-        )
+        bound = _resolve_bound_vm(INVENTORY_DATABASE, target)
         ip = resolve_exact_vm_ip(bound)
         identity = _run_ssh(target.vm_name, ip, ["/usr/bin/id", "-un"], timeout=12)
         if identity.returncode != 0 or identity.stdout.strip() != target.vm_name:

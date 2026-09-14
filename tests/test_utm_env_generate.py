@@ -62,6 +62,7 @@ def test_contract() -> None:
         "图形和设计": "GRAPHICS_AND_DESIGN",
         "图形与设计": "GRAPHICS_AND_DESIGN",
         "效率": "PRODUCTIVITY",
+        "Productivity": "PRODUCTIVITY",
         "新闻": "NEWS",
         "医疗": "MEDICAL",
         "音乐": "MUSIC",

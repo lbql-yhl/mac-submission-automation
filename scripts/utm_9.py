@@ -16,7 +16,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, TypeVar
+from typing import Any, Callable, Mapping, TypeVar, Sequence
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +39,7 @@ from scripts.ssh_password import (  # noqa: E402
     ssh_args,
 )
 from services.host_config import guest_password  # noqa: E402
-from services.project_paths import PROJECT_ROOT, VM_IMAGES_DIR  # noqa: E402
+from services.project_paths import PROJECT_ROOT, VM_IMAGES_DIRS  # noqa: E402
 
 
 RUNS_FILE = PROJECT_ROOT / "runtime" / "feishu-runs.json"
@@ -155,7 +155,7 @@ def verify_independent_test_target(
     vm_name: str,
     vm_ip: str,
     database: Path = INVENTORY_DATABASE,
-    images_dir: Path = VM_IMAGES_DIR,
+    images_dir: Path | Sequence[Path] = VM_IMAGES_DIRS,
     bound_loader: Callable[..., Any] = require_exact_bound_vm,
     status_loader: Callable[[str], str] = _read_exact_vm_status,
     ip_loader: Callable[[Any], str] = resolve_exact_vm_ip,

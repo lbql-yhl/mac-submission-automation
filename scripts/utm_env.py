@@ -58,9 +58,28 @@ def _safe_app_name(app_name: str) -> str:
     return app_name
 
 
-def expected_asset_names(app_name: str) -> list[str]:
+def expected_asset_names(
+    app_name: str, *, skip_coin_image: bool = False, skip_source_code: bool = False
+) -> list[str]:
     app_name = _safe_app_name(app_name)
-    return [app_name, f"{app_name}.xlsx", f"{app_name}.png", f"{app_name}-git"]
+    names = [app_name, f"{app_name}.xlsx"]
+    if not skip_coin_image:
+        names.append(f"{app_name}.png")
+    if not skip_source_code:
+        names.append(f"{app_name}-git")
+    return names
+
+
+def expected_asset_counts(
+    *, skip_coin_image: bool = False, skip_source_code: bool = False
+) -> tuple[int, int]:
+    total = len(
+        expected_asset_names(
+            "App", skip_coin_image=skip_coin_image, skip_source_code=skip_source_code
+        )
+    )
+    download = total if skip_source_code else total - 1
+    return total, download
 
 
 def notion_page_title(app_name: str, vm_user: str) -> str:
@@ -109,7 +128,13 @@ def _directory_summary(path: Path) -> tuple[int, str]:
     return size, digest.hexdigest()
 
 
-def collect_host_manifest(shared_root: Path, app_name: str) -> dict[str, dict[str, Any]]:
+def collect_host_manifest(
+    shared_root: Path,
+    app_name: str,
+    *,
+    skip_coin_image: bool = False,
+    skip_source_code: bool = False,
+) -> dict[str, dict[str, Any]]:
     shared_root = Path(shared_root).expanduser().resolve()
     if not shared_root.is_dir() or shared_root.is_symlink():
         raise UTMEnvError("host shared root must be a non-symlink directory")
@@ -118,12 +143,12 @@ def collect_host_manifest(shared_root: Path, app_name: str) -> dict[str, dict[st
         raise UTMEnvError("host Fire_One_en1.3 anchor is missing or unsafe")
 
     manifest: dict[str, dict[str, Any]] = {}
-    names = expected_asset_names(app_name)
-    for index, name in enumerate(names):
+    names = expected_asset_names(app_name, skip_coin_image=skip_coin_image, skip_source_code=skip_source_code)
+    for name in names:
         path = shared_root / name
         if path.parent != shared_root or path.is_symlink():
             raise UTMEnvError(f"host asset path is unsafe: {name}")
-        expected_type = "directory" if index in {0, 3} else "file"
+        expected_type = "directory" if name in {app_name, f"{app_name}-git"} else "file"
         if expected_type == "directory":
             if not path.is_dir():
                 raise UTMEnvError(f"host asset directory is missing: {name}")
@@ -160,11 +185,16 @@ def collect_host_env_manifest(shared_root: Path) -> dict[str, Any]:
 
 
 def build_stage_archive(
-    shared_root: Path, app_name: str, archive_path: Path
+    shared_root: Path,
+    app_name: str,
+    archive_path: Path,
+    *,
+    skip_coin_image: bool = False,
+    skip_source_code: bool = False,
 ) -> None:
     shared_root = Path(shared_root).expanduser().resolve()
     collect_host_env_manifest(shared_root)
-    collect_host_manifest(shared_root, app_name)
+    collect_host_manifest(shared_root, app_name, skip_coin_image=skip_coin_image, skip_source_code=skip_source_code)
     archive_path = Path(archive_path).expanduser()
     if archive_path.is_symlink():
         raise UTMEnvError("staging archive path is unsafe")
@@ -173,7 +203,7 @@ def build_stage_archive(
         raise UTMEnvError("staging archive parent is unsafe")
     members = [
         Path("Fire_One_en1.3") / ".env",
-        *(Path(name) for name in expected_asset_names(app_name)),
+        *(Path(name) for name in expected_asset_names(app_name, skip_coin_image=skip_coin_image, skip_source_code=skip_source_code)),
     ]
     try:
         with tarfile.open(archive_path, mode="w", format=tarfile.PAX_FORMAT) as bundle:
@@ -194,14 +224,24 @@ class GuestTransport(Protocol):
 
 
 def _require_copy_result(
-    result: dict[str, Any], stage: str, expected_code_path: str
+    result: dict[str, Any],
+    stage: str,
+    expected_code_path: str,
+    *,
+    skip_coin_image: bool = False,
+    skip_source_code: bool = False,
 ) -> None:
+    asset_count, download_count = expected_asset_counts(
+        skip_coin_image=skip_coin_image, skip_source_code=skip_source_code
+    )
+    code_path = "skipped" if skip_source_code else expected_code_path
+    code_copy = "skipped" if skip_source_code else "verified_or_identical_existing"
     if (
         result.get("status") != "verified"
-        or result.get("asset_count") != 4
-        or result.get("guest_download_asset_count") != 3
-        or result.get("guest_code_path") != expected_code_path
-        or result.get("guest_code_copy") != "verified_or_identical_existing"
+        or result.get("asset_count") != asset_count
+        or result.get("guest_download_asset_count") != download_count
+        or result.get("guest_code_path") != code_path
+        or result.get("guest_code_copy") != code_copy
         or result.get("host_guest_asset_sha256") != "exact"
         or result.get("fire_one_env_sha256") != "exact"
         or result.get("fire_one_env_mode") != "600"
@@ -217,17 +257,28 @@ def finalize_guest(
     transport: GuestTransport,
     identity_probed: bool = False,
     source_root: str | None = None,
+    skip_coin_image: bool = False,
+    skip_source_code: bool = False,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[a-z]{4}", vm_user):
         raise UTMEnvError("VM user must be four lowercase letters")
     expected_code_path = f"/Users/{vm_user}/StudioProjects/{_safe_app_name(app_name)}"
-    manifest = collect_host_manifest(shared_root, app_name)
+    manifest = collect_host_manifest(
+        shared_root,
+        app_name,
+        skip_coin_image=skip_coin_image,
+        skip_source_code=skip_source_code,
+    )
     env_manifest = collect_host_env_manifest(shared_root)
     payload = {
         "app_name": app_name,
         "assets": manifest,
         "fire_one_env": env_manifest,
     }
+    if skip_coin_image:
+        payload["skip_coin_image"] = True
+    if skip_source_code:
+        payload["skip_source_code"] = True
     copy_mode = "copy"
     verify_mode = "verify"
     if source_root is not None:
@@ -235,22 +286,37 @@ def finalize_guest(
         copy_mode = "copy-staged"
         verify_mode = "verify-staged"
     installed = False
+    _, download_count = expected_asset_counts(
+        skip_coin_image=skip_coin_image, skip_source_code=skip_source_code
+    )
     try:
         if not identity_probed:
             transport.probe_identity()
         installed = True
         transport.install_helpers()
         copy_result = transport.run_guest(copy_mode, payload)
-        _require_copy_result(copy_result, "copy", expected_code_path)
+        _require_copy_result(
+            copy_result,
+            "copy",
+            expected_code_path,
+            skip_coin_image=skip_coin_image,
+            skip_source_code=skip_source_code,
+        )
         verify_result = transport.run_guest(verify_mode, payload)
-        _require_copy_result(verify_result, "fresh", expected_code_path)
+        _require_copy_result(
+            verify_result,
+            "fresh",
+            expected_code_path,
+            skip_coin_image=skip_coin_image,
+            skip_source_code=skip_source_code,
+        )
         return {
             "host_guest_asset_sha256": "exact",
             "fire_one_env_sha256": "exact",
             "fire_one_env_mode": "600",
-            "guest_download_asset_count": 3,
-            "guest_code_path": expected_code_path,
-            "guest_code_copy": "verified_or_identical_existing",
+            "guest_download_asset_count": download_count,
+            "guest_code_path": "skipped" if skip_source_code else expected_code_path,
+            "guest_code_copy": "skipped" if skip_source_code else "verified_or_identical_existing",
             "utm_env": "verified",
         }
     finally:
@@ -367,7 +433,9 @@ class SSHGuestTransport:
             )
         )
 
-    def stage_sources(self, shared_root: Path, app_name: str) -> str:
+    def stage_sources(
+        self, shared_root: Path, app_name: str, *, skip_coin_image: bool = False, skip_source_code: bool = False
+    ) -> str:
         stage_name = f".utm-env-stage-{secrets.token_hex(16)}"
         source_root, remote_archive = self._validated_staging_paths(
             f"{self.home}/Downloads/{stage_name}"
@@ -378,7 +446,7 @@ class SSHGuestTransport:
         os.close(descriptor)
         archive = Path(temporary_name)
         try:
-            build_stage_archive(shared_root, app_name, archive)
+            build_stage_archive(shared_root, app_name, archive, skip_coin_image=skip_coin_image, skip_source_code=skip_source_code)
             quoted_root = shlex.quote(source_root)
             quoted_archive = shlex.quote(remote_archive)
             self._run(
@@ -465,8 +533,15 @@ def finalize_staged_guest(
     shared_root: Path,
     transport: SSHGuestTransport,
     identity_probed: bool = False,
+    skip_coin_image: bool = False,
+    skip_source_code: bool = False,
 ) -> dict[str, Any]:
-    source_root = transport.stage_sources(shared_root, app_name)
+    skip_options = {}
+    if skip_coin_image:
+        skip_options["skip_coin_image"] = True
+    if skip_source_code:
+        skip_options["skip_source_code"] = True
+    source_root = transport.stage_sources(shared_root, app_name, **skip_options)
     try:
         result = finalize_guest(
             app_name=app_name,
@@ -475,6 +550,7 @@ def finalize_staged_guest(
             transport=transport,
             identity_probed=identity_probed,
             source_root=source_root,
+            **skip_options,
         )
     except BaseException:
         try:
@@ -508,6 +584,8 @@ def _download_summary_matches_manifest(
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    skip_coin_image = getattr(args, "skip_coin_image", False)
+    skip_source_code = getattr(args, "skip_source_code", False)
     env_result = generate_env_from_notion(
         args.parent_title,
         notion_page_title(args.app_name, args.vm_user),
@@ -531,8 +609,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         output_root=args.output_root,
         client=FeishuClient(app_id, app_secret),
         github_client=GitHubRepositoryClient(),
+        skip_coin_image=skip_coin_image,
+        skip_source_code=skip_source_code,
     )
-    manifest = collect_host_manifest(args.output_root, args.app_name)
+    manifest = collect_host_manifest(
+        args.output_root,
+        args.app_name,
+        skip_coin_image=skip_coin_image,
+        skip_source_code=skip_source_code,
+    )
     if not _download_summary_matches_manifest(download_summary, manifest):
         raise UTMEnvError("download summary does not match the independent host manifest")
     final = finalize_staged_guest(
@@ -541,6 +626,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         shared_root=args.output_root,
         transport=transport,
         identity_probed=True,
+        skip_coin_image=skip_coin_image,
+        skip_source_code=skip_source_code,
     )
     return {**env_result, **download_summary, **final}
 
@@ -550,6 +637,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--parent-title", required=True)
     parser.add_argument("--app-name", required=True)
     parser.add_argument("--asset-app-name")
+    parser.add_argument(
+        "--skip-coin-image", action="store_true",
+        help="Explicitly omit the coin-store screenshot from download, staging and verification",
+    )
+    parser.add_argument(
+        "--skip-source-code", action="store_true",
+        help="Explicitly omit GitHub source download, staging and guest StudioProjects copy",
+    )
     parser.add_argument("--vm-ip", required=True)
     parser.add_argument("--vm-user", required=True)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
@@ -570,9 +665,9 @@ def main() -> int:
         print("ENV_READBACK=exact")
         print("HOST_ENV=GENERATED_AND_VERIFIED")
         print("HOST_GUEST_ASSET_SHA256=exact")
-        print("GUEST_DOWNLOAD_ASSET_COPY=three_assets_verified_or_identical_existing")
+        print(f"GUEST_DOWNLOAD_ASSET_COUNT={result['guest_download_asset_count']}")
         print(f"GUEST_CODE_PATH={result['guest_code_path']}")
-        print("GUEST_CODE_COPY=verified_or_identical_existing")
+        print(f"GUEST_CODE_COPY={result['guest_code_copy']}")
         print("FIRE_ONE_ENV_SHA256=exact")
         print("FIRE_ONE_ENV_MODE=600")
         print(f"UTM_ENV_ELAPSED_SECONDS={round(time.monotonic() - started_at)}")

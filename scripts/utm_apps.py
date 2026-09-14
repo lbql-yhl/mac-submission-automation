@@ -526,9 +526,15 @@ def _stage_stdin(stage: str, payload: Mapping[str, Any]) -> bytes:
     elif stage == "utm-11":
         return b""
     elif stage == "utm-12":
+        keywords = payload.get("KEYWORDS")
+        if keywords is None:
+            keywords = []
+        if not isinstance(keywords, list):
+            raise AppleWebError("KEYWORDS_PAYLOAD_INVALID")
         value = {
             "APP_NAME": str(payload.get("APP_NAME") or ""),
             "BUNDLE_ID": str(payload.get("BUNDLE_ID") or ""),
+            "KEYWORDS": [str(token) for token in keywords],
         }
         if payload.get("RESET_FROM_IDENTIFIERS") is True:
             value["RESET_FROM_IDENTIFIERS"] = True
@@ -610,11 +616,17 @@ def _required_field(api: Any, page_title: str, section: str, label: str) -> str:
     return value
 
 
-def _notion_payload(api: Any, page_title: str) -> dict[str, str]:
+def _parse_keyword_tokens(raw: str) -> list[str]:
+    return [token for token in re.split(r"[,，、\s]+", raw.strip()) if token]
+
+
+def _notion_payload(api: Any, page_title: str) -> dict[str, Any]:
     password = api.read_field(page_title, "账号信息", "修改后的密码：").strip()
     if not password:
         password = _required_field(api, page_title, "账号信息", "初始密码：")
-    payload = {
+    keywords_raw = api.read_field(page_title, "应用信息", "关键词:").strip()
+    keywords = _parse_keyword_tokens(keywords_raw)
+    payload: dict[str, Any] = {
         "APPLE_ACCOUNT_EMAIL": _required_field(api, page_title, "账号信息", "邮箱："),
         "APPLE_ACCOUNT_PASSWORD": password,
         "APPLE_ACCOUNT_PHONE": _required_field(api, page_title, "账号信息", "电话："),
@@ -624,6 +636,7 @@ def _notion_payload(api: Any, page_title: str) -> dict[str, str]:
         ),
         "APP_NAME": _required_field(api, page_title, "应用信息", "应用名: "),
         "BUNDLE_ID": _required_field(api, page_title, "应用信息", "正式包名: "),
+        "KEYWORDS": keywords,
     }
     if not re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", payload["BUNDLE_ID"]):
         raise AppleWebError("NOTION_BUNDLE_ID_INVALID")

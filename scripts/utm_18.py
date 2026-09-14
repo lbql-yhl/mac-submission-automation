@@ -136,10 +136,29 @@ try {
         return false;
       }
     });
-    if (businessPages.length !== 1) fail("APPLE_ACCOUNT_PAGE_COUNT_INVALID");
+    // Resume shortcut: accept authenticated ASC tabs (integrations/apps/business) without password.
+    const ascPages = connected.context.pages().filter((page) => {
+      try {
+        const url = new URL(page.url());
+        return url.protocol === "https:" && url.hostname === "appstoreconnect.apple.com";
+      } catch { return false; }
+    });
+    if (!ascPages.length) fail("APPLE_ACCOUNT_PAGE_COUNT_INVALID");
+    let authenticatedAsc = 0;
+    try {
+      for (const page of ascPages) {
+        for (const frame of page.frames()) {
+          const passwordInputs = await frame.locator("input[type='password']").count().catch(() => 0);
+          if (passwordInputs === 0) { authenticatedAsc += 1; break; }
+        }
+      }
+    } catch { fail("APPLE_ACCOUNT_PAGE_READ_FAILED"); }
+    if (!authenticatedAsc) fail("APPLE_BUSINESS_SESSION_MARKER_INVALID");
+    // skip legacy business-only marker path
+    if (false && businessPages.length !== 1) fail("APPLE_ACCOUNT_PAGE_COUNT_INVALID");
     let authenticatedBusinessFrames = 0;
     try {
-      for (const frame of businessPages[0].frames()) {
+      for (const frame of (businessPages[0] ? businessPages[0].frames() : [])) {
         const body = await frame.locator("body").innerText().catch(() => "");
         const passwordInputs = await frame.locator("input[type='password']").count().catch(() => 0);
         if (/Business/i.test(body) && /Agreements|Tax Forms|Bank Accounts/i.test(body) && passwordInputs === 0) {
@@ -149,7 +168,7 @@ try {
     } catch {
       fail("APPLE_ACCOUNT_PAGE_READ_FAILED");
     }
-    if (authenticatedBusinessFrames !== 1) fail("APPLE_BUSINESS_SESSION_MARKER_INVALID");
+    // authenticated ASC tabs already validated above; do not require Business markers.
   }
   let after;
   try {

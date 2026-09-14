@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable, NamedTuple
+from typing import Any, Callable, NamedTuple, Sequence
 
 from PIL import Image, ImageChops
 
@@ -26,7 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from services.host_config import ConfigurationError, guest_password  # noqa: E402
-from services.project_paths import VM_IMAGES_DIR  # noqa: E402
+from services.project_paths import VM_IMAGES_DIRS  # noqa: E402
 from scripts.ssh_password import password_environment  # noqa: E402
 
 
@@ -138,7 +138,7 @@ def normalize_mac(value: str) -> str:
 
 def resolve_inventory_target(
     database: Path,
-    images_dir: Path,
+    images_dir: Path | Sequence[Path],
     vm_name: str,
     *,
     active_workflow_path: Path | None = None,
@@ -149,10 +149,21 @@ def resolve_inventory_target(
     if database.is_symlink() or not database.is_file():
         raise UTMAError("inventory_unavailable")
     database = database.resolve()
-    images_dir = Path(images_dir).expanduser()
-    if images_dir.is_symlink() or not images_dir.is_dir():
+    if isinstance(images_dir, (str, Path)):
+        images_candidates: Sequence[Path] = (Path(images_dir),)
+    else:
+        images_candidates = tuple(Path(path) for path in images_dir)
+    if not images_candidates:
         raise UTMAError("images_directory_invalid")
-    images_dir = images_dir.resolve()
+    images_dirs: list[Path] = []
+    for directory in images_candidates:
+        directory = Path(directory).expanduser()
+        if directory.is_symlink() or not directory.is_dir():
+            raise UTMAError("images_directory_invalid")
+        resolved = directory.resolve()
+        if resolved in images_dirs:
+            raise UTMAError("images_directory_invalid")
+        images_dirs.append(resolved)
     try:
         connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)
         connection.row_factory = sqlite3.Row
@@ -173,10 +184,19 @@ def resolve_inventory_target(
     row = rows[0]
     if str(row["status"]) != "complete":
         raise UTMAError("inventory_target_incomplete")
-    expected_bundle = (images_dir / f"{vm_name}.utm").resolve()
     registered_bundle = Path(str(row["bundle_path"] or "")).expanduser()
-    if registered_bundle.is_symlink() or registered_bundle.resolve() != expected_bundle:
+    if registered_bundle.is_symlink():
         raise UTMAError("inventory_bundle_mismatch")
+    registered_resolved = registered_bundle.resolve()
+    expected_name = f"{vm_name}.utm"
+    matches = [
+        (directory / expected_name).resolve()
+        for directory in images_dirs
+        if (directory / expected_name).resolve() == registered_resolved
+    ]
+    if len(matches) != 1:
+        raise UTMAError("inventory_bundle_mismatch")
+    expected_bundle = matches[0]
     if expected_bundle.is_symlink() or not expected_bundle.is_dir():
         raise UTMAError("inventory_bundle_unavailable")
     config_path = expected_bundle / "config.plist"
@@ -1082,7 +1102,7 @@ def verify_ssh_accessibility(vm_name: str, ip: str) -> None:
 
 def run(vm_name: str) -> None:
     vm_name = validate_vm_name(vm_name)
-    target = resolve_inventory_target(INVENTORY_DATABASE, VM_IMAGES_DIR, vm_name)
+    target = resolve_inventory_target(INVENTORY_DATABASE, VM_IMAGES_DIRS, vm_name)
     require_running(vm_name)
     ip = resolve_exact_ip(target)
     verify_guest_identity(vm_name, ip)

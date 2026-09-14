@@ -20,6 +20,7 @@ Read and obey [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRA
   ```
 
 - Require one inventory-bound VM and one authoritative proxy assignment. Verify guest proxy configuration and outbound identity without printing proxy credentials.
+- Tun/service install uses configured `SUBMISSION_GUEST_PASSWORD` through guest `sudo` (no GUI password dialog).
 - Retry the same VM/proxy checkpoint at most three rounds using 0/5/10 seconds. Never claim, switch, or guess another proxy or VM.
 
 ## Result and handoff

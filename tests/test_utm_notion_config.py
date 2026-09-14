@@ -37,6 +37,26 @@ def valid_runtime_settings() -> dict[str, str]:
     }
 
 
+def test_runtime_config_supports_all_image_directories_without_legacy_setting() -> None:
+    settings = valid_runtime_settings()
+    settings.pop("SUBMISSION_VM_IMAGES_DIR")
+    settings["SUBMISSION_VM_IMAGES_DIRS"] = json.dumps(["/tmp/first", "/tmp/second"])
+
+    config = utm_notion.load_runtime_config(environ=settings)
+
+    assert config.images_dirs == (Path("/tmp/first"), Path("/tmp/second"))
+    assert config.images_dir == Path("/tmp/first")
+
+
+@pytest.mark.parametrize("invalid", ['[]', '["relative"]', '["/tmp/first", "/tmp/first"]', '{}', 'bad-json'])
+def test_runtime_config_rejects_invalid_image_directory_list(invalid: str) -> None:
+    settings = valid_runtime_settings()
+    settings["SUBMISSION_VM_IMAGES_DIRS"] = invalid
+
+    with pytest.raises(ConfigurationError, match="SUBMISSION_VM_IMAGES_DIRS"):
+        utm_notion.load_runtime_config(environ=settings)
+
+
 def test_public_feishu_source_resolver_uses_secure_project_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -134,7 +134,10 @@ except ModuleNotFoundError:
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = ROOT
-VM_IMAGES_DIR = PROJECT_ROOT / "host-assets" / "vm-images"
+try:
+    from project_paths import VM_IMAGES_DIR, VM_IMAGES_DIRS
+except ModuleNotFoundError:
+    from services.project_paths import VM_IMAGES_DIR, VM_IMAGES_DIRS
 RUNTIME_DIR = ROOT / "runtime"
 RUNS_FILE = RUNTIME_DIR / "feishu-runs.json"
 PROMPTS_DIR = RUNTIME_DIR / "prompts"
@@ -932,7 +935,10 @@ def parse_submission_data(text: str) -> dict[str, Any] | None:
 
 
 def existing_vm_names() -> set[str]:
-    names = {path.stem for path in VM_IMAGES_DIR.glob("*.utm")} if VM_IMAGES_DIR.exists() else set()
+    names: set[str] = set()
+    for images_dir in VM_IMAGES_DIRS:
+        if images_dir.exists():
+            names.update(path.stem for path in images_dir.glob("*.utm"))
     for run in read_json(RUNS_FILE, {"runs": []}).get("runs", []):
         if run.get("vm_name"):
             names.add(str(run["vm_name"]))

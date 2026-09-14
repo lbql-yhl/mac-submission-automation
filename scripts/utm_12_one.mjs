@@ -261,9 +261,20 @@ async function loadAppConfig() {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error("utm-12 stdin must be a JSON object");
   }
-  const allowed = new Set(["APP_NAME", "BUNDLE_ID", "RESET_FROM_IDENTIFIERS"]);
+  const allowed = new Set(["APP_NAME", "BUNDLE_ID", "RESET_FROM_IDENTIFIERS", "KEYWORDS"]);
   for (const key of Object.keys(payload)) {
     if (!allowed.has(key)) throw new Error(`utm-12 stdin contains unsupported field: ${key}`);
+  }
+  if (payload.KEYWORDS !== undefined && !Array.isArray(payload.KEYWORDS)) {
+    throw new Error("KEYWORDS must be a JSON array of strings when provided");
+  }
+  const keywords = [];
+  for (const item of payload.KEYWORDS || []) {
+    if (typeof item !== "string" && typeof item !== "number") {
+      throw new Error("KEYWORDS entries must be strings");
+    }
+    const token = String(item).trim();
+    if (token) keywords.push(token);
   }
   const input = {
     appName: payload.APP_NAME,
@@ -276,6 +287,8 @@ async function loadAppConfig() {
   };
   const config = {
     appName: requireString(input.appName, "appName"),
+    baseAppName: null,
+    keywords,
     bundleId: input.bundleId ? validateBundleId(input.bundleId) : null,
     description: requireString(input.description || input.appName, "description"),
     platform: requireString(input.platform || "iOS", "platform"),
@@ -284,6 +297,7 @@ async function loadAppConfig() {
     accessLevel: input.accessLevel ? requireString(input.accessLevel, "accessLevel") : "Full Access",
     resetFromIdentifiers: payload.RESET_FROM_IDENTIFIERS === true,
   };
+  config.baseAppName = config.appName;
   if (payload.RESET_FROM_IDENTIFIERS !== undefined
     && payload.RESET_FROM_IDENTIFIERS !== true) {
     throw new Error("RESET_FROM_IDENTIFIERS must be true when provided");
@@ -1034,6 +1048,7 @@ async function filterListByExactValue(
   const selector = "main input[type='search'], input[placeholder*='Search' i], input[type='search']";
   const deadline = Date.now() + TIMEOUT;
   let controls = [];
+  let searchToggleClicked = false;
   do {
     if (await identifierListIsStableEmpty(page)) return;
     if (exactMatches) {
@@ -1042,6 +1057,19 @@ async function filterListByExactValue(
         throw new Error(`multiple exact ${label} matches found while waiting for search`);
       }
       if (matches.length === 1) return "existing";
+    }
+    if (!searchToggleClicked) {
+      const toggles = await visibleInFrames(
+        page,
+        (frame) => frame.locator("#action-search"),
+      );
+      if (toggles.length > 1) {
+        throw new Error(`${label} search toggle must be unique; found ${toggles.length}`);
+      }
+      if (toggles.length === 1) {
+        await toggles[0].click({ timeout: SHORT_TIMEOUT });
+        searchToggleClicked = true;
+      }
     }
     controls = [];
     for (const frame of page.frames()) {
@@ -1344,6 +1372,14 @@ async function appRows(page, config, { allowUniqueNameRecovery = false } = {}) {
   if (emptyAddApps.length === 1) return [];
   recoveryApps = await exactExistingAppLinks(page, config);
   if (recoveryApps.length === 1) return recoveryApps;
+  const newAppControls = await visibleInFrames(
+    page,
+    (frame) => frame.getByRole("button", { name: "New App", exact: true }),
+  );
+  if (newAppControls.length > 1) {
+    throw new Error(`New App control must be unique; found ${newAppControls.length}`);
+  }
+  if (newAppControls.length === 1) return [];
   try {
     await filterListByExactValue(page, config.appName, "App Store app");
   } catch (error) {
@@ -1383,6 +1419,58 @@ async function openExistingApp(page, config, options = {}) {
   return true;
 }
 
+async function appsPlusButtons(page) {
+  // Circular "+" beside the Apps / My Apps heading (ASC create control).
+  // Current ASC often exposes that icon-only control as accessible name/aria-label
+  // "New App" (not role name "+"). Prefer the control near the Apps heading.
+  const nearHeading = await visibleInFrames(
+    page,
+    (frame) => frame.locator("h2").filter({ hasText: /^(Apps|My Apps)$/i }).locator(
+      "xpath=ancestor::*[self::header or self::div][1]//button[@aria-label='New App' or @aria-label='+' or @aria-label='Create' or @aria-label='Add' or @title='+' or @title='New App']",
+    ),
+  );
+  if (nearHeading.length) return nearHeading;
+
+  const fromRoles = await visibleInFrames(
+    page,
+    (frame) => frame.getByRole("button", { name: "+", exact: true })
+      .or(frame.getByRole("button", { name: /^\+$/ }))
+      .or(frame.getByRole("button", { name: /^(Create|Add)$/i })),
+  );
+  if (fromRoles.length) return fromRoles;
+
+  const fromCss = await visibleInFrames(
+    page,
+    (frame) => frame.locator(
+      'button[aria-label="+"], button[aria-label="New App"], button[aria-label*="Create" i], button[title="+"], button[title="New App"], button:has-text("+")',
+    ),
+  );
+  if (fromCss.length) return fromCss;
+
+  // Toolbar icon-only create control named "New App" (not the popover menuitem).
+  return await visibleInFrames(
+    page,
+    (frame) => frame.getByRole("button", { name: "New App", exact: true }),
+  );
+}
+
+async function clickFirstNewAppMenuItem(page) {
+  // Prefer the popover menuitem; take the first exact "New App" (not "New App Bundle").
+  let items = await visibleInFrames(
+    page,
+    (frame) => frame.getByRole("menuitem", { name: "New App", exact: true }),
+  );
+  if (!items.length) {
+    items = await visibleInFrames(
+      page,
+      (frame) => frame.locator('[role="menu"], [role="listbox"], [class*="menu" i]').getByText("New App", { exact: true }),
+    );
+  }
+  if (!items.length) throw new Error("New App menu item must be uniquely visible; found 0");
+  if (!await items[0].isEnabled().catch(() => false)) throw new Error("New App menu item is disabled");
+  await items[0].click({ timeout: SHORT_TIMEOUT });
+}
+
 async function openNewAppDialog(page) {
   let dialogs = await visibleInFrames(
     page,
@@ -1390,35 +1478,40 @@ async function openNewAppDialog(page) {
   );
   if (dialogs.length > 1) throw new Error(`New App dialog must be uniquely visible; found ${dialogs.length}`);
   if (dialogs.length === 1) return;
-  let buttons = await visibleInFrames(
+
+  let opener = null;
+  const addApps = await visibleInFrames(
     page,
     (frame) => frame.getByRole("button", { name: "Add Apps", exact: true }),
   );
-  if (buttons.length > 1) throw new Error(`Add Apps must be uniquely visible; found ${buttons.length}`);
-  if (!buttons.length) {
-    buttons = [
-      ...await visibleInFrames(page, (frame) => frame.getByRole("button", { name: "New App", exact: true })),
-      ...await visibleInFrames(page, (frame) => frame.getByRole("button", { name: /^(Add|Create|\+)$/i })),
-    ];
+  if (addApps.length === 1) {
+    opener = addApps[0];
+  } else if (addApps.length > 1) {
+    throw new Error(`Add Apps must be uniquely visible; found ${addApps.length}`);
+  } else {
+    // Forever rule: when New App is not uniquely findable, click Apps-adjacent
+    // +/create, then the first exact "New App" menuitem (not "New App Bundle").
+    const plusButtons = await appsPlusButtons(page);
+    if (plusButtons.length) {
+      opener = plusButtons[0];
+    } else {
+      const legacy = await visibleInFrames(
+        page,
+        (frame) => frame.getByRole("button", { name: "New App", exact: true }),
+      );
+      if (legacy.length === 1) opener = legacy[0];
+      else throw new Error(`New App control must be uniquely visible; found ${legacy.length}`);
+    }
   }
-  const unique = [...new Set(buttons)];
-  if (unique.length !== 1) throw new Error(`New App control must be uniquely visible; found ${unique.length}`);
-  if (!await unique[0].isEnabled()) throw new Error("New App control is disabled");
-  await unique[0].click({ timeout: SHORT_TIMEOUT });
+  if (!await opener.isEnabled()) throw new Error("New App control is disabled");
+  await opener.click({ timeout: SHORT_TIMEOUT });
+
   dialogs = await visibleInFrames(
     page,
     (frame) => frame.getByRole("dialog").getByText("New App", { exact: true }),
   );
   if (!dialogs.length) {
-    const menuItem = await exactlyOne(
-      page,
-      (frame) => frame.getByRole("menuitem", { name: "New App", exact: true })
-        .or(frame.getByRole("button", { name: "New App", exact: true }))
-        .or(frame.getByText("New App", { exact: true })),
-      "New App menu item",
-      { enabled: true },
-    );
-    await menuItem.click({ timeout: SHORT_TIMEOUT });
+    await clickFirstNewAppMenuItem(page);
     dialogs = await visibleInFrames(
       page,
       (frame) => frame.getByRole("dialog").getByText("New App", { exact: true }),
@@ -1534,6 +1627,42 @@ async function appStoreNoApps(page) {
   if (noApps.length > 1) throw new Error(`No Apps marker must be uniquely visible; found ${noApps.length}`);
   if (addApps.length > 1) throw new Error(`Add Apps must be uniquely visible; found ${addApps.length}`);
   return noApps.length === 1 && addApps.length === 1;
+}
+
+function displayKeywordToken(token) {
+  const lower = token.toLowerCase();
+  const upper = token.toUpperCase();
+  const simpleTitle = token[0].toUpperCase() + token.slice(1).toLowerCase();
+  const isAllLower = token === lower;
+  const isAllUpper = token === upper;
+  const isSimpleTitle = token === simpleTitle;
+  if (!isAllLower && !isAllUpper && !isSimpleTitle) return token;
+  return simpleTitle;
+}
+
+function suffixCandidates(base, keywords) {
+  const candidates = [];
+  const seen = new Set();
+  const baseText = String(base || "").trim();
+  if (!baseText) return candidates;
+  const baseLower = baseText.toLowerCase();
+  const trailing = (baseText.split(/\s+/).pop() || "").toLowerCase();
+  for (const raw of keywords || []) {
+    const token = String(raw || "").trim();
+    if (token.length < 2 || token.length > 15) continue;
+    if (!/^[A-Za-z][A-Za-z0-9]*$/.test(token)) continue;
+    const tokenLower = token.toLowerCase();
+    if (tokenLower === baseLower) continue;
+    if (tokenLower === trailing) continue;
+    const display = displayKeywordToken(token);
+    const candidate = `${baseText} ${display}`;
+    if (candidate.length > 30) continue;
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(candidate);
+  }
+  return candidates;
 }
 
 async function appNameAlreadyUsedError(page) {
@@ -1673,7 +1802,84 @@ async function ensureApp(page, run, config) {
       updatedAt: new Date().toISOString(),
     };
     await writeSecureJson(ledgerPath(run, "app-create"), ledger);
-    throw new Error(`${appNameError}`);
+
+    const candidates = suffixCandidates(config.baseAppName || config.appName, config.keywords || []);
+    let lastNameError = appNameError;
+    let suffixApplied = false;
+    for (const candidate of candidates) {
+      config.appName = candidate;
+      const dialogs = await visibleInFrames(
+        page,
+        (frame) => frame.getByRole("dialog").getByText("New App", { exact: true }),
+      );
+      if (dialogs.length === 1) {
+        const name = await exactlyOne(
+          page,
+          (frame) => frame.getByLabel("Name", { exact: true }),
+          "App Name",
+        );
+        await name.fill(config.appName);
+        if ((await name.inputValue()).trim() !== config.appName) {
+          throw new Error("App Name readback failed");
+        }
+      } else {
+        await openNewAppDialog(page);
+        await fillNewApp(page, config);
+      }
+
+      const details = {
+        kind: "app-create",
+        sessionId: run.sessionId,
+        pageIdentity: { url: safeUrl(page.url()), titleHash: sha256(await page.title()) },
+        inputSummaryHash: sha256(appCreateInputSummary(config)),
+      };
+      ledger = {
+        attemptId: `app-create-${sha256(details).slice(0, 24)}`,
+        ...details,
+        state: "planned",
+        previousAttemptId: ledger.attemptId,
+        createdAt: new Date().toISOString(),
+      };
+      await writeSecureJson(ledgerPath(run, "app-create"), ledger);
+
+      create = await exactlyOne(
+        page,
+        (frame) => frame.getByRole("dialog").getByRole("button", { name: "Create", exact: true }),
+        "Create",
+        { enabled: true },
+      );
+      await assertLiveSession(run);
+      assertAppleUrl(page.url(), "appstoreconnect.apple.com");
+      await page.waitForTimeout(2_000);
+      if (!await create.isVisible().catch(() => false) || !await create.isEnabled().catch(() => false)) {
+        throw new Error("New App Create button changed during the pre-click wait");
+      }
+      ledger = await updateLedger(run, ledger, "clicking");
+      try {
+        await create.click({ timeout: SHORT_TIMEOUT });
+        lastNameError = await waitForCreateTransition(page, create);
+      } catch (error) {
+        await updateLedger(run, ledger, "unknown");
+        throw new Error(`Create click result is unknown: ${error.message}`);
+      }
+      if (!lastNameError) {
+        suffixApplied = true;
+        process.stderr.write("APP_NAME_SUFFIX_APPLIED=verified\n");
+        break;
+      }
+      ledger = {
+        ...ledger,
+        state: "rejected",
+        rejectionEvidence: "app-name-already-used",
+        rejectionMessage: lastNameError,
+        updatedAt: new Date().toISOString(),
+      };
+      await writeSecureJson(ledgerPath(run, "app-create"), ledger);
+    }
+
+    if (!suffixApplied) {
+      throw new Error(`${lastNameError}`);
+    }
   }
   await page.waitForLoadState("domcontentloaded", { timeout: TIMEOUT }).catch(() => {});
   if (!await recoverApp(page, config)) {

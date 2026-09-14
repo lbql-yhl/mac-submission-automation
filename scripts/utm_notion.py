@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import json
 import re
 import secrets
@@ -142,6 +143,7 @@ class UtmNotionRuntimeConfig:
     notion_template_title: str
     host_title: str
     images_dir: Path
+    images_dirs: tuple[Path, ...] = ()
 
 
 def _required_runtime_setting(settings: Mapping[str, str], key: str) -> str:
@@ -170,14 +172,26 @@ def load_runtime_config(
     notion_token = _required_runtime_setting(settings, "NOTION_TOKEN")
     notion_root_page_id = _required_runtime_setting(settings, "NOTION_ROOT_PAGE_ID")
     host_title = _required_runtime_setting(settings, "SUBMISSION_HOST_MACHINE")
-    images_dir_value = _required_runtime_setting(
-        settings, "SUBMISSION_VM_IMAGES_DIR"
-    )
-    images_dir = Path(images_dir_value).expanduser()
-    if not images_dir.is_absolute():
-        raise ConfigurationError(
-            "invalid host setting: SUBMISSION_VM_IMAGES_DIR must be an absolute path"
-        )
+    images_dirs_value = str(settings.get("SUBMISSION_VM_IMAGES_DIRS", "")).strip()
+    if images_dirs_value:
+        try:
+            candidates = json.loads(images_dirs_value)
+            if not isinstance(candidates, list) or not candidates or any(
+                not isinstance(value, str) or not value.strip() for value in candidates
+            ):
+                raise ValueError
+            images_dirs = tuple(Path(value).expanduser() for value in candidates)
+            if any(not directory.is_absolute() for directory in images_dirs) or len(set(images_dirs)) != len(images_dirs):
+                raise ValueError
+        except (TypeError, ValueError):
+            raise ConfigurationError("invalid host setting: SUBMISSION_VM_IMAGES_DIRS") from None
+    else:
+        images_dir_value = _required_runtime_setting(settings, "SUBMISSION_VM_IMAGES_DIR")
+        images_dirs = (Path(images_dir_value).expanduser(),)
+        if not images_dirs[0].is_absolute():
+            raise ConfigurationError(
+                "invalid host setting: SUBMISSION_VM_IMAGES_DIR must be an absolute path"
+            )
     try:
         configured_source = configured_utm_notion_source(settings)
     except RuntimeError as error:
@@ -192,7 +206,8 @@ def load_runtime_config(
             settings.get("NOTION_TEMPLATE_TITLE", "模板") or "模板"
         ).strip(),
         host_title=host_title,
-        images_dir=images_dir,
+        images_dir=images_dirs[0],
+        images_dirs=images_dirs,
     )
 
 
@@ -430,7 +445,118 @@ def _generic_account_identity(identity_text: str, sms_url: str) -> dict[str, str
 }
 
 
+def _is_lixsms_https_url(value: object) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(str(value or "").strip())
+        return parsed.scheme.lower() == "https" and parsed.hostname == "lixsms.com"
+    except ValueError:
+        return False
+
+
+def _parse_lixsms_account_info(cell: object) -> dict[str, str] | None:
+    phone = ""
+    sms_url = ""
+    credential_parts: list[str] = []
+
+    if isinstance(cell, list):
+        linked_indexes = []
+        for index, item in enumerate(cell):
+            if not isinstance(item, dict):
+                continue
+            link = str(item.get("link") or "").strip()
+            if link:
+                linked_indexes.append(index)
+        if not linked_indexes:
+            return None
+        provider_index = linked_indexes[0]
+        provider_item = cell[provider_index]
+        if not isinstance(provider_item, dict) or not _is_lixsms_https_url(
+            provider_item.get("link")
+        ):
+            return None
+        if provider_index != 1 or len(cell) < 3:
+            raise RuntimeError("Feishu Lixsms 账号信息 fragment order is invalid")
+        phone_item = cell[0]
+        credential_items = cell[2:]
+        if (
+            not isinstance(phone_item, dict)
+            or str(phone_item.get("link") or "").strip()
+            or not isinstance(provider_item, dict)
+            or any(
+                not isinstance(item, dict)
+                or not str(item.get("link") or "").strip()
+                or not isinstance(item.get("text"), str)
+                for item in credential_items
+            )
+        ):
+            raise RuntimeError("Feishu Lixsms 账号信息 fragment boundaries are invalid")
+        phone = html.unescape(str(phone_item.get("text") or "")).strip()
+        sms_url = str(provider_item.get("link") or "").strip()
+        credential_parts = [
+            html.unescape(str(item.get("text") or "")).strip()
+            for item in credential_items
+        ]
+    elif isinstance(cell, str):
+        lines = [html.unescape(line).strip() for line in cell.splitlines() if line.strip()]
+        provider_indexes = []
+        for index, line in enumerate(lines):
+            if _is_lixsms_https_url(line):
+                provider_indexes.append(index)
+        if not provider_indexes:
+            return None
+        if len(provider_indexes) != 1 or provider_indexes[0] != 1 or len(lines) < 3:
+            raise RuntimeError("Feishu Lixsms 账号信息 line order is invalid")
+        phone = lines[0]
+        sms_url = lines[1]
+        credential_parts = lines[2:]
+    else:
+        return None
+
+    try:
+        parsed_sms_url = urllib.parse.urlsplit(sms_url)
+        exact_provider = (
+            parsed_sms_url.scheme.lower() == "https"
+            and parsed_sms_url.hostname == "lixsms.com"
+            and parsed_sms_url.username is None
+            and parsed_sms_url.password is None
+            and parsed_sms_url.port is None
+        )
+    except ValueError:
+        exact_provider = False
+    if not exact_provider:
+        raise RuntimeError("Feishu Lixsms 账号信息 SMS URL is invalid")
+    if re.fullmatch(r"\d{10}", phone) is None:
+        raise RuntimeError("Feishu Lixsms 账号信息 phone must contain 10 digits")
+    if not credential_parts or any(not part for part in credential_parts):
+        raise RuntimeError("Feishu Lixsms 账号信息 credentials are incomplete")
+
+    credential_tail = "".join(credential_parts)
+    suffix_matches = list(
+        re.finditer(rf"\.{EMAIL_SUFFIX_PATTERN}", credential_tail, flags=re.IGNORECASE)
+    )
+    if credential_tail.count("@") != 1 or len(suffix_matches) != 1:
+        raise RuntimeError("Feishu Lixsms 账号信息 email boundary is ambiguous")
+    email_end = suffix_matches[0].end()
+    email = credential_tail[:email_end]
+    initial_password = credential_tail[email_end:]
+    if GENERIC_EMAIL_PATTERN.fullmatch(email) is None:
+        raise RuntimeError("Feishu Lixsms 账号信息 email is invalid")
+    if not initial_password or not _has_mixed_password_characters(initial_password):
+        raise RuntimeError("Feishu Lixsms 账号信息 initial password is invalid")
+
+    return {
+        "email": email,
+        "initial_password": initial_password,
+        "phone": _normalize_us_phone(phone),
+        "sms_url": sms_url,
+    }
+
+
 def parse_account_info(cell: object) -> dict[str, str]:
+    lixsms_account = _parse_lixsms_account_info(cell)
+    if lixsms_account is not None:
+        return lixsms_account
+
     text = _cell_text(cell)
     cell_link = str(cell.get("link") or "").strip() if isinstance(cell, dict) else ""
 
@@ -1078,7 +1204,7 @@ def _bind_vm(
     fields: dict[str, object],
     app_name: str,
     database: Path,
-    images_dir: Path,
+    images_dir: Path | tuple[Path, ...],
     *,
     expected_vm_name: str = "",
     rename_from: str = "",
@@ -1152,7 +1278,7 @@ def execute(
         fields,
         exact_app_name,
         database.resolve(),
-        runtime_config.images_dir,
+        runtime_config.images_dirs or (runtime_config.images_dir,),
         expected_vm_name=vm_name,
         rename_from=rename_from,
     )

@@ -20,6 +20,7 @@ Read and obey [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRA
   ```
 
   Add `--asset-app-name '<asset-app-name>'` only when the Feishu asset source differs from the application name.
+- Add `--skip-coin-image` only when the user explicitly requests skipping the coin-store screenshot. The screenshot is excluded from download, staging, copy, and verification; the development screenshots, coin workbook, and source code remain required. Do not create a placeholder screenshot.
 - Require unique source rows and application identity; verify the guest environment and copied assets without printing `.env` values or asset credentials.
 - Retry the same source/guest checkpoint at most three rounds using 0/5/10 seconds. Do not switch source application unless the inherited input explicitly names it.
 

@@ -77,7 +77,7 @@ Feishu 源必须使用下列两种形式之一：
 | `SUBMISSION_RUNNER_TIMEOUT_SECONDS` | 可选 | 运维策略 | 当前仓库固定 runner 的有界超时 |
 | `SUBMISSION_PROJECT_ROOT` | 可选 | 当前 clone 位置 | 覆盖项目根目录；留空时从源码位置解析 |
 | `SUBMISSION_VM_IMAGES_DIR` | 可选 | 当前宿主的 UTM 资产布局 | VM 库目录 |
-| `SUBMISSION_VM_IMAGES_DIRS` | 可选 | 当前宿主的 UTM 资产布局 | 按优先级排列的外置 VM 库目录 JSON 数组；存在时用于克隆选盘，每台创建后必须至少保留 300 GB |
+| `SUBMISSION_VM_IMAGES_DIRS` | 可选 | 当前宿主的 UTM 资产布局 | 按优先级排列的外置 VM 库目录 JSON 数组；存在时用于克隆选盘、库存扫描和认领前核对全部目录，每台创建后必须至少保留 300 GB |
 | `SUBMISSION_VM_TEMPLATE` | 可选 | 当前宿主的 UTM 资产布局 | 克隆模板包 |
 | `SUBMISSION_SHARED_DIR` | 可选 | 当前宿主的共享目录 | 宿主与 guest 间的运行资产交接 |
 | `PROJECT_SKILLS_DIR` | 可选 | 当前宿主的 Codex 安装 | 技能发现 symlink 目录，不是技能正文源 |

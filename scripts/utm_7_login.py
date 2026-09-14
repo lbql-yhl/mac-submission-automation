@@ -38,7 +38,7 @@ from scripts.ssh_password import (  # noqa: E402
     ssh_args as shared_ssh_args,
 )
 from services.host_config import guest_password  # noqa: E402
-from services.project_paths import SHARED_DIR, VM_IMAGES_DIR  # noqa: E402
+from services.project_paths import PROJECT_ROOT, SHARED_DIR, VM_IMAGES_DIRS  # noqa: E402
 
 
 LOGIN_FILES = (
@@ -623,11 +623,26 @@ def _ensure_remote_accessibility(user: str, ip: str) -> None:
 
 def _recover_guest_desktop(user: str, ip: str) -> None:
     """Enter the bound UTM guest desktop with the fixed VM credentials."""
+    from scripts.utm_clash_ip_target import TargetVMError, resolve_existing_vm_bundle
     from scripts.utm_post_clone_guest import enter_guest_desktop
+    from scripts.vm_inventory import InventoryError, get_record
 
-    bundle = Path(VM_IMAGES_DIR) / f"{user}.utm"
-    if not bundle.is_dir():
-        raise RuntimeError(f"UTM_GUEST_BUNDLE_NOT_FOUND: {bundle}")
+    registered: Path | None = None
+    database = PROJECT_ROOT / "runtime" / "vm-inventory.sqlite3"
+    if database.is_file() and not database.is_symlink():
+        try:
+            record = get_record(database, user)
+            registered_raw = str(record.get("bundle_path") or "").strip()
+            if registered_raw:
+                registered = Path(registered_raw)
+        except (InventoryError, OSError, ValueError):
+            registered = None
+    try:
+        bundle = resolve_existing_vm_bundle(
+            VM_IMAGES_DIRS, user, registered_bundle=registered
+        )
+    except TargetVMError as error:
+        raise RuntimeError(f"UTM_GUEST_BUNDLE_NOT_FOUND: {user}.utm") from error
     enter_guest_desktop(user, ip, user, bundle)
 
 

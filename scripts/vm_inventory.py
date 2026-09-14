@@ -811,43 +811,131 @@ def confirm_bundle_present(database: Path, vm_name: str, bundle_path: Path) -> N
         connection.close()
 
 
+def _scan_bundles(
+    images_dir: Path | tuple[Path, ...],
+) -> tuple[tuple[Path, ...], dict[str, Path], list[str]]:
+    candidates = (images_dir,) if isinstance(images_dir, (str, Path)) else tuple(images_dir)
+    directories: list[Path] = []
+    if not candidates:
+        raise InventoryError("at least one image directory is required")
+    for candidate in candidates:
+        directory = Path(candidate).expanduser()
+        if directory.is_symlink() or not directory.is_dir():
+            raise InventoryError("images directory must be an existing non-symlink directory")
+        directory = directory.resolve()
+        if directory in directories:
+            raise InventoryError("duplicate image directory")
+        directories.append(directory)
+    bundles: dict[str, Path] = {}
+    master_paths: list[str] = []
+    for directory in directories:
+        for path in sorted(directory.iterdir()):
+            if path.suffix != ".utm" or path.name.startswith("._"):
+                continue
+            if path.is_symlink() or not path.is_dir():
+                raise InventoryError("unsafe VM bundle in scan scope")
+            if path.stem.casefold() in RESERVED_NAMES:
+                master_paths.append(str(path))
+                continue
+            if path.stem in bundles:
+                raise InventoryError("duplicate VM name across image directories")
+            bundles[path.stem] = path
+    return tuple(directories), bundles, master_paths
+
+
+def restore_available_vms(
+    database: Path,
+    images_dir: Path | tuple[Path, ...],
+    names: list[str],
+) -> list[str]:
+    """Restore only approved unbound VMs after matching their recorded identities."""
+    from scripts.utm_clone_macos import read_identity
+
+    if not names or len(set(names)) != len(names) or any(not NAME_RE.fullmatch(name) for name in names):
+        raise InventoryError("recovery requires unique exact VM names")
+    _, bundles, _ = _scan_bundles(images_dir)
+    if not database.is_file() or database.is_symlink():
+        raise InventoryError("recovery requires an existing inventory")
+    connection = _connect(database)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        verified: list[tuple[str, Path]] = []
+        for name in names:
+            row = connection.execute("SELECT * FROM vm_inventory WHERE vm_name=?", (name,)).fetchone()
+            if row is None or row["status"] != "complete" or row["application_name"] is not None or row["last_used_at"]:
+                raise InventoryError("recovery target is not a completed unused VM")
+            bundle = bundles.get(name)
+            if bundle is None:
+                raise InventoryError("recovery target bundle is missing")
+            config = bundle / "config.plist"
+            if config.is_symlink() or not config.is_file():
+                raise InventoryError("recovery target configuration is unsafe")
+            try:
+                identity = read_identity(config)
+            except Exception:
+                raise InventoryError("recovery target identity cannot be verified") from None
+            if (
+                identity["uuid"].upper() != str(row["config_uuid"]).upper()
+                or identity["mac"].lower() != str(row["mac_address"]).lower()
+                or identity["machine_identifier_sha256"] != row["machine_identifier_sha256"]
+            ):
+                raise InventoryError("recovery target identity does not match inventory")
+            conflict = connection.execute(
+                """SELECT 1 FROM vm_inventory WHERE vm_name<>? AND
+                   (upper(config_uuid)=? OR lower(mac_address)=? OR machine_identifier_sha256=?) LIMIT 1""",
+                (name, identity["uuid"].upper(), identity["mac"].lower(), identity["machine_identifier_sha256"]),
+            ).fetchone()
+            if conflict:
+                raise InventoryError("recovery target identity is not unique")
+            verified.append((name, bundle))
+        timestamp = _now()
+        for name, bundle in verified:
+            connection.execute(
+                """UPDATE vm_inventory SET bundle_path=?, directory_present=1,
+                   reusable=0, available=1, last_scan_at=?, updated_at=? WHERE vm_name=?""",
+                (str(bundle), timestamp, timestamp, name),
+            )
+        connection.commit()
+        return list(names)
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def scan_inventory(
     database: Path,
-    images_dir: Path,
+    images_dir: Path | tuple[Path, ...],
     *,
     now: str | None = None,
 ) -> dict[str, object]:
-    """Reconcile DB rows against image bundles without auto-registering unknown VMs."""
+    """Reconcile only the supplied directories without claiming or relocating VMs."""
+    directories, bundles, master_paths = _scan_bundles(images_dir)
     ensure_schema(database)
-    images_dir = Path(images_dir).expanduser()
-    if images_dir.is_symlink():
-        raise InventoryError("images directory must be an existing non-symlink directory")
-    images_dir = images_dir.resolve()
-    if not images_dir.is_dir():
-        raise InventoryError("images directory must be an existing non-symlink directory")
     timestamp = now or _now()
-    bundles: dict[str, Path] = {}
-    master_paths: list[str] = []
-    for path in sorted(images_dir.glob("*.utm")):
-        if not path.is_dir() or path.is_symlink():
-            continue
-        if path.stem.casefold() in RESERVED_NAMES:
-            master_paths.append(str(path))
-            continue
-        bundles[path.stem] = path
     connection = _connect(database)
     newly_reusable: list[str] = []
+    location_conflicts: list[str] = []
     try:
+        connection.execute("BEGIN IMMEDIATE")
         rows = [dict(row) for row in connection.execute("SELECT * FROM vm_inventory ORDER BY vm_name")]
         registered = {str(row["vm_name"]): row for row in rows}
         for name, row in registered.items():
             if name in bundles:
+                if not row.get("bundle_path") or Path(str(row["bundle_path"])).expanduser().resolve() != bundles[name]:
+                    if not row.get("available"):
+                        location_conflicts.append(name)
+                        continue
+                    raise InventoryError("VM location changed; explicit verified recovery required")
                 connection.execute(
                     """UPDATE vm_inventory SET directory_present=1, reusable=0,
                        bundle_path=?, last_scan_at=?, updated_at=? WHERE vm_name=?""",
                     (str(bundles[name]), timestamp, timestamp, name),
                 )
             else:
+                if not row.get("bundle_path") or Path(str(row["bundle_path"])).expanduser().resolve().parent not in directories:
+                    continue
                 was_reusable = bool(row.get("reusable"))
                 was_present = bool(row.get("directory_present", 1))
                 connection.execute(
@@ -861,6 +949,9 @@ def scan_inventory(
                 if was_present and not was_reusable:
                     newly_reusable.append(name)
         connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     finally:
         connection.close()
     unregistered = [
@@ -874,6 +965,7 @@ def scan_inventory(
         "directory_count": len(bundles),
         "master_paths": master_paths,
         "newly_reusable": sorted(newly_reusable),
+        "location_conflicts": sorted(location_conflicts),
         "unregistered": sorted(unregistered, key=lambda item: item["vm_name"]),
         # Unknown bundles have no trusted clone/initialization record. Keep a
         # machine-readable hard zero so callers cannot accidentally treat a

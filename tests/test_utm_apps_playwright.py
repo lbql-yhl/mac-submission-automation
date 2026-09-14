@@ -147,6 +147,7 @@ def test_utm10_no_status_waits_then_refreshes_once_before_reading_yes_status() -
         [
             "const STATE_TIMEOUT = 5;",
             "const TIMEOUT = 100;",
+            "const SHORT_TIMEOUT = 100;",
             function_source("function extractLatestSixDigitCode("),
             function_source("async function readMessages("),
             "let inboxOpens = 0;",
@@ -479,6 +480,17 @@ def test_utm12_filter_wait_accepts_delayed_exact_existing_identifier_without_sea
             "  frames: () => [{ locator: () => emptyLocator }],",
             "  waitForTimeout: async () => { polls += 1; },",
             "};",
+            "async function visibleInFrames(page, locatorFactory) {",
+            "  const items = [];",
+            "  for (const frame of page.frames()) {",
+            "    const locator = locatorFactory(frame);",
+            "    for (let index = 0; index < await locator.count(); index += 1) {",
+            "      const item = locator.nth(index);",
+            "      if (await item.isVisible().catch(() => false)) items.push(item);",
+            "    }",
+            "  }",
+            "  return items;",
+            "}",
             helper,
             "const result = await filterListByExactValue(page, 'target', 'App ID', {",
             "  exactMatches: async () => polls === 0 ? [] : [{ id: 'existing' }],",
@@ -497,6 +509,75 @@ def test_utm12_filter_wait_accepts_delayed_exact_existing_identifier_without_sea
 
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout) == {"result": "existing", "polls": 1}
+
+
+def test_utm12_filter_reveals_hidden_search_control_before_editing() -> None:
+    source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
+    start = source.index("async function filterListByExactValue(")
+    end = source.index("\n}\n", start) + 2
+    helper = source[start:end]
+    script = "\n".join(
+        [
+            "const TIMEOUT = 100;",
+            "const SHORT_TIMEOUT = 100;",
+            "async function identifierListIsStableEmpty() { return false; }",
+            "let searchVisible = false;",
+            "let clicked = 0;",
+            "const busy = { first: () => ({ waitFor: async () => {} }) };",
+            "const toggle = {",
+            "  count: async () => 1,",
+            "  nth: () => ({ isVisible: async () => true, click: async () => { searchVisible = true; clicked += 1; } }),",
+            "};",
+            "const control = {",
+            "  count: async () => searchVisible ? 1 : 0,",
+            "  nth: () => ({",
+            "    isVisible: async () => searchVisible,",
+            "    isEditable: async () => true,",
+            "    isEnabled: async () => true,",
+            "    boundingBox: async () => ({ width: 100, height: 20 }),",
+            "    fill: async (value) => { control.value = value; },",
+            "    inputValue: async () => control.value || '',",
+            "  }),",
+            "  value: '',",
+            "};",
+            "const frame = { locator: (selector) => selector === '#action-search' ? toggle : selector.includes('input') ? control : busy };",
+            "async function visibleInFrames(page, locatorFactory) {",
+            "  const items = [];",
+            "  for (const frame of page.frames()) {",
+            "    const locator = locatorFactory(frame);",
+            "    for (let index = 0; index < await locator.count(); index += 1) {",
+            "      const item = locator.nth(index);",
+            "      if (await item.isVisible().catch(() => false)) items.push(item);",
+            "    }",
+            "  }",
+            "  return items;",
+            "}",
+            "const page = {",
+            "  frames: () => [frame],",
+            "  waitForTimeout: async () => {},",
+            "  waitForLoadState: async () => {},",
+            "  locator: () => busy,",
+            "};",
+            helper,
+            "const result = await filterListByExactValue(page, 'target', 'App ID');",
+            "console.log(JSON.stringify({ result, clicked, value: control.value }));",
+        ]
+    )
+    completed = subprocess.run(
+        ["/usr/bin/env", "node", "--input-type=module", "--eval", script],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+        cwd=ROOT,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {
+        "result": "filtered",
+        "clicked": 1,
+        "value": "target",
+    }
 
 
 def _run_utm12_app_store_state_fixture(
@@ -1281,15 +1362,28 @@ def test_utm12_stops_immediately_on_the_real_app_name_already_used_error() -> No
     error_check = ensure.index("if (appNameError)")
     reopen = ensure.index("await recoverApp(page, config)", error_check)
     assert error_check < reopen
+    assert 'rejectionEvidence: "app-name-already-used"' in ensure[error_check:reopen]
     assert 'state: "rejected"' in ensure[error_check:reopen]
-    assert "`${appNameError}`" in ensure[error_check:reopen]
+    # Throw only after keyword suffix candidates are exhausted (retry-before-throw).
+    assert "suffixCandidates(" in ensure[error_check:reopen]
+    assert "throw new Error(`${lastNameError}`)" in ensure[error_check:reopen]
+    assert ensure.index("suffixCandidates(", error_check) < ensure.index(
+        "throw new Error(`${lastNameError}`)", error_check
+    )
 
 
-def test_utm12_does_not_auto_suffix_an_already_used_app_name() -> None:
+def test_utm12_retries_app_name_with_notion_keyword_suffix_candidates() -> None:
     source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
+    assert "function suffixCandidates(base, keywords)" in source
+    assert "APP_NAME_SUFFIX_APPLIED=verified" in source
+    assert 'allowed = new Set(["APP_NAME", "BUNDLE_ID", "RESET_FROM_IDENTIFIERS", "KEYWORDS"])' in source
     start = source.index("async function ensureApp(page, run, config)")
     end = source.index("// Stage 4:", start)
     ensure = source[start:end]
+    assert "suffixCandidates(config.baseAppName || config.appName, config.keywords || [])" in ensure
+    assert "for (const candidate of candidates)" in ensure
+    assert "config.appName = candidate" in ensure
+    assert "APP_NAME_SUFFIX_APPLIED=verified" in ensure
     assert "config.appName + '.'" not in ensure
     assert 'config.appName + "-"' not in ensure
 
@@ -1364,10 +1458,18 @@ def test_utm12_input_contains_only_application_values() -> None:
     assert json.loads(utm_apps._stage_stdin("utm-12", payload)) == {
         "APP_NAME": "SampleApp",
         "BUNDLE_ID": "com.example.sample",
+        "KEYWORDS": [],
     }
+    with_keywords = json.loads(
+        utm_apps._stage_stdin(
+            "utm-12",
+            {**payload, "KEYWORDS": ["personal", "RemyBell"]},
+        )
+    )
+    assert with_keywords["KEYWORDS"] == ["personal", "RemyBell"]
 
 
-def test_utm12_name_collision_is_recorded_and_stops_without_automatic_rename() -> None:
+def test_utm12_name_collision_is_recorded_then_retries_keyword_suffixes() -> None:
     source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
     start = source.index("async function ensureApp(page, run, config)")
     end = source.index("// Stage 4:", start)
@@ -1376,8 +1478,9 @@ def test_utm12_name_collision_is_recorded_and_stops_without_automatic_rename() -
     rejection = ensure.index('state: "rejected"')
     evidence = ensure.index('rejectionEvidence: "app-name-already-used"', rejection)
     persisted = ensure.index('await writeSecureJson(ledgerPath(run, "app-create"), ledger)', evidence)
-    stopped = ensure.index("throw new Error(`${appNameError}`)", persisted)
-    assert rejection < evidence < persisted < stopped
+    retry = ensure.index("suffixCandidates(", persisted)
+    stopped = ensure.index("throw new Error(`${lastNameError}`)", retry)
+    assert rejection < evidence < persisted < retry < stopped
     assert "uniqueAppStoreName" not in source
     assert 'recoveryEvidence: "app-name-fallback"' not in source
     assert "APP_STORE_NAME" not in source
@@ -1774,6 +1877,21 @@ def test_utm12_checks_the_visible_existing_app_before_waiting_for_search() -> No
     assert recovery < wait
 
 
+def test_utm12_treats_unique_new_app_control_as_empty_target_state() -> None:
+    source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
+    start = source.index("async function appRows(page, config")
+    end = source.index("async function openExistingApp", start)
+    app_rows = source[start:end]
+    control = app_rows.index(
+        'frame.getByRole("button", { name: "New App", exact: true })'
+    )
+    empty_state = app_rows.index("if (newAppControls.length === 1) return []")
+    search = app_rows.index(
+        'await filterListByExactValue(page, config.appName, "App Store app")'
+    )
+    assert control < empty_state < search
+
+
 def test_utm12_recovers_existing_app_from_unique_distribution_link_before_search() -> None:
     source = (ROOT / "scripts" / "utm_12_one.mjs").read_text(encoding="utf-8")
     helper_start = source.index("async function exactExistingAppLinks(page, config)")
@@ -1894,6 +2012,8 @@ def test_utm12_persists_validated_application_input_for_utm13_handoff() -> None:
     assert "await writeSecureJson(path.join(RUNTIME_ROOT, \"input.json\")," in loader
     assert "APP_NAME: config.appName" in loader
     assert "BUNDLE_ID: config.bundleId" in loader
+    assert "config.baseAppName = config.appName" in loader
+    assert "KEYWORDS" in loader
 
 
 def test_utm12_verified_replay_checks_live_app_detail_and_returns_before_full_flow() -> None:
@@ -2285,6 +2405,7 @@ class FakeNotion:
             ("账号信息", "APP_ID："): "",
             ("应用信息", "应用名: "): "SampleApp",
             ("应用信息", "正式包名: "): "com.example.sample",
+            ("应用信息", "关键词:"): "personal, video, retrieval, RemyBell, Share",
         }
         self.read_section_calls = 0
         self.write_section_calls = 0

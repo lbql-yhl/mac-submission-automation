@@ -120,7 +120,7 @@ def test_ensure_started_uses_exact_ax_recovery_for_stopped_vm(monkeypatch) -> No
 def test_ax_start_recovery_locks_exact_bundle_window_and_run_button() -> None:
     source = inspect.getsource(post_clone._start_stopped_vm)
 
-    assert "target_bundle(VM_IMAGES_DIR, vm_name)" in source
+    assert "target_bundle(VM_IMAGES_DIRS, vm_name)" in source
     assert "kAXIdentifierAttribute" in source
     assert "play.circle.fill" in source
     assert "kAXPressAction" in source

@@ -156,3 +156,41 @@ def test_resolve_exact_vm_ip_uses_unique_mac_arp_when_backend_has_no_ip(
     assert resolve_exact_vm_ip(
         target, run_command=run_command, sleep_fn=lambda _: None
     ) == "192.0.2.11"
+
+
+def test_require_exact_bound_vm_accepts_secondary_images_dir(tmp_path: Path) -> None:
+    primary = tmp_path / "autoa"
+    secondary = tmp_path / "macos2"
+    primary.mkdir()
+    secondary.mkdir()
+    database = tmp_path / "runtime" / "vm-inventory.sqlite3"
+    bundle = secondary / "gdpd.utm"
+    reserve_vm_name(database, secondary, candidate_factory=lambda: "gdpd")
+    bundle.mkdir()
+    config_uuid = "11111111-1111-1111-1111-111111111111"
+    mac = "02:00:00:00:00:01"
+    (bundle / "config.plist").write_bytes(
+        plistlib.dumps(
+            {
+                "Information": {"UUID": config_uuid},
+                "Network": [{"MacAddress": mac}],
+            }
+        )
+    )
+    register_clone(database, "gdpd", config_uuid, bundle, mac, "a" * 64)
+    set_available(database, "gdpd", True)
+    scan_inventory(database, (primary, secondary))
+    claim_exact_available_vm(database, "gdpd", "test")
+
+    target = require_exact_bound_vm(database, (primary, secondary), "gdpd", "test")
+
+    assert target.bundle_path == bundle.resolve()
+
+
+def test_require_exact_bound_vm_rejects_unlisted_images_dir(tmp_path: Path) -> None:
+    database, images = _registered_vm(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+
+    with pytest.raises(TargetVMError, match="bundle path"):
+        require_exact_bound_vm(database, other, "gdpd", "test")
