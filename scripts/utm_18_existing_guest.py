@@ -582,63 +582,6 @@ class NativeWorkflow:
             self.wait(lambda: self.has('Thank you for your submission.'))
         self.checkpoint('enrollment')
 
-    def begin_key_generation(self):
-        # Legacy guard retained for callers; integrations() uses integrations_step resume instead.
-        if self.state.get('key_generation') == 'attempted':
-            raise NativeError('KEY_GENERATION_UNRESOLVED')
-        self.state['key_generation'] = 'attempted'
-        self.save_state()
-
-    def integration_values(self):
-        uuids = {s.strip() for n in self.nodes() for s in self.labels(n) if re.fullmatch('[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', s.strip())}
-        names = self.matches(label=self.app)
-        if not names or len(uuids) != 1:
-            return None
-        rows = []
-        for name in names:
-            node = name
-            for _ in range(7):
-                if self.backend._role(node) == 'AXRow':
-                    rows.append(node)
-                    break
-                node = self.backend._attribute(node, 'AXParent')
-                if node is None:
-                    break
-        keys = {s.strip() for row in rows for n in self.nodes(row) for s in self.labels(n) if re.fullmatch('[A-Z0-9]{10}', s.strip())}
-        if len(keys) != 1:
-            return None
-        return {'issuer': next(iter(uuids)), 'key': next(iter(keys))}
-
-    def click_plus_beside_active(self):
-        """Click the + control beside Active / Active (N) when Generate API Key is absent."""
-        anchors = []
-        for node in self.nodes():
-            for label in self.labels(node):
-                text = str(label).strip()
-                if text == 'Active' or re.fullmatch(r'Active \(\d+\)', text):
-                    anchors.append(node)
-                    break
-        for anchor in anchors:
-            node = anchor
-            for _ in range(8):
-                parent = self.backend._attribute(node, 'AXParent')
-                if parent is None:
-                    break
-                for candidate in self.nodes(parent):
-                    labels = {s.strip() for s in self.labels(candidate)}
-                    role = self.backend._role(candidate)
-                    if role in {'AXButton', 'AXLink', 'AXGroup'} and (
-                        labels & {'+', 'Add', 'Add Key'}
-                        or self.backend._attribute(candidate, 'AXDescription') in {'+', 'Add'}
-                    ):
-                        try:
-                            self.press(candidate)
-                            return True
-                        except Exception:
-                            continue
-                node = parent
-        return False
-
     def _integrations_step(self) -> str:
         step = str(self.state.get('integrations_step') or 'open')
         allowed = {
@@ -661,17 +604,14 @@ class NativeWorkflow:
         self.save_state()
         print('NATIVE_INTEGRATIONS_STEP=' + step, flush=True)
 
-    def _p8_path_for_key(self, key: str) -> Path | None:
-        filename = 'AuthKey_' + key + '.p8'
-        config = self.downloads / 'apple-store-bm' / 'config'
-        for folder in (config, self.downloads):
-            path = folder / filename
-            if path.is_file() and not path.is_symlink() and path.stat().st_size > 0:
-                return path
+    def _downloads_p8_for_key(self, key: str) -> Path | None:
+        path = self.downloads / ('AuthKey_' + key + '.p8')
+        if path.is_file() and not path.is_symlink() and path.stat().st_size > 0:
+            return path
         return None
 
     def _values_from_visible_key_fields(self):
-        """Read issuer + key id from the Generate result surface (before table settles)."""
+        """Read issuer + key id from the Generate result dialog only."""
         uuids = {
             s.strip()
             for n in self.nodes()
@@ -696,28 +636,7 @@ class NativeWorkflow:
             return
         if self.click('Generate API Key', optional=True, roles={'AXButton'}):
             return
-        if self.click_plus_beside_active():
-            return
         raise NativeError('GENERATE_API_KEY_CONTROL_MISSING')
-
-    def _ensure_p8_in_downloads(self, key: str) -> Path:
-        filename = 'AuthKey_' + key + '.p8'
-        target = self.downloads / filename
-        found = self._p8_path_for_key(key)
-        if found is None:
-            raise NativeError('API_KEY_P8_MISSING')
-        if found != target:
-            if target.exists() and not target.is_symlink():
-                if hashlib.sha256(target.read_bytes()).digest() != hashlib.sha256(found.read_bytes()).digest():
-                    raise NativeError('KEY_FILE_CONFLICT')
-            else:
-                if target.exists() or target.is_symlink():
-                    raise NativeError('KEY_PATH_UNSAFE')
-                shutil.copy2(found, target)
-                target.chmod(0o600)
-        if not target.is_file() or target.is_symlink() or not target.stat().st_size:
-            raise NativeError('API_KEY_P8_MISSING')
-        return target
 
     def integrations(self):
         """Create Team API key via Integrations UI; resume mid-attempt without re-opening."""
@@ -732,7 +651,8 @@ class NativeWorkflow:
             step = 'request_access'
 
         if step == 'request_access':
-            if self.has('Generate API Key') or self.matches(dom_id='name'):
+            ready = self.has('Generate API Key') or bool(self.matches(dom_id='name'))
+            if ready:
                 pass
             elif self.click('Request Access', optional=True, roles={'AXButton'}):
                 accept = self.matches(roles={'AXCheckBox'})
@@ -744,9 +664,11 @@ class NativeWorkflow:
                             continue
                 self.click('Submit', optional=True, roles={'AXButton'})
                 self.wait(
-                    lambda: self.has('Generate API Key') or self.matches(dom_id='name'),
+                    lambda: self.has('Generate API Key') or bool(self.matches(dom_id='name')),
                     timeout=120,
                 )
+            else:
+                raise NativeError('INTEGRATIONS_ENTRY_MISSING')
             self._set_integrations_step('open_generate')
             step = 'open_generate'
 
@@ -773,17 +695,13 @@ class NativeWorkflow:
                     pass
                 time.sleep(0.5)
             if not self.click('Admin', optional=True, roles={'AXButton'}):
-                # Already selected on resume: Admin may remain visible as chosen chip.
                 if not self.has('Admin'):
                     raise NativeError('API_KEY_ADMIN_ROLE_MISSING')
             self._set_integrations_step('click_generate')
             step = 'click_generate'
 
         if step == 'click_generate':
-            if self.has('Issuer ID') and (
-                self._values_from_visible_key_fields() is not None
-                or self.integration_values() is not None
-            ):
+            if self.has('Issuer ID') and self._values_from_visible_key_fields() is not None:
                 pass
             elif not self.click('Generate', optional=True, roles={'AXButton'}):
                 raise NativeError('API_KEY_GENERATE_MISSING')
@@ -794,8 +712,11 @@ class NativeWorkflow:
             self.wait(
                 lambda: self.has('Issuer ID') and (
                     self._values_from_visible_key_fields() is not None
-                    or self.integration_values() is not None
-                    or isinstance(self.state.get('integration'), dict)
+                    or (
+                        isinstance(self.state.get('integration'), dict)
+                        and self.state['integration'].get('issuer')
+                        and self.state['integration'].get('key')
+                    )
                 ),
                 timeout=120,
             )
@@ -805,7 +726,7 @@ class NativeWorkflow:
                 and values.get('issuer')
                 and values.get('key')
             ):
-                values = self.integration_values() or self._values_from_visible_key_fields()
+                values = self._values_from_visible_key_fields()
             if not isinstance(values, dict) or not values.get('issuer') or not values.get('key'):
                 raise NativeError('API_KEY_VALUES_UNREADABLE')
             self.state['integration'] = {
@@ -821,13 +742,14 @@ class NativeWorkflow:
             if not isinstance(values, dict) or not values.get('key'):
                 raise NativeError('API_KEY_VALUES_MISSING')
             key = str(values['key'])
-            if self._p8_path_for_key(key) is None:
+            if self._downloads_p8_for_key(key) is None:
                 if not self.click('Download', optional=True, roles={'AXButton'}):
                     raise NativeError('API_KEY_DOWNLOAD_MISSING')
                 time.sleep(0.8)
                 self.click('Download', optional=True, roles={'AXButton'})
-                self.wait(lambda: self._p8_path_for_key(key) is not None, timeout=180)
-            self._ensure_p8_in_downloads(key)
+                self.wait(lambda: self._downloads_p8_for_key(key) is not None, timeout=180)
+            if self._downloads_p8_for_key(key) is None:
+                raise NativeError('API_KEY_P8_MISSING')
             self.state['key_generation'] = 'identified'
             self._set_integrations_step('done')
             self.checkpoint('integrations')
@@ -836,6 +758,9 @@ class NativeWorkflow:
         if step == 'done':
             if not isinstance(self.state.get('integration'), dict):
                 raise NativeError('API_KEY_VALUES_MISSING')
+            key = str(self.state['integration'].get('key') or '')
+            if not key or self._downloads_p8_for_key(key) is None:
+                raise NativeError('API_KEY_P8_MISSING')
             self.state['key_generation'] = 'identified'
             self.save_state()
             self.checkpoint('integrations')
