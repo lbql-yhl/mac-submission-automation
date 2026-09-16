@@ -583,6 +583,7 @@ class NativeWorkflow:
         self.checkpoint('enrollment')
 
     def begin_key_generation(self):
+        # Legacy guard retained for callers; integrations() uses integrations_step resume instead.
         if self.state.get('key_generation') == 'attempted':
             raise NativeError('KEY_GENERATION_UNRESOLVED')
         self.state['key_generation'] = 'attempted'
@@ -638,6 +639,28 @@ class NativeWorkflow:
                 node = parent
         return False
 
+    def _integrations_step(self) -> str:
+        step = str(self.state.get('integrations_step') or 'open')
+        allowed = {
+            'open',
+            'request_access',
+            'open_generate',
+            'fill_name',
+            'select_admin',
+            'click_generate',
+            'read_values',
+            'download',
+            'done',
+        }
+        if step not in allowed:
+            raise NativeError('INTEGRATIONS_STEP_INVALID')
+        return step
+
+    def _set_integrations_step(self, step: str) -> None:
+        self.state['integrations_step'] = step
+        self.save_state()
+        print('NATIVE_INTEGRATIONS_STEP=' + step, flush=True)
+
     def _p8_path_for_key(self, key: str) -> Path | None:
         filename = 'AuthKey_' + key + '.p8'
         config = self.downloads / 'apple-store-bm' / 'config'
@@ -669,77 +692,49 @@ class NativeWorkflow:
         return {'issuer': next(iter(uuids)), 'key': next(iter(keys))}
 
     def _open_generate_api_key(self) -> None:
+        if self.matches(dom_id='name'):
+            return
         if self.click('Generate API Key', optional=True, roles={'AXButton'}):
             return
         if self.click_plus_beside_active():
             return
         raise NativeError('GENERATE_API_KEY_CONTROL_MISSING')
 
-    def _generate_and_download_api_key(self) -> dict:
-        self.begin_key_generation()
-        self._open_generate_api_key()
-        # Key name must match the row label integration_values() looks up (app name).
-        self.fill(None, self.app, dom_id='name')
-        # Roles picker: open the roles field, then choose Admin.
-        roles_field = self.matches(dom_id='roles') or self.matches(
-            label='Access',
-            roles={'AXTextField', 'AXComboBox', 'AXGroup', 'AXButton'},
-        )
-        if roles_field:
-            try:
-                self.press(roles_field[0])
-            except Exception:
-                pass
-            time.sleep(0.5)
-        if not self.click('Admin', optional=True, roles={'AXButton'}):
-            raise NativeError('API_KEY_ADMIN_ROLE_MISSING')
-        if not self.click('Generate', optional=True, roles={'AXButton'}):
-            raise NativeError('API_KEY_GENERATE_MISSING')
-        self.wait(
-            lambda: self.has('Issuer ID') and (
-                self._values_from_visible_key_fields() is not None
-                or self.integration_values() is not None
-            ),
-            timeout=120,
-        )
-        values = self.integration_values() or self._values_from_visible_key_fields()
-        if values is None:
-            raise NativeError('API_KEY_VALUES_UNREADABLE')
-        if not self.click('Download', optional=True, roles={'AXButton'}):
-            raise NativeError('API_KEY_DOWNLOAD_MISSING')
-        # Confirm dialog Download when ASC shows a second Download control.
-        time.sleep(0.8)
-        self.click('Download', optional=True, roles={'AXButton'})
-        filename = 'AuthKey_' + values['key'] + '.p8'
+    def _ensure_p8_in_downloads(self, key: str) -> Path:
+        filename = 'AuthKey_' + key + '.p8'
         target = self.downloads / filename
-
-        def downloaded():
-            path = self._p8_path_for_key(values['key'])
-            return path is not None and (
-                path == target or path.name == filename
-            )
-
-        self.wait(downloaded, timeout=180)
-        # Prefer Downloads root so configuration() can move into config/.
-        found = self._p8_path_for_key(values['key'])
+        found = self._p8_path_for_key(key)
         if found is None:
             raise NativeError('API_KEY_P8_MISSING')
-        if found != target and not target.exists():
-            shutil.copy2(found, target)
-            target.chmod(0o600)
+        if found != target:
+            if target.exists() and not target.is_symlink():
+                if hashlib.sha256(target.read_bytes()).digest() != hashlib.sha256(found.read_bytes()).digest():
+                    raise NativeError('KEY_FILE_CONFLICT')
+            else:
+                if target.exists() or target.is_symlink():
+                    raise NativeError('KEY_PATH_UNSAFE')
+                shutil.copy2(found, target)
+                target.chmod(0o600)
         if not target.is_file() or target.is_symlink() or not target.stat().st_size:
             raise NativeError('API_KEY_P8_MISSING')
-        return values
+        return target
 
     def integrations(self):
-        # Prefer an already-usable P8 + issuer on disk; otherwise create via Integrations UI.
-        values = self._existing_key_from_disk()
-        if values is None:
+        """Create Team API key via Integrations UI; resume mid-attempt without re-opening."""
+        step = self._integrations_step()
+
+        if step == 'open':
             self.open(
                 'https://appstoreconnect.apple.com/access/integrations',
                 'Integrations',
             )
-            if self.click('Request Access', optional=True, roles={'AXButton'}):
+            self._set_integrations_step('request_access')
+            step = 'request_access'
+
+        if step == 'request_access':
+            if self.has('Generate API Key') or self.matches(dom_id='name'):
+                pass
+            elif self.click('Request Access', optional=True, roles={'AXButton'}):
                 accept = self.matches(roles={'AXCheckBox'})
                 for node in accept:
                     if self.backend._attribute(node, 'AXValue') not in (1, '1', True):
@@ -748,48 +743,105 @@ class NativeWorkflow:
                         except Exception:
                             continue
                 self.click('Submit', optional=True, roles={'AXButton'})
-                self.wait(lambda: self.has('Generate API Key') or self.has('Active'), timeout=120)
-            page_values = self.integration_values()
-            if page_values is not None and self._p8_path_for_key(page_values['key']) is not None:
-                values = page_values
-            else:
-                values = self._generate_and_download_api_key()
-        self.state['integration'] = values
-        self.state['key_generation'] = 'identified'
-        self.save_state()
-        self.checkpoint('integrations')
-
-    def _existing_key_from_disk(self):
-        config = self.downloads / 'apple-store-bm' / 'config'
-        candidates = []
-        for folder in (config, self.downloads):
-            if folder.is_dir() and not folder.is_symlink():
-                candidates.extend(
-                    path for path in folder.glob('AuthKey_*.p8')
-                    if path.is_file() and not path.is_symlink() and path.stat().st_size > 0
+                self.wait(
+                    lambda: self.has('Generate API Key') or self.matches(dom_id='name'),
+                    timeout=120,
                 )
-        keys = []
-        for path in candidates:
-            match = re.fullmatch(r'AuthKey_([A-Z0-9]{10})\.p8', path.name)
-            if match:
-                keys.append(match.group(1))
-        keys = sorted(set(keys))
-        if len(keys) != 1:
-            return None
-        key = keys[0]
-        issuer = None
-        prod = config / 'prod.yml'
-        if prod.is_file() and not prod.is_symlink():
-            text = prod.read_text()
-            match = re.search(r'issuer_id:\s*([0-9a-fA-F-]{36})', text)
-            if match:
-                issuer = match.group(1)
-            match = re.search(r'key_id:\s*([A-Z0-9]{10})', text)
-            if match and match.group(1) != key:
-                return None
-        if issuer is None:
-            return None
-        return {'issuer': issuer, 'key': key}
+            self._set_integrations_step('open_generate')
+            step = 'open_generate'
+
+        if step == 'open_generate':
+            self._open_generate_api_key()
+            self.wait(lambda: bool(self.matches(dom_id='name')), timeout=60)
+            self._set_integrations_step('fill_name')
+            step = 'fill_name'
+
+        if step == 'fill_name':
+            self.fill(None, self.app, dom_id='name')
+            self._set_integrations_step('select_admin')
+            step = 'select_admin'
+
+        if step == 'select_admin':
+            roles_field = self.matches(dom_id='roles') or self.matches(
+                label='Access',
+                roles={'AXTextField', 'AXComboBox', 'AXGroup', 'AXButton'},
+            )
+            if roles_field:
+                try:
+                    self.press(roles_field[0])
+                except Exception:
+                    pass
+                time.sleep(0.5)
+            if not self.click('Admin', optional=True, roles={'AXButton'}):
+                # Already selected on resume: Admin may remain visible as chosen chip.
+                if not self.has('Admin'):
+                    raise NativeError('API_KEY_ADMIN_ROLE_MISSING')
+            self._set_integrations_step('click_generate')
+            step = 'click_generate'
+
+        if step == 'click_generate':
+            if self.has('Issuer ID') and (
+                self._values_from_visible_key_fields() is not None
+                or self.integration_values() is not None
+            ):
+                pass
+            elif not self.click('Generate', optional=True, roles={'AXButton'}):
+                raise NativeError('API_KEY_GENERATE_MISSING')
+            self._set_integrations_step('read_values')
+            step = 'read_values'
+
+        if step == 'read_values':
+            self.wait(
+                lambda: self.has('Issuer ID') and (
+                    self._values_from_visible_key_fields() is not None
+                    or self.integration_values() is not None
+                    or isinstance(self.state.get('integration'), dict)
+                ),
+                timeout=120,
+            )
+            values = self.state.get('integration')
+            if not (
+                isinstance(values, dict)
+                and values.get('issuer')
+                and values.get('key')
+            ):
+                values = self.integration_values() or self._values_from_visible_key_fields()
+            if not isinstance(values, dict) or not values.get('issuer') or not values.get('key'):
+                raise NativeError('API_KEY_VALUES_UNREADABLE')
+            self.state['integration'] = {
+                'issuer': str(values['issuer']),
+                'key': str(values['key']),
+            }
+            self.save_state()
+            self._set_integrations_step('download')
+            step = 'download'
+
+        if step == 'download':
+            values = self.state.get('integration')
+            if not isinstance(values, dict) or not values.get('key'):
+                raise NativeError('API_KEY_VALUES_MISSING')
+            key = str(values['key'])
+            if self._p8_path_for_key(key) is None:
+                if not self.click('Download', optional=True, roles={'AXButton'}):
+                    raise NativeError('API_KEY_DOWNLOAD_MISSING')
+                time.sleep(0.8)
+                self.click('Download', optional=True, roles={'AXButton'})
+                self.wait(lambda: self._p8_path_for_key(key) is not None, timeout=180)
+            self._ensure_p8_in_downloads(key)
+            self.state['key_generation'] = 'identified'
+            self._set_integrations_step('done')
+            self.checkpoint('integrations')
+            return
+
+        if step == 'done':
+            if not isinstance(self.state.get('integration'), dict):
+                raise NativeError('API_KEY_VALUES_MISSING')
+            self.state['key_generation'] = 'identified'
+            self.save_state()
+            self.checkpoint('integrations')
+            return
+
+        raise NativeError('INTEGRATIONS_STEP_INVALID')
 
     def description(self):
         url = 'https://appstoreconnect.apple.com/apps/' + self.data['APP_ID'] + '/distribution/ios/version/inflight'
