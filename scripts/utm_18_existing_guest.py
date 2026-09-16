@@ -801,33 +801,9 @@ class NativeWorkflow:
             self.fill(None, self.data['PRIVACY_POLICY_URL'], dom_id='privacyPolicyUrl')
             self.fill(None, self.data['PRIVACY_CHOICES_URL'], dom_id='privacyChoicesUrl')
             self.save()
+        # Get Started: declare no data collection, Save, and stop — no Device ID / advertising / tracking path.
         if self.click('Get Started', optional=True):
-            self.check(dom_id='CONFIRM_COLLECT_DATA_radio_true')
-            self.click('Next')
-            self.check(dom_id='SELECT_CATEGORIES_checkbox_DEVICE_ID')
-            self.save()
-            self.wait(lambda: self.matches(label='OK', roles={'AXButton'}))
-            self.click('OK')
-        if self.has('Set Up Device ID'):
-            # ASC exposes this as AXStaticText (not a button); click its geometry.
-            nodes = self.matches(label='Set Up Device ID')
-            visible = []
-            for node in nodes:
-                geom = _ax_geom(self.backend, node)
-                if geom is not None and geom[2] >= 1 and geom[3] >= 1:
-                    visible.append((geom, node))
-            if not visible:
-                raise NativeError('TARGET_COUNT=0:Set Up Device ID')
-            geom, _node = visible[0]
-            x, y, w, h = geom
-            _click_xy(x + w / 2.0, y + h / 2.0)
-            time.sleep(1.0)
-            self.check(dom_id='SELECT_PURPOSES_checkbox_THIRD_PARTY_ADVERTISING')
-            self.click('Next')
-            self.check(dom_id='CONFIRM_LINKING_DEVICE_ID_radioButton_false')
-            for _ in range(3):
-                self.click('Next')
-            self.check(dom_id='CONFIRM_TRACKING_DEVICE_ID_radioButton_true')
+            self.check(dom_id='CONFIRM_COLLECT_DATA_radio_false')
             self.save()
         if not self.has('Published'):
             # Stay on this privacy page; wait for Publish (appears after nutrition labels settle).
