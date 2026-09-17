@@ -13,16 +13,17 @@
 ### 2. 再理解一次提审如何运行
 
 4. [`project-workflow.md`](project-workflow.md)：31 步固定顺序、每步输入、成功证据和交接。
-5. [`feishu-host-routing.md`](feishu-host-routing.md)：多宿主机如何根据 `SUBMISSION_HOST_MACHINE` 接取任务。
-6. [`utm-feishu-bot.md`](utm-feishu-bot.md)：飞书机器人入口、部署和故障通知约束。
+5. [`../integrations/README.md`](../integrations/README.md)：机器侧 MCP Server 和工具边界。
+6. [`feishu-host-routing.md`](feishu-host-routing.md)：多宿主机如何根据 `SUBMISSION_HOST_MACHINE` 接取任务。
+7. [`utm-feishu-bot.md`](utm-feishu-bot.md)：飞书机器人入口、部署和故障通知约束。
 
 ### 3. 执行或修改单个步骤
 
-7. `skills/_shared/AUTOMATION_CONTRACT.md`：共享重复动作、恢复门禁和交接合同。
-8. `skills/<skill>/SKILL.md`：对应技能的唯一可执行正文。
-9. `docs/utm-*.md`：对应技能的对外说明和验收口径。
-10. `scripts/`：被技能调用的 API、SSH、状态、构建和文件辅助脚本。
-11. `tests/`：技能合同、解析器、恢复、卡片和回归测试。
+8. `skills/_shared/AUTOMATION_CONTRACT.md`：共享重复动作、恢复门禁和交接合同。
+9. `skills/<skill>/SKILL.md`：对应技能的唯一可执行正文。
+10. `docs/utm-*.md`：对应技能的对外说明和验收口径。
+11. `scripts/`：被技能调用的 API、SSH、状态、构建和文件辅助脚本。
+12. `tests/`：技能合同、解析器、恢复、卡片和回归测试。
 
 ## 权威关系
 

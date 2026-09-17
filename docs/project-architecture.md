@@ -42,9 +42,9 @@ Skills 是 Agent 在流程中调用的能力模块。当前项目共有 **31 个
 
 MCP 是 Agent 统一发现和调用外部工具的一种协议。
 
-当前项目共有 **0 个 MCP**，没有接入 MCP Client 或 MCP Server。当前使用的是直接 API 和本机工具集成：Feishu/Notion API、SSH、UTM、本地脚本和浏览器 GUI/CDP。
+当前项目已增加 **1 个机器侧 MCP Server**：`integrations/mcp_worker_server.py`，默认可通过 stdio 启动。当前主控 Agent 尚未接入 MCP Client，因此 MCP Client 为 0 个。原有直接 API 和本机工具集成继续保留：Feishu/Notion API、SSH、UTM、本地脚本和浏览器 GUI/CDP。
 
-**API 不等于 MCP**：API 是平台直接提供的接口；MCP 是 Agent 与工具之间的统一调用协议。只有工具被封装成 MCP Server，并由 MCP Client 通过 MCP 协议发现和调用时，才属于 MCP。
+**API 不等于 MCP**：API 是平台直接提供的接口；MCP 是 Agent 与工具之间的统一调用协议。只有工具被封装成 MCP Server，并由 MCP Client 通过 MCP 协议发现和调用时，才属于 MCP。本项目当前先增加机器侧 Server，后续再把主控 Agent 接入 Client。
 
 ## 3. 当前架构图
 
@@ -57,6 +57,8 @@ flowchart LR
     S --> H[宿主机]
     H --> V[1 台 macOS VM]
     S --> X[外部服务与代码仓库]
+    P -. 可选 MCP Client .-> M[MCP Server<br/>机器侧只读工具]
+    M -. 读取状态 .-> H
     F --> N[成功通知 / 故障通知]
     N --> U
 ```
@@ -68,7 +70,8 @@ flowchart LR
 | 主控 Agent | 1 个 | 飞书机器人 |
 | Skills | 31 个 | `skills/<skill>/SKILL.md` |
 | 直接 API / 工具集成 | 多种 | Feishu/Notion API、SSH、UTM、本地脚本、GUI/CDP |
-| MCP | 0 个 | 当前未接入 MCP Client/Server |
+| MCP Server | 1 个 | `integrations/mcp_worker_server.py`，机器侧只读工具 |
+| MCP Client | 0 个 | 主控 Agent 尚未接入 MCP Client |
 | 执行环境 | 1 套 | 1 台宿主机 + 1 台 macOS VM |
 
 ## 5. 当前 31 个 Skills
@@ -119,13 +122,13 @@ flowchart LR
 30. `utm-24`
 31. `utm-25`
 
-## 6. MCP 是否可以增加
+## 6. MCP 已增加
 
-可以增加，但不建议为了增加数量而重写现有 API。
+仓库已经增加一个机器侧 MCP Server，先提供机器信息、Skill 清单和提审 run 状态三个只读工具。它不暴露密码、不执行任意 Shell，也不改变现有 31 个 Skills。
 
-更适合增加 MCP 的场景是：未来有多台机器、多个 Agent 或多个执行运行时，需要统一调用机器工具，并且需要统一权限和审计。当前单机阶段直接使用 API、SSH 和 UTM 更简单。
+当前先以“可选工具边界”方式接入：主控 Agent 仍按原流程运行，后续再接入 MCP Client。
 
-建议保留现有 API 和 Skills，在机器侧逐步增加受限的 MCP Server，封装机器健康检查、VM 状态、Skill 执行和结果读取等能力。调度器仍然负责任务排队和机器分配，MCP 不负责调度。
+更适合继续增加 MCP 的场景是：未来有多台机器、多个 Agent 或多个执行运行时，需要统一调用机器工具，并且需要统一权限和审计。调度器仍然负责任务排队和机器分配，MCP 不负责调度。
 
 ## 7. 后续多机架构
 
@@ -140,11 +143,27 @@ flowchart LR
     Q --> WN[mac-10+ Worker]
 ```
 
-Agent 统一负责任务编排和结果汇总；每个 Worker 对应一台机器。MCP 只有在后续需要统一封装机器工具调用时再引入，不作为任务调度器。
+Agent 统一负责任务编排和结果汇总；每个 Worker 对应一台机器。未来每台 Worker 可以运行一个同类型 MCP Server，主控侧再增加 MCP Client；MCP 不作为任务调度器。
 
-## 8. 相关文件
+## 8. 仓库目录结构
+
+```text
+README.md                         项目总览
+docs/                             架构、流程和部署说明
+skills/                           31 个 Skills
+services/                         飞书入口和运行服务
+integrations/                     MCP Server 集成
+scripts/                          API、SSH、UTM 和辅助脚本
+config/                           配置示例
+tests/                            回归测试
+shared-files/                     项目共享文件
+```
+
+## 9. 相关文件
 
 - Skills 实际定义：`skills/<skill>/SKILL.md`
+- MCP Server：[`integrations/README.md`](../integrations/README.md)
+- MCP 配置示例：[`config/mcp-worker.example.json`](../config/mcp-worker.example.json)
 - 具体流程和交接：[`docs/project-workflow.md`](project-workflow.md)
 - 飞书入口说明：[`docs/utm-feishu-bot.md`](utm-feishu-bot.md)
 - 多宿主机路由：[`docs/feishu-host-routing.md`](feishu-host-routing.md)

@@ -32,7 +32,7 @@ Skills 是主控 Agent 可以按流程调用的具体能力模块。本项目当
 
 MCP 是一种让 Agent 以统一方式发现和调用外部工具的协议。
 
-本项目当前 **没有 MCP，数量为 0 个**。现在使用的是直接 API 和本机工具集成：Feishu/Notion API、SSH、UTM、本地脚本和浏览器 GUI/CDP。
+本项目已增加 **1 个机器侧 MCP Server**，位于 `integrations/mcp_worker_server.py`，默认通过 stdio 可选启动。当前主控 Agent 尚未作为 MCP Client 接入，因此 MCP Client 仍为 0 个。原有直接 API 和本机工具集成继续保留：Feishu/Notion API、SSH、UTM、本地脚本和浏览器 GUI/CDP。
 
 **API 不等于 MCP**：API 是某个平台提供的接口；MCP 是 Agent 与工具之间的一层统一调用协议。只有把工具封装为 MCP Server，并由 MCP Client 按 MCP 协议发现和调用时，才计为 MCP。
 
@@ -43,7 +43,8 @@ MCP 是一种让 Agent 以统一方式发现和调用外部工具的协议。
 | 主控 Agent | 1 个 | 飞书机器人 |
 | Skills | 31 个 | `skills/<skill>/SKILL.md` |
 | 直接 API / 工具集成 | 多种 | Feishu/Notion API、SSH、UTM、本地脚本、GUI/CDP |
-| MCP | 0 个 | 当前未接入 MCP Client/Server |
+| MCP Server | 1 个 | `integrations/mcp_worker_server.py`，机器侧只读工具服务 |
+| MCP Client | 0 个 | 主控 Agent 尚未接入 MCP Client |
 | 执行环境 | 1 套 | 1 台宿主机 + 1 台 macOS VM |
 
 ## 当前架构图
@@ -57,6 +58,8 @@ flowchart LR
     S --> H[宿主机]
     H --> V[macOS VM]
     S --> X[外部服务与代码仓库]
+    P -. 可选 MCP Client .-> M[MCP Server<br/>机器侧只读工具]
+    M -. 读取状态 .-> H
     F --> N[成功通知 / 故障通知]
     N --> U
 ```
@@ -126,13 +129,13 @@ flowchart LR
 - `utm-24`
 - `utm-25`
 
-## MCP 是否可以增加
+## MCP 已增加
 
-可以增加，但不建议为了“有 MCP”而把现有 API 全部重写。
+仓库已经增加一个机器侧 MCP Server，先提供机器信息、Skill 清单和提审 run 状态三个只读工具。它不暴露密码、不执行任意 Shell，也不改变现有 31 个 Skills。
 
-更适合增加 MCP 的场景是：多台机器、多个 Agent 或多个执行运行时需要用同一套机器工具，并且需要统一权限、审计和调用格式。当前单机阶段直接调用 API、SSH 和 UTM 更简单。
+当前先以“可选工具边界”方式接入：主控 Agent 仍按原流程运行，后续再接入 MCP Client。
 
-建议的演进方式是：先保留现有 API 和 Skills，再给机器侧增加一个受限的 MCP Server，逐步封装机器健康检查、VM 状态、Skill 执行和结果读取等工具。调度器仍然负责排队和分配机器，MCP 不负责调度。
+更适合继续增加 MCP 的场景是：多台机器、多个 Agent 或多个执行运行时需要用同一套机器工具，并且需要统一权限、审计和调用格式。调度器仍然负责排队和分配机器，MCP 不负责调度。
 
 ## 后续扩展方向
 
@@ -154,10 +157,11 @@ flowchart LR
     Q --> WN
 ```
 
-主控 Agent 负责统一接收和编排任务，Worker 负责各自机器上的执行。MCP 是否引入，取决于后续是否需要统一封装机器工具调用。
+主控 Agent 负责统一接收和编排任务，Worker 负责各自机器上的执行。未来每台 Worker 可以运行一个同类型 MCP Server，主控侧再增加 MCP Client。
 
 ## 相关说明
 
 - [项目架构说明](docs/project-architecture.md)：本项目的简化架构总览。
+- [MCP 集成说明](integrations/README.md)：机器侧 MCP Server、工具范围和启动方式。
 - [项目总流程与交接手册](docs/project-workflow.md)：具体流程合同和交接规则。
 - [技能目录](skills)：31 个 Skill 的实际定义。

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "mac-submission-worker": {
+      "command": "python3",
+      "args": ["/absolute/path/to/mac-submission-automation/integrations/mcp_worker_server.py"],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "MCP_ALLOW_NETWORK": "0",
+        "SUBMISSION_HOST_MACHINE": "mac-01"
+      }
+    }
+  }
+}
