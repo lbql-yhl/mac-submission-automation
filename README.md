@@ -1,6 +1,37 @@
 # mac 提审自动化
+## 架构与文档入口
 
-这个项目已接入飞书机器人入口。机器人负责接收群里的提审登记信息，生成运行记录、去重后的虚拟机名称和 Codex 提示。任何异常先完成至少三轮确定性诊断、安全修复和独立复验；外部不可修复状态也做三轮只读复核。少于三轮时运行时禁止发送故障卡。
+- [项目文档导航](docs/README.md)
+- [项目实际架构与概念设计映射](docs/project-architecture.md)
+- [项目总流程与交接手册](docs/project-workflow.md)
+- [飞书机器人宿主机路由](docs/feishu-host-routing.md)
+- [UTM 飞书机器人说明](docs/utm-feishu-bot.md)
+
+## 项目简介
+
+本项目是一个由**飞书机器人主控 Agent**驱动的 macOS App 提审自动化系统。飞书机器人接收提审登记、创建运行记录、编排固定流程、控制故障恢复并发送最终通知；Codex App 前台会话是主控 Agent 使用的执行运行时，负责在当前宿主机和 macOS VM 上执行具体 Skill。
+
+当前架构分类：
+
+- **主控 Agent：1 个**——飞书机器人。
+- **Skills：31 个**——位于 `skills/<skill>/SKILL.md`，由主控 Agent 按固定顺序调用。
+- **MCP：0 个**——当前没有 MCP Client/Server；现有集成使用 Feishu/Notion API、SSH、UTM、本地脚本、GUI/CDP。
+- **执行环境：1 台宿主机 + 1 台 macOS VM**——当前不是多机调度平台。
+
+当前主链：
+
+```text
+飞书用户
+→ 飞书机器人主控 Agent
+→ submission run / vm_name
+→ Codex App 前台执行运行时
+→ 31 个固定顺序 Skills
+→ 宿主机 + macOS VM + 外部 API
+→ 成功卡或故障卡
+```
+
+未来扩展到 10 台以上机器时，建议增加任务队列、机器注册表、租约/锁、心跳和每台机器 Worker。主控 Agent 负责分配和汇总，Worker 负责本机执行；MCP 只作为可选的标准化工具调用协议，不作为调度器。
+
 
 ## 现行执行权威
 
