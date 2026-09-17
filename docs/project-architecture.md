@@ -42,7 +42,9 @@ Skills 是 Agent 在流程中调用的能力模块。当前项目共有 **31 个
 
 MCP 是 Agent 统一发现和调用外部工具的一种协议。
 
-当前项目共有 **0 个 MCP**，没有接入 MCP Client 或 MCP Server。当前集成使用 Feishu/Notion API、SSH、UTM、本地脚本和浏览器 GUI/CDP。
+当前项目共有 **0 个 MCP**，没有接入 MCP Client 或 MCP Server。当前使用的是直接 API 和本机工具集成：Feishu/Notion API、SSH、UTM、本地脚本和浏览器 GUI/CDP。
+
+**API 不等于 MCP**：API 是平台直接提供的接口；MCP 是 Agent 与工具之间的统一调用协议。只有工具被封装成 MCP Server，并由 MCP Client 通过 MCP 协议发现和调用时，才属于 MCP。
 
 ## 3. 当前架构图
 
@@ -65,7 +67,8 @@ flowchart LR
 |---|---:|---|
 | 主控 Agent | 1 个 | 飞书机器人 |
 | Skills | 31 个 | `skills/<skill>/SKILL.md` |
-| MCP | 0 个 | 当前未接入 MCP |
+| 直接 API / 工具集成 | 多种 | Feishu/Notion API、SSH、UTM、本地脚本、GUI/CDP |
+| MCP | 0 个 | 当前未接入 MCP Client/Server |
 | 执行环境 | 1 套 | 1 台宿主机 + 1 台 macOS VM |
 
 ## 5. 当前 31 个 Skills
@@ -116,7 +119,15 @@ flowchart LR
 30. `utm-24`
 31. `utm-25`
 
-## 6. 后续多机架构
+## 6. MCP 是否可以增加
+
+可以增加，但不建议为了增加数量而重写现有 API。
+
+更适合增加 MCP 的场景是：未来有多台机器、多个 Agent 或多个执行运行时，需要统一调用机器工具，并且需要统一权限和审计。当前单机阶段直接使用 API、SSH 和 UTM 更简单。
+
+建议保留现有 API 和 Skills，在机器侧逐步增加受限的 MCP Server，封装机器健康检查、VM 状态、Skill 执行和结果读取等能力。调度器仍然负责任务排队和机器分配，MCP 不负责调度。
+
+## 7. 后续多机架构
 
 当前为一台宿主机和一台 macOS VM。未来管理 10 台以上机器时，建议从单机执行扩展为“主控 Agent + 调度器 + 多个 Worker”：
 
@@ -131,7 +142,7 @@ flowchart LR
 
 Agent 统一负责任务编排和结果汇总；每个 Worker 对应一台机器。MCP 只有在后续需要统一封装机器工具调用时再引入，不作为任务调度器。
 
-## 7. 相关文件
+## 8. 相关文件
 
 - Skills 实际定义：`skills/<skill>/SKILL.md`
 - 具体流程和交接：[`docs/project-workflow.md`](project-workflow.md)

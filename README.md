@@ -32,7 +32,9 @@ Skills 是主控 Agent 可以按流程调用的具体能力模块。本项目当
 
 MCP 是一种让 Agent 以统一方式发现和调用外部工具的协议。
 
-本项目当前 **没有 MCP，数量为 0 个**。项目现在使用 Feishu/Notion API、SSH、UTM、本地脚本和浏览器 GUI/CDP 等方式完成集成。
+本项目当前 **没有 MCP，数量为 0 个**。现在使用的是直接 API 和本机工具集成：Feishu/Notion API、SSH、UTM、本地脚本和浏览器 GUI/CDP。
+
+**API 不等于 MCP**：API 是某个平台提供的接口；MCP 是 Agent 与工具之间的一层统一调用协议。只有把工具封装为 MCP Server，并由 MCP Client 按 MCP 协议发现和调用时，才计为 MCP。
 
 ## 当前架构数量
 
@@ -40,6 +42,7 @@ MCP 是一种让 Agent 以统一方式发现和调用外部工具的协议。
 |---|---:|---|
 | 主控 Agent | 1 个 | 飞书机器人 |
 | Skills | 31 个 | `skills/<skill>/SKILL.md` |
+| 直接 API / 工具集成 | 多种 | Feishu/Notion API、SSH、UTM、本地脚本、GUI/CDP |
 | MCP | 0 个 | 当前未接入 MCP Client/Server |
 | 执行环境 | 1 套 | 1 台宿主机 + 1 台 macOS VM |
 
@@ -122,6 +125,14 @@ flowchart LR
 - `utm-23`
 - `utm-24`
 - `utm-25`
+
+## MCP 是否可以增加
+
+可以增加，但不建议为了“有 MCP”而把现有 API 全部重写。
+
+更适合增加 MCP 的场景是：多台机器、多个 Agent 或多个执行运行时需要用同一套机器工具，并且需要统一权限、审计和调用格式。当前单机阶段直接调用 API、SSH 和 UTM 更简单。
+
+建议的演进方式是：先保留现有 API 和 Skills，再给机器侧增加一个受限的 MCP Server，逐步封装机器健康检查、VM 状态、Skill 执行和结果读取等工具。调度器仍然负责排队和分配机器，MCP 不负责调度。
 
 ## 后续扩展方向
 
