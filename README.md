@@ -30,6 +30,21 @@
 → 成功卡或故障卡
 ```
 
+## 当前架构图
+
+```mermaid
+flowchart LR
+    U[飞书用户] --> F[飞书机器人<br/>主控 Agent]
+    F --> R[submission run<br/>固定 vm_name / 状态]
+    F --> P[Codex App<br/>前台执行运行时]
+    P --> S[31 个固定顺序 Skills]
+    S --> H[宿主机]
+    H --> V[1 台 macOS VM]
+    S --> X[Feishu / Notion / Apple / App Store / 代码仓库]
+    F --> N[成功卡 / 故障卡]
+    N --> U
+```
+
 未来扩展到 10 台以上机器时，建议增加任务队列、机器注册表、租约/锁、心跳和每台机器 Worker。主控 Agent 负责分配和汇总，Worker 负责本机执行；MCP 只作为可选的标准化工具调用协议，不作为调度器。
 
 
@@ -276,3 +291,4 @@ Account Number：<银行账户号码，可留空>
 ```env
 SUBMISSION_RUNNER_COMMAND=
 ```
+
