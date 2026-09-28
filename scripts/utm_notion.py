@@ -458,11 +458,29 @@ def review_copy_file_token(cell: object) -> str:
     return tokens[0] if tokens else ""
 
 
-def download_review_copy_html(file_token: str, *, token: str) -> str:
+def review_copy_media_url(file_token: str, table_id: str) -> str:
+    token = str(file_token or "").strip()
+    table = str(table_id or "").strip()
+    if not token:
+        raise RuntimeError("Feishu 提审文案 download is not configured")
+    if not table:
+        raise RuntimeError("Feishu 提审文案 download requires table_id")
+    quoted = urllib.parse.quote(token, safe="")
+    extra = json.dumps(
+        {"bitablePerm": {"tableId": table}},
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    query = urllib.parse.urlencode({"extra": extra})
+    return f"{API_BASE}/drive/v1/medias/{quoted}/download?{query}"
+
+
+def download_review_copy_html(
+    file_token: str, *, token: str, table_id: str
+) -> str:
     if not file_token or not token:
         raise RuntimeError("Feishu 提审文案 download is not configured")
-    quoted = urllib.parse.quote(file_token, safe="")
-    url = f"{API_BASE}/drive/v1/medias/{quoted}/download"
+    url = review_copy_media_url(file_token, table_id)
     body = _feishu_media_request(
         url,
         token=token,
@@ -1074,6 +1092,7 @@ def build_registration_fields(
     fill_missing_with_test: bool = False,
     download_review_copy: Callable[[str], str] | None = None,
     feishu_token: str = "",
+    feishu_table_id: str = "",
 ) -> tuple[dict[str, str], dict[str, str]]:
     app_name = _required_text(fields, "应用名")
     if fill_missing_with_test and not _cell_text(fields.get("账号信息")):
@@ -1173,7 +1192,11 @@ def build_registration_fields(
     def _download(file_token: str) -> str:
         if download_review_copy is not None:
             return download_review_copy(file_token)
-        return download_review_copy_html(file_token, token=feishu_token)
+        return download_review_copy_html(
+            file_token,
+            token=feishu_token,
+            table_id=feishu_table_id,
+        )
 
     application.update(
         load_review_copy_fields(
@@ -1530,6 +1553,7 @@ def execute(
         fields,
         fill_missing_with_test=fill_missing_with_test,
         feishu_token=token,
+        feishu_table_id=table_id,
     )
     exact_app_name = application_replacements["应用名: "]
     if not explicit_vm_name:

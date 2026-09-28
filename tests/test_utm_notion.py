@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import io
+import json
 import subprocess
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -28,6 +34,7 @@ from scripts.utm_notion import (
     parse_review_copy_html,
     read_template_fields,
     review_copy_file_token,
+    review_copy_media_url,
     verify_registration_readback,
 )
 
@@ -43,6 +50,7 @@ FIXTURE_APP_CREDENTIAL = "app-secret"
 FIXTURE_NOTION_CREDENTIAL = "notion-token"
 FIXTURE_NOTION_ROOT = "notion-root"
 REVIEW_COPY_FILE_TOKEN = "file-review-copy-synthetic"
+REVIEW_COPY_TABLE_ID = "tblReviewCopySynthetic"
 REVIEW_COPY_HTML_FULL = (FIXTURES / "review_copy_full.html").read_text(encoding="utf-8")
 REVIEW_COPY_HTML_MERGED = (
     FIXTURES / "review_copy_merged_heading.html"
@@ -95,7 +103,7 @@ def mock_review_copy_download(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         utm_notion,
         "download_review_copy_html",
-        lambda file_token, token="": REVIEW_COPY_HTML_BY_TOKEN.get(
+        lambda file_token, token="", table_id="": REVIEW_COPY_HTML_BY_TOKEN.get(
             file_token, REVIEW_COPY_HTML_FULL
         ),
     )
@@ -504,20 +512,139 @@ def test_download_review_copy_html_gets_media_by_file_token_not_tmp_url(
 
     monkeypatch.setattr(utm_notion, "_feishu_media_request", fake_request)
     html = REAL_DOWNLOAD_REVIEW_COPY_HTML(
-        REVIEW_COPY_FILE_TOKEN, token="tenant-token"
+        REVIEW_COPY_FILE_TOKEN,
+        token="tenant-token",
+        table_id=REVIEW_COPY_TABLE_ID,
     )
 
     assert html == REVIEW_COPY_HTML_FULL
-    assert seen == {
-        "url": (
-            "https://open.feishu.cn/open-apis/drive/v1/medias/"
-            f"{REVIEW_COPY_FILE_TOKEN}/download"
-        ),
-        "method": "GET",
-        "token": "tenant-token",
-        "label": "提审文案 attachment download",
+    parsed_url = urllib.parse.urlparse(str(seen["url"]))
+    query = urllib.parse.parse_qs(parsed_url.query, keep_blank_values=True)
+    assert parsed_url.scheme == "https"
+    assert parsed_url.netloc == "open.feishu.cn"
+    assert parsed_url.path == (
+        f"/open-apis/drive/v1/medias/{REVIEW_COPY_FILE_TOKEN}/download"
+    )
+    assert list(query) == ["extra"]
+    assert json.loads(query["extra"][0]) == {
+        "bitablePerm": {"tableId": REVIEW_COPY_TABLE_ID}
     }
+    assert seen["method"] == "GET"
+    assert seen["token"] == "tenant-token"
+    assert seen["label"] == "提审文案 attachment download"
     assert "expired.example.test" not in str(seen["url"])
+    assert "tmp_url" not in str(seen["url"])
+
+
+def test_review_copy_media_url_encodes_compact_bitable_extra_once() -> None:
+    url = review_copy_media_url(REVIEW_COPY_FILE_TOKEN, REVIEW_COPY_TABLE_ID)
+    parsed = urllib.parse.urlparse(url)
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+
+    assert parsed.path.endswith(f"/{REVIEW_COPY_FILE_TOKEN}/download")
+    assert json.loads(query["extra"][0]) == {
+        "bitablePerm": {"tableId": REVIEW_COPY_TABLE_ID}
+    }
+    assert query["extra"][0] == json.dumps(
+        {"bitablePerm": {"tableId": REVIEW_COPY_TABLE_ID}},
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+
+
+def test_download_review_copy_html_requires_table_id() -> None:
+    with pytest.raises(RuntimeError, match="table_id"):
+        REAL_DOWNLOAD_REVIEW_COPY_HTML(
+            REVIEW_COPY_FILE_TOKEN, token="tenant-token", table_id=""
+        )
+
+
+def test_feishu_media_request_does_not_retry_http_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import utm_env_download_assets as download_assets
+
+    opens: list[str] = []
+
+    def fake_urlopen(request: urllib.request.Request, timeout: int):
+        opens.append(request.full_url)
+        raise urllib.error.HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            hdrs=Message(),
+            fp=io.BytesIO(b""),
+        )
+
+    monkeypatch.setattr(download_assets.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="HTTP 400.*advanced-permission extra") as captured:
+        download_assets._request(
+            review_copy_media_url(REVIEW_COPY_FILE_TOKEN, REVIEW_COPY_TABLE_ID),
+            token="tenant-token",
+            label="提审文案 attachment download",
+        )
+
+    assert len(opens) == 1
+    assert "HTTP 400" in str(captured.value)
+
+
+def test_feishu_media_request_http_500_keeps_status_and_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import utm_env_download_assets as download_assets
+
+    opens: list[str] = []
+
+    def fake_urlopen(request: urllib.request.Request, timeout: int):
+        opens.append(request.full_url)
+        raise urllib.error.HTTPError(
+            request.full_url,
+            500,
+            "Internal Server Error",
+            hdrs=Message(),
+            fp=io.BytesIO(b""),
+        )
+
+    monkeypatch.setattr(download_assets.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="failed with HTTP 500") as captured:
+        download_assets._request(
+            review_copy_media_url(REVIEW_COPY_FILE_TOKEN, REVIEW_COPY_TABLE_ID),
+            token="tenant-token",
+            label="提审文案 attachment download",
+        )
+
+    assert len(opens) == 1
+    assert "advanced-permission" not in str(captured.value)
+
+
+def test_download_review_copy_html_does_not_retry_http_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_request(url: str, **_kwargs: object) -> bytes:
+        calls.append(url)
+        raise RuntimeError(
+            "提审文案 attachment download failed with HTTP 400; "
+            "advanced-permission extra may be required"
+        )
+
+    monkeypatch.setattr(utm_notion, "_feishu_media_request", fake_request)
+
+    with pytest.raises(RuntimeError, match="HTTP 400"):
+        REAL_DOWNLOAD_REVIEW_COPY_HTML(
+            REVIEW_COPY_FILE_TOKEN,
+            token="tenant-token",
+            table_id=REVIEW_COPY_TABLE_ID,
+        )
+
+    assert len(calls) == 1
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(calls[0]).query)
+    assert json.loads(query["extra"][0]) == {
+        "bitablePerm": {"tableId": REVIEW_COPY_TABLE_ID}
+    }
 
 
 def test_build_registration_fields_downloads_review_copy_by_file_token() -> None:
