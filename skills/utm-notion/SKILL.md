@@ -18,10 +18,11 @@ Read and obey [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRA
   ```
 
   Standalone selector: `python3 "$PROJECT_ROOT/scripts/utm_notion.py" --app-name '<app-name>' --vm-name '<vm-name>'`.
-- Require one matching parent and one `<app-name>-<vm-name>` page. Re-read all written fields and preserve unrelated page content.
+- Optional `--skip-missing` (off by default) leaves empty Feishu-sourced fields unwritten so the matching Notion template rows stay blank. It does not relax `应用名`, `正式包名`, or `账号信息`. It is mutually exclusive with `--fill-missing-with-test`. Default fail-on-missing behavior is unchanged.
+- Require one matching parent and one `<app-name>-<vm-name>` page. Re-read all written fields and preserve unrelated page content. Readback does not fail for fields skipped by `--skip-missing`.
 - Retry the same entry and identity at most three rounds using 0/5/10 seconds; never select a nearby or newest page.
 - Feishu `提审文案` is one HTML attachment downloaded by `file_token` (never `tmp_url`). Parse `App Store Connect 复制区` textarea ids `subtitle`, `promotional_text`, `description`, `keywords`, and `review_notes` into `Subtitle：`, `Promotional Text：`, `Description：`, `Keywords：`, and `App Review Notes：`. Prefer textarea-by-id; fall back to JS `const values={...}` for a missing id. Ignore `name`, `whats_new`, `copyright`, and the later `不复制、只检查` section. `Description：` and `App Review Notes：` may be multi-line. Existing `应用描述：` and `关键词:` sources stay unchanged.
 
 ## Result and handoff
 
-The canonical success summary is `执行成功：utm-notion；status=verified`. Immediately hand the same run, application, VM, and page identity to `utm-clash-ip`.
+The canonical success summary is `执行成功：utm-notion；status=verified`. When `--skip-missing` omitted any field, the marker is `status=verified;skipped_fields=<Feishu field names>` and the structured result includes the same names in `skipped_fields`. Immediately hand the same run, application, VM, and page identity to `utm-clash-ip`.
