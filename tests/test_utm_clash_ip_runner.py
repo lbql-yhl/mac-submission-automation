@@ -571,7 +571,7 @@ def test_prepare_vm_logs_into_guest_desktop_before_identity(
 
     def fake_login(**kwargs):
         events.append(f"login:{kwargs['vm_name']}:{kwargs['guest_user']}")
-        return GuestDesktopLoginResult("login_verified", "gdpd", 1)
+        return GuestDesktopLoginResult("login_verified", "gdpd", True, 1)
 
     monkeypatch.setattr(
         "scripts.utm_guest_desktop_login.ensure_guest_desktop_login", fake_login
@@ -603,7 +603,7 @@ def test_ensure_guest_desktop_skips_input_when_already_interactive(
 
     def fake_login(**kwargs):
         assert kwargs["guest_user"] == "gdpd"
-        return GuestDesktopLoginResult("already_interactive", "gdpd", 0)
+        return GuestDesktopLoginResult("already_interactive", "gdpd", True, 0)
 
     monkeypatch.setattr(
         "scripts.utm_guest_desktop_login.ensure_guest_desktop_login", fake_login

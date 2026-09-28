@@ -1,19 +1,23 @@
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 
 import pytest
 
 from scripts.utm_guest_desktop_login import (
     GuestDesktopLoginError,
+    GuestDesktopState,
+    activate_utm_guest_window,
     classify_console_state,
+    desktop_ready,
     ensure_guest_desktop_login,
     login_sequence_key_groups,
     password_key_codes,
     redact_secrets,
     resolve_guest_username,
+    system_events_activate_script,
     username_key_codes,
+    utm_window_titles,
 )
 from services.host_config import ConfigurationError
 
@@ -22,6 +26,10 @@ ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "scripts" / "utm_guest_desktop_login.py"
 BUNDLE = Path("/tmp/abcd.utm")
 PASSWORD = "9072"
+
+
+def _state(console: str, finder: bool = False) -> GuestDesktopState:
+    return GuestDesktopState(console, finder)
 
 
 def _clock(values: list[float]):
@@ -41,10 +49,10 @@ def test_already_interactive_sends_no_input() -> None:
     focused: list[str] = []
 
     result = ensure_guest_desktop_login(
-        vm_name="abcd",
+        vm_name="wdil",
         vm_ip="192.0.2.10",
         bundle=BUNDLE,
-        read_console=lambda _user, _ip: "abcd",
+        read_state=lambda _user, _ip: _state("wdil", True),
         focus_window=lambda name, _bundle: focused.append(name) or 17,
         send_keys=lambda _pid, codes: sent.append(codes),
         password_fn=lambda: PASSWORD,
@@ -53,79 +61,122 @@ def test_already_interactive_sends_no_input() -> None:
     )
 
     assert result.status == "already_interactive"
-    assert result.console_user == "abcd"
+    assert result.console_user == "wdil"
+    assert result.finder_running is True
     assert result.attempts == 0
     assert sent == []
     assert focused == []
 
 
-def test_login_window_types_username_and_password_then_polls_interactive() -> None:
-    consoles = iter(("root", "root", "abcd"))
+def test_login_selects_user_before_password_then_requires_finder() -> None:
+    states = iter(
+        (
+            _state("root", False),
+            _state("wdil", False),
+            _state("wdil", True),
+        )
+    )
     sent: list[tuple[int, ...]] = []
 
     result = ensure_guest_desktop_login(
-        vm_name="abcd",
+        vm_name="wdil",
         vm_ip="192.0.2.10",
         bundle=BUNDLE,
-        read_console=lambda _user, _ip: next(consoles),
+        read_state=lambda _user, _ip: next(states),
         focus_window=lambda _name, _bundle: 17,
         send_keys=lambda _pid, codes: sent.append(codes),
-        full_name_enabled=lambda _user, _ip: True,
-        password_fn=lambda: PASSWORD,
-        sleep_fn=lambda _seconds: None,
-        clock_fn=lambda: 0.0,
-        poll_timeout_seconds=9.0,
-        poll_interval_seconds=3.0,
-    )
-
-    assert result.status == "login_verified"
-    assert result.console_user == "abcd"
-    assert result.attempts == 1
-    assert sent == list(
-        login_sequence_key_groups("abcd", PASSWORD, full_name_login=True)
-    )
-
-
-def test_selected_user_login_sends_only_password() -> None:
-    consoles = iter(("root", "abcd"))
-    sent: list[tuple[int, ...]] = []
-
-    result = ensure_guest_desktop_login(
-        vm_name="abcd",
-        vm_ip="192.0.2.10",
-        bundle=BUNDLE,
-        read_console=lambda _user, _ip: next(consoles),
-        focus_window=lambda _name, _bundle: 17,
-        send_keys=lambda _pid, codes: sent.append(codes),
-        full_name_enabled=lambda _user, _ip: False,
         password_fn=lambda: PASSWORD,
         sleep_fn=lambda _seconds: None,
         clock_fn=lambda: 0.0,
     )
 
     assert result.status == "login_verified"
-    assert sent == [password_key_codes(PASSWORD)]
+    assert result.console_user == "wdil"
+    assert result.finder_running is True
+    assert sent == list(login_sequence_key_groups("wdil", PASSWORD))
+    assert sent[0] == username_key_codes("wdil") + (36,)
+    assert sent[1] == password_key_codes(PASSWORD)
 
 
-def test_poll_timeout_raises_clear_code() -> None:
-    with pytest.raises(GuestDesktopLoginError, match="GUEST_DESKTOP_LOGIN_TIMEOUT") as captured:
+def test_console_user_alone_is_not_success() -> None:
+    with pytest.raises(GuestDesktopLoginError, match="GUEST_DESKTOP_LOGIN_FAILED") as captured:
         ensure_guest_desktop_login(
-            vm_name="abcd",
+            vm_name="wdil",
             vm_ip="192.0.2.10",
             bundle=BUNDLE,
-            read_console=lambda _user, _ip: "root",
-            focus_window=lambda _name, _bundle: 17,
-            send_keys=lambda _pid, _codes: None,
-            full_name_enabled=lambda _user, _ip: True,
+            read_state=lambda _user, _ip: _state("wdil", False),
+            focus_window=lambda *_args: pytest.fail("must not type when console user is already present"),
+            send_keys=lambda *_args: pytest.fail("must not type when console user is already present"),
             password_fn=lambda: PASSWORD,
             sleep_fn=lambda _seconds: None,
-            clock_fn=_clock([0.0, 0.0, 50.0]),
-            poll_timeout_seconds=45.0,
+            clock_fn=_clock([0.0, 50.0]),
+            poll_timeout_seconds=1.0,
             max_attempts=1,
         )
 
-    assert captured.value.code == "GUEST_DESKTOP_LOGIN_TIMEOUT"
+    assert captured.value.code == "GUEST_DESKTOP_LOGIN_FAILED"
+    assert "console_user=wdil" in str(captured.value)
+    assert "finder=missing" in str(captured.value)
     assert PASSWORD not in str(captured.value)
+    assert not desktop_ready(_state("wdil", False), "wdil")
+
+
+def test_first_attempt_can_fail_then_second_succeeds() -> None:
+    states = iter(
+        (
+            _state("root", False),
+            _state("root", False),
+            _state("wdil", True),
+        )
+    )
+    focuses: list[int] = []
+    sent: list[tuple[int, ...]] = []
+
+    result = ensure_guest_desktop_login(
+        vm_name="wdil",
+        vm_ip="192.0.2.10",
+        bundle=BUNDLE,
+        read_state=lambda _user, _ip: next(states),
+        focus_window=lambda _name, _bundle: focuses.append(1) or 17,
+        send_keys=lambda _pid, codes: sent.append(codes),
+        password_fn=lambda: PASSWORD,
+        sleep_fn=lambda _seconds: None,
+        clock_fn=_clock([0.0, 50.0, 0.0, 0.0]),
+        poll_timeout_seconds=1.0,
+        max_attempts=2,
+    )
+
+    assert result.status == "login_verified"
+    assert result.attempts == 2
+    assert len(focuses) == 2
+    assert sent[0] == username_key_codes("wdil") + (36,)
+    assert sent[1] == password_key_codes(PASSWORD)
+    assert sent[2] == username_key_codes("wdil") + (48,)
+    assert sent[3] == password_key_codes(PASSWORD)
+
+
+def test_exhausted_retries_report_observed_state_without_password() -> None:
+    with pytest.raises(GuestDesktopLoginError) as captured:
+        ensure_guest_desktop_login(
+            vm_name="wdil",
+            vm_ip="192.0.2.10",
+            bundle=BUNDLE,
+            read_state=lambda _user, _ip: _state("root", False),
+            focus_window=lambda _name, _bundle: 17,
+            send_keys=lambda _pid, _codes: None,
+            password_fn=lambda: PASSWORD,
+            sleep_fn=lambda _seconds: None,
+            clock_fn=_clock([0.0, 50.0, 50.0, 100.0]),
+            poll_timeout_seconds=1.0,
+            max_attempts=2,
+        )
+
+    assert captured.value.code == "GUEST_DESKTOP_LOGIN_FAILED"
+    message = str(captured.value)
+    assert "console_user=root" in message
+    assert "finder=missing" in message
+    assert "attempts=2" in message
+    assert PASSWORD not in message
 
 
 def test_missing_password_raises_without_value() -> None:
@@ -136,96 +187,88 @@ def test_missing_password_raises_without_value() -> None:
         GuestDesktopLoginError, match="GUEST_DESKTOP_PASSWORD_MISSING"
     ) as captured:
         ensure_guest_desktop_login(
-            vm_name="abcd",
+            vm_name="wdil",
             vm_ip="192.0.2.10",
             bundle=BUNDLE,
-            read_console=lambda _user, _ip: "root",
+            read_state=lambda _user, _ip: _state("root", False),
             password_fn=missing,
             focus_window=lambda *_args: pytest.fail("must not focus without a password"),
             send_keys=lambda *_args: pytest.fail("must not type without a password"),
         )
 
     assert PASSWORD not in str(captured.value)
-    assert "9072" not in str(captured.value)
 
 
-def test_password_never_appears_in_exception_or_argv() -> None:
+def test_password_never_appears_in_exception_or_osascript_argv() -> None:
     def boom(_name: str, _bundle: Path) -> int:
         raise RuntimeError(f"window focus leaked {PASSWORD}")
 
     with pytest.raises(GuestDesktopLoginError) as captured:
         ensure_guest_desktop_login(
-            vm_name="abcd",
+            vm_name="wdil",
             vm_ip="192.0.2.10",
             bundle=BUNDLE,
-            read_console=lambda _user, _ip: "root",
+            read_state=lambda _user, _ip: _state("root", False),
             focus_window=boom,
             send_keys=lambda *_args: pytest.fail("must not type after focus failure"),
-            full_name_enabled=lambda _user, _ip: True,
             password_fn=lambda: PASSWORD,
         )
 
     assert captured.value.code == "GUEST_DESKTOP_WINDOW_TARGET_FAILED"
     assert PASSWORD not in str(captured.value)
-    source = HELPER.read_text(encoding="utf-8")
-    assert "osascript" not in source
-    assert "keystroke" not in source
-    assert "sys.argv" not in source
+    script = system_events_activate_script()
+    assert "System Events" in script
+    assert PASSWORD not in script
+    assert "keystroke" not in script
 
 
-def test_attempt_count_is_capped() -> None:
-    focuses: list[int] = []
+def test_system_events_activates_only_the_named_utm_window() -> None:
+    commands: list[list[str]] = []
 
-    with pytest.raises(GuestDesktopLoginError, match="GUEST_DESKTOP_LOGIN_TIMEOUT"):
-        ensure_guest_desktop_login(
-            vm_name="abcd",
-            vm_ip="192.0.2.10",
-            bundle=BUNDLE,
-            read_console=lambda _user, _ip: "root",
-            focus_window=lambda _name, _bundle: focuses.append(1) or 17,
-            send_keys=lambda _pid, _codes: None,
-            full_name_enabled=lambda _user, _ip: True,
-            password_fn=lambda: PASSWORD,
-            sleep_fn=lambda _seconds: None,
-            clock_fn=_clock([0.0, 50.0, 50.0, 100.0, 100.0]),
-            poll_timeout_seconds=1.0,
-            max_attempts=2,
-        )
+    def fake_run(command, **kwargs):
+        commands.append(list(command))
+        assert PASSWORD not in " ".join(str(part) for part in command)
+        assert PASSWORD not in str(kwargs.get("input") or "")
+        assert kwargs["input"] == system_events_activate_script()
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-    assert len(focuses) == 2
+    activate_utm_guest_window("wdil", run_command=fake_run)
+    assert commands == [["osascript", "-", "wdil"]]
+    assert "wdil" in utm_window_titles("wdil")
+    assert "UTM – wdil" in utm_window_titles("wdil")
 
 
 def test_username_defaults_to_vm_name_and_explicit_user_wins() -> None:
-    assert resolve_guest_username("abcd") == "abcd"
-    assert resolve_guest_username("abcd", "wxyz") == "wxyz"
+    assert resolve_guest_username("wdil") == "wdil"
+    assert resolve_guest_username("wdil", "abcd") == "abcd"
     with pytest.raises(GuestDesktopLoginError, match="GUEST_DESKTOP_USER_INVALID"):
-        resolve_guest_username("ABCD")
+        resolve_guest_username("WDIL")
 
     seen: list[str] = []
 
-    def read_console(user: str, _ip: str) -> str:
+    def read_state(user: str, _ip: str) -> GuestDesktopState:
         seen.append(user)
-        return user
+        return _state(user, True)
 
     result = ensure_guest_desktop_login(
-        vm_name="abcd",
+        vm_name="wdil",
         vm_ip="192.0.2.10",
         bundle=BUNDLE,
-        guest_user="wxyz",
-        read_console=read_console,
+        guest_user="abcd",
+        read_state=read_state,
         password_fn=lambda: PASSWORD,
     )
     assert result.status == "already_interactive"
-    assert seen == ["wxyz"]
+    assert seen == ["abcd"]
 
 
 def test_unknown_console_owner_is_rejected() -> None:
     with pytest.raises(GuestDesktopLoginError, match="GUEST_DESKTOP_CONSOLE_UNKNOWN"):
         ensure_guest_desktop_login(
-            vm_name="abcd",
+            vm_name="wdil",
             vm_ip="192.0.2.10",
             bundle=BUNDLE,
-            read_console=lambda _user, _ip: "demo",
+            read_state=lambda _user, _ip: _state("demo", False),
             password_fn=lambda: PASSWORD,
         )
 
@@ -235,20 +278,8 @@ def test_helper_does_not_write_guest_login_settings() -> None:
     assert "defaults write" not in source
     assert "autoLoginUser" not in source
     assert "kcpassword" not in source
-    assert classify_console_state("root", "abcd") == "login_window"
-    assert classify_console_state("", "abcd") == "login_window"
-    assert classify_console_state("abcd", "abcd") == "interactive"
+    assert classify_console_state("root", "wdil") == "login_window"
     assert redact_secrets(f"boom {PASSWORD}", (PASSWORD,)) == "boom <redacted>"
-
-
-def test_key_groups_are_keyboard_only_and_hide_password_digits() -> None:
-    groups = login_sequence_key_groups("abcd", PASSWORD, full_name_login=True)
-    assert groups[0] == username_key_codes("abcd") + (36,)
-    assert groups[1] == password_key_codes(PASSWORD)
-    assert PASSWORD not in repr(groups)
-    source = inspect.getsource(ensure_guest_desktop_login)
-    assert "_focus_guest_input" not in source
-    assert "focus_window" in source
 
 
 def test_clash_ip_calls_helper_after_start_and_before_console_state() -> None:
@@ -260,8 +291,6 @@ def test_clash_ip_calls_helper_after_start_and_before_console_state() -> None:
     assert prepare.index("ensure_exact_vm_started") < prepare.index(
         "self.ensure_guest_desktop()"
     )
-    assert "self.prepare_vm()" in run
-    assert "self.verify_identity()" in run
     assert run.index("self.prepare_vm()") < run.index("self.verify_identity()")
     assert "def _auto_login_console" not in source
     assert "osascript" not in source
