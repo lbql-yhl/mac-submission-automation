@@ -355,6 +355,7 @@ def test_runner_persists_ui_settings_and_uses_the_official_clash_lifecycle() -> 
     assert "socket='/tmp/verge/verge-mihomo.sock'" in text
     assert 'if self.console_state == "interactive":' in text
     assert "CLASH_HEADLESS_FALLBACK=verified" in text
+    assert "/bin/mkdir -p /tmp/verge" in text
     assert "HEADLESS_SERVICE_BYPASS" not in text
     assert "HEADLESS_CLASH_START" not in text
 
@@ -389,6 +390,10 @@ def test_headless_start_uses_one_root_lifecycle_with_bounded_repair(
     runner._start_official_clash()
 
     assert len(scripts) == 1
+    assert "/bin/mkdir -p /tmp/verge" in scripts[0]
+    assert scripts[0].index("/bin/mkdir -p /tmp/verge") < scripts[0].index(
+        "/usr/bin/nohup \"$core\""
+    )
     assert "/bin/launchctl bootout system" in scripts[0]
     assert "/bin/launchctl bootstrap system" not in scripts[0]
     assert "CLASH_HEADLESS_REPAIR=verified" in scripts[0]

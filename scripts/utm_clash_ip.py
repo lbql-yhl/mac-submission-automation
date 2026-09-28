@@ -1096,6 +1096,7 @@ base="/Users/$target_user/Library/Application Support/io.github.clash-verge-rev.
 config="$base/clash-verge-headless.yaml"
 socket='/tmp/verge/verge-mihomo.sock'
 plist='/Library/LaunchDaemons/io.github.clash-verge-rev.clash-verge-rev.service.plist'
+/bin/mkdir -p /tmp/verge
 if [ ! -x "$core" ] || [ ! -f "$config" ] || [ -L "$config" ]; then exit 4; fi
 repaired=0
 if [ -f "$plist" ] && [ ! -L "$plist" ] && /bin/launchctl print system/io.github.clash-verge-rev.clash-verge-rev.service >/dev/null 2>&1; then
