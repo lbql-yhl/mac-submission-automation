@@ -87,3 +87,11 @@ Only after the bounded budget is exhausted, or three read-only checks prove an e
 On success, immediately pass the same verified context and live session to the next skill inside the same segment. Do not wait for ordinary user confirmation. A segment-tail skill stops at the segment boundary unless the active request covers the following segment. `utm-24` is the only final workflow endpoint.
 
 Never hand off a partial, blocked, ambiguous, or result-unknown state.
+
+## Guest desktop login after cold start
+
+After a UTM guest is started and its IP is known, and before any skill classifies `console_state` or drives Aqua, the shared helper `scripts/utm_guest_desktop_login.py` inspects guest `/dev/console` and whether Finder is running. Success requires both the exact console user and a running Finder. If both are already true, it performs no input. If `/dev/console` is owned by `root` or empty (login window), the host activates the unique UTM display window whose title is the VM name (or `UTM – <name>`) through System Events, then types **username first, password second**. Username type-select + Return is the first attempt (user-list login window); a retry uses username + Tab + password for the name-and-password form. Password key codes are posted only to that UTM process and never enter osascript argv. The helper never enables auto-login and never writes guest loginwindow or account settings.
+
+The guest account defaults to the four-letter VM name. An explicit guest-user argument from the public entry wins when the skill already has one. The password is read only through host `SUBMISSION_GUEST_PASSWORD`; it must never appear in logs, exception text, or process argv. Missing or invalid password fails as `GUEST_DESKTOP_PASSWORD_MISSING` or `GUEST_DESKTOP_PASSWORD_INVALID`.
+
+Polling uses a 45-second timeout and a 3-second interval, with at most two typing attempts so a wrong password cannot lock the account. Exhausted attempts fail as `GUEST_DESKTOP_LOGIN_FAILED` and include only the last console user, Finder state, and attempt count. An unknown console owner is `GUEST_DESKTOP_CONSOLE_UNKNOWN`. Wired public entries: `utm-clash-ip` and `utm-login`.

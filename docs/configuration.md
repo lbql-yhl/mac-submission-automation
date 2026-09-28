@@ -18,7 +18,7 @@ git check-ignore -q .env
 
 | 键名 | 必需性 | 来源 | 用途 |
 |---|---|---|---|
-| `SUBMISSION_GUEST_PASSWORD` | 必需 | 当前 guest 账号 | 通过一次性 SSH askpass broker 进行 guest 认证；不进入子进程环境或日志 |
+| `SUBMISSION_GUEST_PASSWORD` | 必需 | 当前 guest 账号 | 通过一次性 SSH askpass broker 进行 guest 认证，并在冷启动登录窗口由宿主向精确 UTM 窗口按键登录桌面；不进入子进程环境或日志 |
 | `FEISHU_APP_ID` | 必需 | Feishu Open Platform 自建应用 | Bot/OpenAPI 应用身份 |
 | `FEISHU_APP_SECRET` | 必需 | Feishu Open Platform 自建应用 | 换取 tenant access token |
 | `FEISHU_VERIFICATION_TOKEN` | 条件 | Feishu 事件订阅 | 验证 URL challenge 并传给长连接事件分发器 |

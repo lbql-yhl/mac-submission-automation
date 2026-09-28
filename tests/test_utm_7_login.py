@@ -70,10 +70,13 @@ class UTM7LoginRunnerTests(unittest.TestCase):
         self.shared_patch = patch.object(
             runner, "SHARED_DIR", Path(self.shared_temp.name)
         )
+        self.desktop_patch = patch.object(runner, "_ensure_guest_desktop_session")
         self.password_patch.start()
         self.shared_patch.start()
+        self.desktop_mock = self.desktop_patch.start()
 
     def tearDown(self) -> None:
+        self.desktop_patch.stop()
         self.shared_patch.stop()
         self.password_patch.stop()
         self.shared_temp.cleanup()
@@ -777,6 +780,41 @@ class UTM7LoginRunnerTests(unittest.TestCase):
         self.assertIn('text field whose name is "Password"', source)
         self.assertIn("Modify Settings", source)
         self.assertIn("delay 3", source)
+
+    def test_run_ensures_guest_desktop_before_apple_account_work(self) -> None:
+        api = FakeNotion()
+
+        def fake_run(command, **kwargs):
+            if "apple_account_profile.py" in " ".join(str(part) for part in command):
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "name": "Jan Haren",
+                            "birth_year": 2000,
+                            "birth_month": 1,
+                            "birth_day": 1,
+                        }
+                    ).encode(),
+                    stderr=b"",
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch.object(runner, "api_from_env", return_value=api), patch.object(
+            runner.subprocess, "run", side_effect=fake_run
+        ):
+            result = runner.run(
+                SimpleNamespace(
+                    vm_user="test1",
+                    vm_ip="192.0.2.10",
+                    parent_title="Host",
+                    page_title="App-test1",
+                    guest_dir="/Users/example/Downloads",
+                )
+            )
+
+        self.assertEqual(result, 0)
+        self.desktop_mock.assert_called_once_with("test1", "192.0.2.10")
 
     def test_rejects_invalid_vm_user_before_notion_reads(self) -> None:
         api = FakeNotion()

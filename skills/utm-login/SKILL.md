@@ -20,6 +20,7 @@ Read and obey [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRA
   ```
 
 - Use only the unique account, phone, and current OTP resolved by the entry. Never log or pass credentials in argv.
+- Before Apple Account work, use the shared guest-desktop helper in the automation contract so a cold-start login window becomes interactive. Require `SUBMISSION_GUEST_PASSWORD`. Success needs the exact console user and a running Finder. Failure codes: `GUEST_DESKTOP_PASSWORD_MISSING`, `GUEST_DESKTOP_LOGIN_FAILED`, `GUEST_DESKTOP_CONSOLE_UNKNOWN`.
 - Retry the same account/session checkpoint at most three rounds using 0/5/10 seconds. CAPTCHA, lockout, ambiguous phone/OTP, or unknown security challenges remain external blockers.
 
 ## Result and handoff

@@ -315,6 +315,8 @@ def test_runner_is_command_only_and_can_start_only_the_exact_bound_vm() -> None:
     text = (ROOT / "scripts" / "utm_clash_ip.py").read_text(encoding="utf-8")
 
     assert "ensure_exact_vm_started" in text
+    assert "ensure_guest_desktop" in text
+    assert "ensure_guest_desktop_login" in text
     assert "require_exact_bound_vm" in text
     assert "--application-name" in text
     assert "--proxy-stdin" in text
@@ -353,6 +355,7 @@ def test_runner_persists_ui_settings_and_uses_the_official_clash_lifecycle() -> 
     assert "socket='/tmp/verge/verge-mihomo.sock'" in text
     assert 'if self.console_state == "interactive":' in text
     assert "CLASH_HEADLESS_FALLBACK=verified" in text
+    assert "/bin/mkdir -p /tmp/verge" in text
     assert "HEADLESS_SERVICE_BYPASS" not in text
     assert "HEADLESS_CLASH_START" not in text
 
@@ -387,6 +390,10 @@ def test_headless_start_uses_one_root_lifecycle_with_bounded_repair(
     runner._start_official_clash()
 
     assert len(scripts) == 1
+    assert "/bin/mkdir -p /tmp/verge" in scripts[0]
+    assert scripts[0].index("/bin/mkdir -p /tmp/verge") < scripts[0].index(
+        "/usr/bin/nohup \"$core\""
+    )
     assert "/bin/launchctl bootout system" in scripts[0]
     assert "/bin/launchctl bootstrap system" not in scripts[0]
     assert "CLASH_HEADLESS_REPAIR=verified" in scripts[0]
@@ -526,6 +533,83 @@ def test_configure_clash_prepares_fresh_app_data_before_config_write(
     runner.configure_clash()
 
     assert events == ["ensure-app-data", "stop", "write", "start", "runtime"]
+
+
+def test_prepare_vm_logs_into_guest_desktop_before_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from scripts.utm_clash_ip_target import BoundVM
+    from scripts.utm_guest_desktop_login import GuestDesktopLoginResult
+
+    runner = Runner(
+        vm_name="gdpd",
+        application_name="test",
+        vm_ip="192.0.2.10",
+        parent_title="host",
+        page_title="app-gdpd",
+        proxy_stdin=False,
+        database=tmp_path / "inventory.sqlite3",
+        images_dir=tmp_path / "images",
+    )
+    events: list[str] = []
+    bundle = tmp_path / "gdpd.utm"
+    monkeypatch.setattr(
+        clash_module,
+        "require_exact_bound_vm",
+        lambda *_args, **_kwargs: BoundVM(
+            "gdpd", bundle, "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", "00:11:22:33:44:55"
+        ),
+    )
+    monkeypatch.setattr(
+        clash_module,
+        "ensure_exact_vm_started",
+        lambda *_args, **_kwargs: events.append("started") or True,
+    )
+    monkeypatch.setattr(
+        clash_module, "resolve_exact_vm_ip", lambda *_args, **_kwargs: "192.0.2.20"
+    )
+
+    def fake_login(**kwargs):
+        events.append(f"login:{kwargs['vm_name']}:{kwargs['guest_user']}")
+        return GuestDesktopLoginResult("login_verified", "gdpd", True, 1)
+
+    monkeypatch.setattr(
+        "scripts.utm_guest_desktop_login.ensure_guest_desktop_login", fake_login
+    )
+
+    runner.prepare_vm()
+
+    assert events == ["started", "login:gdpd:gdpd"]
+    assert runner.vm_ip == "192.0.2.20"
+    assert runner.bundle_path == bundle
+
+
+def test_ensure_guest_desktop_skips_input_when_already_interactive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from scripts.utm_guest_desktop_login import GuestDesktopLoginResult
+
+    runner = Runner(
+        vm_name="gdpd",
+        application_name="test",
+        vm_ip="192.0.2.10",
+        parent_title="host",
+        page_title="app-gdpd",
+        proxy_stdin=False,
+        database=tmp_path / "inventory.sqlite3",
+        images_dir=tmp_path / "images",
+    )
+    runner.bundle_path = tmp_path / "gdpd.utm"
+
+    def fake_login(**kwargs):
+        assert kwargs["guest_user"] == "gdpd"
+        return GuestDesktopLoginResult("already_interactive", "gdpd", True, 0)
+
+    monkeypatch.setattr(
+        "scripts.utm_guest_desktop_login.ensure_guest_desktop_login", fake_login
+    )
+    runner.ensure_guest_desktop()
+    assert "GUEST_DESKTOP=already_interactive" in capsys.readouterr().out
 
 
 def test_fresh_headless_clash_data_stops_without_console_login(

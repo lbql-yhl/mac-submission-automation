@@ -374,6 +374,7 @@ class Runner:
         self.images_dir = images_dir
         self.console_state: str | None = None
         self.system_dns_fingerprint: str | None = None
+        self.bundle_path: Path | None = None
         self.profile_uid = f"{PROFILE_UID_PREFIX}{vm_name}Socks5"
 
         sys.path.insert(0, str(PROJECT_ROOT))
@@ -395,7 +396,29 @@ class Runner:
         if self.vm_ip is not None and self.vm_ip != resolved_ip:
             print("VM_IP_REFRESHED=verified")
         self.vm_ip = resolved_ip
+        self.bundle_path = target.bundle_path
         print("VM_IP_IDENTITY=verified")
+        self.ensure_guest_desktop()
+
+    def ensure_guest_desktop(self) -> None:
+        """Reach an interactive desktop before console_state is classified."""
+        from scripts.utm_guest_desktop_login import (
+            GuestDesktopLoginError,
+            ensure_guest_desktop_login,
+        )
+
+        if self.vm_ip is None or self.bundle_path is None:
+            raise ClashIPError("VM has not been prepared")
+        try:
+            result = ensure_guest_desktop_login(
+                vm_name=self.vm_name,
+                vm_ip=self.vm_ip,
+                bundle=self.bundle_path,
+                guest_user=self.vm_name,
+            )
+        except GuestDesktopLoginError as error:
+            raise ClashIPError(error.code) from None
+        print(f"GUEST_DESKTOP={result.status}")
 
     def _ssh_dependencies(self) -> tuple[Any, Any, Any]:
         from scripts.ssh_password import password_environment, scp_args, ssh_args
@@ -1073,6 +1096,7 @@ base="/Users/$target_user/Library/Application Support/io.github.clash-verge-rev.
 config="$base/clash-verge-headless.yaml"
 socket='/tmp/verge/verge-mihomo.sock'
 plist='/Library/LaunchDaemons/io.github.clash-verge-rev.clash-verge-rev.service.plist'
+/bin/mkdir -p /tmp/verge
 if [ ! -x "$core" ] || [ ! -f "$config" ] || [ -L "$config" ]; then exit 4; fi
 repaired=0
 if [ -f "$plist" ] && [ ! -L "$plist" ] && /bin/launchctl print system/io.github.clash-verge-rev.clash-verge-rev.service >/dev/null 2>&1; then

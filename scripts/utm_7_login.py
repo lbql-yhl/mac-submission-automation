@@ -37,6 +37,10 @@ from scripts.ssh_password import (  # noqa: E402
     password_environment,
     ssh_args as shared_ssh_args,
 )
+from scripts.utm_guest_desktop_login import (  # noqa: E402
+    GuestDesktopLoginError,
+    ensure_guest_desktop_login,
+)
 from services.host_config import guest_password  # noqa: E402
 from services.project_paths import PROJECT_ROOT, SHARED_DIR, VM_IMAGES_DIRS  # noqa: E402
 
@@ -621,10 +625,8 @@ def _ensure_remote_accessibility(user: str, ip: str) -> None:
     raise RuntimeError("guest Accessibility automatic recovery exhausted")
 
 
-def _recover_guest_desktop(user: str, ip: str) -> None:
-    """Enter the bound UTM guest desktop with the fixed VM credentials."""
+def _resolve_guest_bundle(user: str) -> Path:
     from scripts.utm_clash_ip_target import TargetVMError, resolve_existing_vm_bundle
-    from scripts.utm_post_clone_guest import enter_guest_desktop
     from scripts.vm_inventory import InventoryError, get_record
 
     registered: Path | None = None
@@ -638,12 +640,32 @@ def _recover_guest_desktop(user: str, ip: str) -> None:
         except (InventoryError, OSError, ValueError):
             registered = None
     try:
-        bundle = resolve_existing_vm_bundle(
+        return resolve_existing_vm_bundle(
             VM_IMAGES_DIRS, user, registered_bundle=registered
         )
     except TargetVMError as error:
         raise RuntimeError(f"UTM_GUEST_BUNDLE_NOT_FOUND: {user}.utm") from error
-    enter_guest_desktop(user, ip, user, bundle)
+
+
+def _ensure_guest_desktop_session(user: str, ip: str) -> None:
+    """Log the exact guest into Aqua when a cold start left the login window."""
+    try:
+        result = ensure_guest_desktop_login(
+            vm_name=user,
+            vm_ip=ip,
+            bundle=_resolve_guest_bundle(user),
+            guest_user=user,
+        )
+    except GuestDesktopLoginError as error:
+        raise RuntimeError(error.code) from None
+    print(f"GUEST_DESKTOP={result.status}")
+
+
+def _recover_guest_desktop(user: str, ip: str) -> None:
+    """Enter the bound UTM guest desktop with the fixed VM credentials."""
+    from scripts.utm_post_clone_guest import enter_guest_desktop
+
+    enter_guest_desktop(user, ip, user, _resolve_guest_bundle(user))
 
 
 def run(args: argparse.Namespace) -> int:
@@ -652,6 +674,7 @@ def run(args: argparse.Namespace) -> int:
     if not args.vm_ip or any(char not in "0123456789abcdefABCDEF:." for char in args.vm_ip):
         raise RuntimeError("vm-ip must be a literal IPv4/IPv6 address")
     configured_guest_password = guest_password()
+    _ensure_guest_desktop_session(args.vm_user, args.vm_ip)
 
     api = api_from_env()
     api.verify_parent(args.parent_title)
