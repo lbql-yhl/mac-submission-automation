@@ -231,6 +231,8 @@ def test_absolute_script_entry_starts_outside_project_directory(tmp_path: Path) 
     assert "--run-id RUN_ID" in result.stdout
     assert "--app-name APP_NAME" in result.stdout
     assert "--vm-name VM_NAME" in result.stdout
+    assert "--skip-missing" in result.stdout
+    assert "--fill-missing-with-test" in result.stdout
 
 
 def test_parse_feishu_wiki_url_returns_exact_node_table_and_view() -> None:
@@ -1832,3 +1834,354 @@ def test_bind_vm_allows_only_an_explicit_application_rename(tmp_path: Path) -> N
 
     assert claimed == "rbqi"
     assert get_inventory_record(database, "rbqi")["application_name"] == "RainyDay-Kids"
+
+
+def test_empty_domain_fields_still_raise_without_skip_missing() -> None:
+    fields = stringbed_fields()
+    fields["顶级域名"] = ""
+    fields["待购买域名"] = ""
+    fields["正式域名(app/h5/im/log)"] = ""
+
+    with pytest.raises(RuntimeError, match="Feishu field is empty: 待购买域名"):
+        build_registration_fields(fields)
+
+    missing_description = stringbed_fields()
+    missing_description["应用描述"] = ""
+    with pytest.raises(RuntimeError, match="Feishu field is empty: 应用描述"):
+        build_registration_fields(missing_description)
+
+    missing_privacy = stringbed_fields()
+    missing_privacy["隐私协议"] = None
+    with pytest.raises(RuntimeError, match="隐私协议"):
+        build_registration_fields(missing_privacy)
+
+
+def test_skip_missing_omits_empty_domain_fields_without_placeholders() -> None:
+    fields = stringbed_fields()
+    fields["顶级域名"] = ""
+    fields["待购买域名"] = ""
+    fields["正式域名(app/h5/im/log)"] = ""
+    skipped: list[str] = []
+
+    account, application = build_registration_fields(
+        fields,
+        skip_missing=True,
+        skipped_fields=skipped,
+    )
+
+    assert account["代码链接："] == "https://code.example.com/team/stringbed.git"
+    assert "顶级域名: " not in application
+    assert "正式域名: " not in application
+    assert application["应用名: "] == "StringBed"
+    assert application["正式包名: "] == "com.example.stringbed"
+    assert utm_notion.TEST_MISSING_VALUE not in application.values()
+    assert skipped == ["顶级域名", "待购买域名", "正式域名(app/h5/im/log)"]
+
+    desired = fill_template_fields(
+        APPLICATION_TEMPLATE,
+        APPLICATION_LABELS,
+        application,
+        multiline_labels=APPLICATION_MULTILINE_LABELS,
+    )
+    verify_registration_readback("", "", desired, desired)
+    readback = read_template_fields(
+        desired,
+        APPLICATION_LABELS,
+        multiline_labels=APPLICATION_MULTILINE_LABELS,
+    )
+    assert readback["顶级域名: "] == ""
+    assert readback["正式域名: "] == ""
+    assert readback["应用名: "] == "StringBed"
+    assert readback["正式包名: "] == "com.example.stringbed"
+
+
+def test_skip_missing_omits_empty_content_and_review_copy_fields() -> None:
+    fields = stringbed_fields()
+    fields.update(
+        {
+            "代理信息": "",
+            "代码 URL": None,
+            "应用类型": "",
+            "顶级域名": "",
+            "待购买域名": "",
+            "正式域名(app/h5/im/log)": "",
+            "隐私协议": None,
+            "用户协议": "",
+            "支持协议": None,
+            "应用描述": "",
+            "关键词": None,
+            "提审文案": None,
+        }
+    )
+    skipped: list[str] = []
+
+    account, application = build_registration_fields(
+        fields,
+        skip_missing=True,
+        skipped_fields=skipped,
+    )
+
+    assert account == {
+        "邮箱：": "stringbed@example.com",
+        "初始密码：": "Abc1D2ef",
+        "电话：": "+12025550123",
+        "电话短信接收平台：": "https://sms-display.example.test/?code=visible",
+        "ABA Routing Number：": "123456789",
+        "Account Number：": "9876543210",
+    }
+    assert application == {
+        "应用名: ": "StringBed",
+        "团队: ": "灵光",
+        "正式包名: ": "com.example.stringbed",
+    }
+    assert skipped == [
+        "代理信息",
+        "代码 URL",
+        "应用类型",
+        "顶级域名",
+        "待购买域名",
+        "正式域名(app/h5/im/log)",
+        "隐私协议",
+        "用户协议",
+        "支持协议",
+        "应用描述",
+        "关键词",
+        "提审文案",
+    ]
+    assert all(name in utm_notion.SKIPPABLE_EMPTY_FEISHU_FIELDS for name in skipped)
+
+    account_desired = fill_template_fields(ACCOUNT_TEMPLATE, ACCOUNT_LABELS, account)
+    application_desired = fill_template_fields(
+        APPLICATION_TEMPLATE,
+        APPLICATION_LABELS,
+        application,
+        multiline_labels=APPLICATION_MULTILINE_LABELS,
+    )
+    verify_registration_readback(
+        account_desired,
+        account_desired,
+        application_desired,
+        application_desired,
+    )
+    application_readback = read_template_fields(
+        application_desired,
+        APPLICATION_LABELS,
+        multiline_labels=APPLICATION_MULTILINE_LABELS,
+    )
+    assert application_readback["顶级域名: "] == ""
+    assert application_readback["正式域名: "] == ""
+    assert application_readback["隐私协议: "] == ""
+    assert application_readback["应用描述："] == ""
+    assert application_readback["Subtitle："] == ""
+
+
+def test_skip_missing_records_individual_review_copy_ids() -> None:
+    html = """
+    <h1>App Store Connect 复制区</h1>
+    <textarea id="subtitle">Only subtitle present</textarea>
+    <script>const values={ subtitle: 'Only subtitle present' };</script>
+    """
+    skipped: list[str] = []
+
+    _, application = build_registration_fields(
+        stringbed_fields(),
+        skip_missing=True,
+        skipped_fields=skipped,
+        download_review_copy=lambda _token: html,
+    )
+
+    assert application["Subtitle："] == "Only subtitle present"
+    assert "Promotional Text：" not in application
+    assert "Description：" not in application
+    assert "Keywords：" not in application
+    assert "App Review Notes：" not in application
+    assert skipped == [
+        "提审文案.promotional_text",
+        "提审文案.description",
+        "提审文案.keywords",
+        "提审文案.review_notes",
+    ]
+
+
+def test_skip_missing_still_requires_identity_fields() -> None:
+    missing_app = stringbed_fields()
+    missing_app["应用名"] = ""
+    with pytest.raises(RuntimeError, match="Feishu field is empty: 应用名"):
+        build_registration_fields(missing_app, skip_missing=True)
+
+    missing_bundle = stringbed_fields()
+    missing_bundle["正式包名"] = ""
+    with pytest.raises(RuntimeError, match="Feishu field is empty: 正式包名"):
+        build_registration_fields(missing_bundle, skip_missing=True)
+
+    missing_account = stringbed_fields()
+    missing_account["账号信息"] = None
+    with pytest.raises(RuntimeError, match="账号信息"):
+        build_registration_fields(missing_account, skip_missing=True)
+
+
+def test_skip_missing_rejects_combination_with_fill_missing() -> None:
+    with pytest.raises(RuntimeError, match=utm_notion.SKIP_MISSING_MUTEX_ERROR):
+        build_registration_fields(
+            stringbed_fields(),
+            fill_missing_with_test=True,
+            skip_missing=True,
+        )
+
+    parser = utm_notion.build_arg_parser()
+    with pytest.raises(SystemExit) as captured:
+        parser.parse_args(
+            ["--run-id", "run-1", "--skip-missing", "--fill-missing-with-test"]
+        )
+    assert captured.value.code == 2
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "utm_notion.py"),
+            "--run-id",
+            "run-1",
+            "--skip-missing",
+            "--fill-missing-with-test",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode != 0
+    combined = result.stderr + result.stdout
+    assert "not allowed" in combined or "cannot be combined" in combined
+    assert "skip-missing" in combined
+    assert "fill-missing-with-test" in combined
+
+
+def test_format_skipped_fields_marker_keeps_default_success_text() -> None:
+    assert utm_notion.format_skipped_fields_marker([]) == "status=verified"
+    assert utm_notion.format_skipped_fields_marker(["顶级域名", "待购买域名"]) == (
+        "status=verified;skipped_fields=顶级域名,待购买域名"
+    )
+
+
+def test_execute_skip_missing_keeps_template_rows_and_reports_skipped_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fields = stringbed_fields()
+    fields["顶级域名"] = ""
+    fields["待购买域名"] = ""
+    fields["正式域名(app/h5/im/log)"] = ""
+    fields["应用描述"] = ""
+    record = {"record_id": "rec-stringbed", "fields": fields}
+
+    class RecordingClient:
+        def __init__(self, *_args: str) -> None:
+            pass
+
+        def find_exact_record(self, **_kwargs: str) -> dict[str, object]:
+            return record
+
+        def preflight_vm_write(self, _record: dict[str, object]) -> None:
+            raise AssertionError("explicit VM must not require Feishu write preflight")
+
+        def ensure_vm(self, _record: dict[str, object], _vm_name: str) -> bool:
+            raise AssertionError("explicit VM must not require Feishu record update")
+
+    class RecordingNotion:
+        def __init__(self) -> None:
+            self.sections = {
+                "账号信息": ACCOUNT_TEMPLATE,
+                "应用信息": APPLICATION_TEMPLATE,
+            }
+            self.writes: list[dict[str, str]] = []
+
+        def verify_parent(self, _host: str) -> None:
+            return None
+
+        def create_registration_copy(self, _title: str) -> tuple[str, bool]:
+            return ("page-stringbed", True)
+
+        def read_section(self, _title: str, name: str) -> str:
+            return self.sections[name]
+
+        def write_registration_sections(
+            self,
+            _title: str,
+            sections: dict[str, str],
+        ) -> dict[str, bool]:
+            self.writes.append(dict(sections))
+            changed = {
+                key: self.sections[key] != value for key, value in sections.items()
+            }
+            self.sections.update(sections)
+            return changed
+
+    notion = RecordingNotion()
+    runtime_config = utm_notion.UtmNotionRuntimeConfig(
+        feishu_app_id=FIXTURE_APP_IDENTIFIER,
+        feishu_app_secret=FIXTURE_APP_CREDENTIAL,
+        configured_source=("wiki", TARGET_FEISHU_WIKI_URL, "", ""),
+        notion_token=FIXTURE_NOTION_CREDENTIAL,
+        notion_root_page_id=FIXTURE_NOTION_ROOT,
+        notion_template_title="template",
+        host_title="Mac Studio",
+        images_dir=tmp_path,
+    )
+    monkeypatch.setattr(
+        utm_notion,
+        "load_runtime_config",
+        lambda **_kwargs: runtime_config,
+    )
+    monkeypatch.setattr(utm_notion, "get_tenant_access_token", lambda *_args: "token")
+    monkeypatch.setattr(
+        utm_notion,
+        "resolve_utm_notion_source",
+        lambda *_args: ("app", "tbl5OOyYst8BqZ6x", "vewjQVBVeu"),
+    )
+    monkeypatch.setattr(utm_notion, "FeishuBitableClient", RecordingClient)
+    monkeypatch.setattr(utm_notion, "_bind_vm", lambda *_args, **_kwargs: "gvby")
+    monkeypatch.setattr(
+        utm_notion,
+        "notion_api_from_config",
+        lambda _config: notion,
+    )
+
+    result = utm_notion.execute(
+        app_name="StringBed",
+        vm_name="gvby",
+        skip_missing=True,
+    )
+
+    assert result["status"] == "verified"
+    assert result["skipped_fields"] == [
+        "顶级域名",
+        "待购买域名",
+        "正式域名(app/h5/im/log)",
+        "应用描述",
+    ]
+    assert utm_notion.format_skipped_fields_marker(result["skipped_fields"]) == (
+        "status=verified;skipped_fields=顶级域名,待购买域名,正式域名(app/h5/im/log),应用描述"
+    )
+    application_text = notion.sections["应用信息"]
+    assert "顶级域名: \n" in application_text
+    assert "正式域名: \n" in application_text
+    assert "应用描述：\n" in application_text
+    assert "test" not in application_text
+    assert "应用名: StringBed" in application_text
+    assert "正式包名: com.example.stringbed" in application_text
+    readback = read_template_fields(
+        application_text,
+        APPLICATION_LABELS,
+        multiline_labels=APPLICATION_MULTILINE_LABELS,
+    )
+    assert readback["顶级域名: "] == ""
+    assert readback["正式域名: "] == ""
+    assert readback["应用描述："] == ""
+
+
+def test_execute_rejects_skip_missing_with_fill_missing() -> None:
+    with pytest.raises(RuntimeError, match=utm_notion.SKIP_MISSING_MUTEX_ERROR):
+        utm_notion.execute(
+            app_name="StringBed",
+            fill_missing_with_test=True,
+            skip_missing=True,
+        )

@@ -167,6 +167,30 @@ EMAIL_SUFFIX_PATTERN = (
 )
 GENERATED_PASSWORD_LENGTH = 16
 TEST_MISSING_VALUE = "test"
+SKIP_MISSING_MUTEX_ERROR = (
+    "--skip-missing cannot be combined with --fill-missing-with-test"
+)
+# Feishu fields that raise when empty and may be omitted under --skip-missing.
+# 应用名, 正式包名, and 账号信息 stay required: they identify the page and login.
+SKIPPABLE_EMPTY_FEISHU_FIELDS = (
+    "代理信息",
+    "代码 URL",
+    "应用类型",
+    "顶级域名",
+    "待购买域名",
+    "正式域名(app/h5/im/log)",
+    "隐私协议",
+    "用户协议",
+    "支持协议",
+    "应用描述",
+    "关键词",
+    REVIEW_COPY_FIELD,
+)
+REQUIRED_IDENTITY_FEISHU_FIELDS = (
+    "应用名",
+    "正式包名",
+    "账号信息",
+)
 
 
 @dataclass(frozen=True)
@@ -494,11 +518,19 @@ def load_review_copy_fields(
     *,
     download_review_copy: Callable[[str], str],
     fill_missing_with_test: bool = False,
+    skip_missing: bool = False,
+    skipped: list[str] | None = None,
 ) -> dict[str, str]:
+    if fill_missing_with_test and skip_missing:
+        raise RuntimeError(SKIP_MISSING_MUTEX_ERROR)
     file_token = review_copy_file_token(cell)
     if not file_token:
         if fill_missing_with_test:
             return {label: TEST_MISSING_VALUE for label in REVIEW_COPY_LABELS}
+        if skip_missing:
+            if skipped is not None:
+                skipped.append(REVIEW_COPY_FIELD)
+            return {}
         raise RuntimeError(f"Feishu field is empty: {REVIEW_COPY_FIELD}")
     parsed = parse_review_copy_html(download_review_copy(file_token))
     loaded: dict[str, str] = {}
@@ -508,6 +540,9 @@ def load_review_copy_fields(
             loaded[label] = value
         elif fill_missing_with_test:
             loaded[label] = TEST_MISSING_VALUE
+        elif skip_missing:
+            if skipped is not None:
+                skipped.append(f"{REVIEW_COPY_FIELD}.{textarea_id}")
         else:
             raise RuntimeError(f"Feishu field is empty: {REVIEW_COPY_FIELD}.{textarea_id}")
     return loaded
@@ -518,11 +553,17 @@ def _required_text(
     name: str,
     *,
     fill_missing_with_test: bool = False,
+    skip_missing: bool = False,
+    skipped: list[str] | None = None,
 ) -> str:
     value = _cell_text(fields.get(name))
     if not value:
         if fill_missing_with_test:
             return TEST_MISSING_VALUE
+        if skip_missing:
+            if skipped is not None:
+                skipped.append(name)
+            return ""
         raise RuntimeError(f"Feishu field is empty: {name}")
     return value
 
@@ -533,7 +574,9 @@ def _http_url(
     *,
     required: bool = True,
     fill_missing_with_test: bool = False,
-) -> str:
+    skip_missing: bool = False,
+    skipped: list[str] | None = None,
+) -> str | None:
     cell = fields.get(name)
     value = ""
     if isinstance(cell, dict) and isinstance(cell.get("link"), str):
@@ -542,6 +585,10 @@ def _http_url(
         value = _cell_text(cell)
     if not value and fill_missing_with_test:
         return TEST_MISSING_VALUE
+    if not value and skip_missing:
+        if skipped is not None:
+            skipped.append(name)
+        return None
     if not value and not required:
         return ""
     parsed = urllib.parse.urlsplit(value)
@@ -1090,10 +1137,15 @@ def build_registration_fields(
     fields: dict[str, object],
     *,
     fill_missing_with_test: bool = False,
+    skip_missing: bool = False,
+    skipped_fields: list[str] | None = None,
     download_review_copy: Callable[[str], str] | None = None,
     feishu_token: str = "",
     feishu_table_id: str = "",
 ) -> tuple[dict[str, str], dict[str, str]]:
+    if fill_missing_with_test and skip_missing:
+        raise RuntimeError(SKIP_MISSING_MUTEX_ERROR)
+    skipped = skipped_fields if skipped_fields is not None else []
     app_name = _required_text(fields, "应用名")
     if fill_missing_with_test and not _cell_text(fields.get("账号信息")):
         account_info = {
@@ -1104,25 +1156,23 @@ def build_registration_fields(
         }
     else:
         account_info = parse_account_info(fields.get("账号信息"))
+    proxy_ip: str | None
+    proxy_port: str | None
+    proxy_username: str | None
+    proxy_password: str | None
     if fill_missing_with_test and not _cell_text(fields.get("代理信息")):
         proxy_ip = proxy_port = proxy_username = proxy_password = TEST_MISSING_VALUE
+    elif skip_missing and not _cell_text(fields.get("代理信息")):
+        skipped.append("代理信息")
+        proxy_ip = proxy_port = proxy_username = proxy_password = None
     else:
         proxy_ip, proxy_port, proxy_username, proxy_password = _proxy_parts(fields)
     code_url = _http_url(
         fields,
         "代码 URL",
         fill_missing_with_test=fill_missing_with_test,
-    )
-
-    category_source = _required_text(
-        fields,
-        "应用类型",
-        fill_missing_with_test=fill_missing_with_test,
-    )
-    category = (
-        TEST_MISSING_VALUE
-        if category_source == TEST_MISSING_VALUE and fill_missing_with_test
-        else normalize_category(category_source)
+        skip_missing=skip_missing,
+        skipped=skipped,
     )
 
     def text(name: str) -> str:
@@ -1130,64 +1180,114 @@ def build_registration_fields(
             fields,
             name,
             fill_missing_with_test=fill_missing_with_test,
+            skip_missing=skip_missing,
+            skipped=skipped,
         )
+
+    category_source = text("应用类型")
+    if category_source:
+        category = (
+            TEST_MISSING_VALUE
+            if category_source == TEST_MISSING_VALUE and fill_missing_with_test
+            else normalize_category(category_source)
+        )
+    else:
+        category = ""
 
     top_level_domain = _cell_text(fields.get("顶级域名"))
     if not top_level_domain:
-        top_level_domain = text("待购买域名")
+        if (
+            skip_missing
+            and not fill_missing_with_test
+            and not _cell_text(fields.get("待购买域名"))
+        ):
+            skipped.append("顶级域名")
+            skipped.append("待购买域名")
+        else:
+            top_level_domain = _required_text(
+                fields,
+                "待购买域名",
+                fill_missing_with_test=fill_missing_with_test,
+            )
     formal_domains = _cell_text(fields.get("正式域名(app/h5/im/log)"))
     if not formal_domains:
-        formal_domains = (
-            TEST_MISSING_VALUE
-            if fill_missing_with_test or top_level_domain == TEST_MISSING_VALUE
-            else "\n".join(
+        if fill_missing_with_test or top_level_domain == TEST_MISSING_VALUE:
+            formal_domains = TEST_MISSING_VALUE
+        elif top_level_domain:
+            formal_domains = "\n".join(
                 f"{prefix}.{top_level_domain}"
                 for prefix in ("app", "h5", "im", "log")
             )
-        )
+        elif skip_missing:
+            skipped.append("正式域名(app/h5/im/log)")
 
     account = {
         "邮箱：": account_info["email"],
         "初始密码：": account_info["initial_password"],
         "电话：": account_info["phone"],
         "电话短信接收平台：": account_info["sms_url"],
-        "代理ip:": proxy_ip,
-        "代理端口:": proxy_port,
-        "代理用户名：": proxy_username,
-        "代理用户密码：": proxy_password,
-        "代码链接：": code_url,
     }
+    if proxy_ip is not None:
+        account["代理ip:"] = proxy_ip
+        account["代理端口:"] = proxy_port
+        account["代理用户名："] = proxy_username
+        account["代理用户密码："] = proxy_password
+    if code_url is not None:
+        account["代码链接："] = code_url
     routing_number = _cell_text(fields.get("ABA Routing Number"))
     account_number = _cell_text(fields.get("Account Number"))
     if routing_number:
         account["ABA Routing Number："] = routing_number
     if account_number:
         account["Account Number："] = account_number
-    application = {
+    application: dict[str, str] = {
         "应用名: ": app_name,
         "团队: ": "灵光",
-        "顶级域名: ": top_level_domain,
-        "正式包名: ": text("正式包名"),
-        "正式域名: ": formal_domains,
-        "隐私协议: ": _http_url(
+        "正式包名: ": _required_text(
             fields,
-            "隐私协议",
+            "正式包名",
             fill_missing_with_test=fill_missing_with_test,
         ),
-        "用户协议: ": _http_url(
-            fields,
-            "用户协议",
-            fill_missing_with_test=fill_missing_with_test,
-        ),
-        "支持链接: ": _http_url(
-            fields,
-            "支持协议",
-            fill_missing_with_test=fill_missing_with_test,
-        ),
-        "应用类型：": category,
-        "应用描述：": text("应用描述"),
-        "关键词:": text("关键词"),
     }
+    if top_level_domain:
+        application["顶级域名: "] = top_level_domain
+    if formal_domains:
+        application["正式域名: "] = formal_domains
+    privacy = _http_url(
+        fields,
+        "隐私协议",
+        fill_missing_with_test=fill_missing_with_test,
+        skip_missing=skip_missing,
+        skipped=skipped,
+    )
+    if privacy is not None:
+        application["隐私协议: "] = privacy
+    terms = _http_url(
+        fields,
+        "用户协议",
+        fill_missing_with_test=fill_missing_with_test,
+        skip_missing=skip_missing,
+        skipped=skipped,
+    )
+    if terms is not None:
+        application["用户协议: "] = terms
+    support = _http_url(
+        fields,
+        "支持协议",
+        fill_missing_with_test=fill_missing_with_test,
+        skip_missing=skip_missing,
+        skipped=skipped,
+    )
+    if support is not None:
+        application["支持链接: "] = support
+    if category:
+        application["应用类型："] = category
+    description = text("应用描述")
+    if description:
+        application["应用描述："] = description
+    keywords = text("关键词")
+    if keywords:
+        application["关键词:"] = keywords
 
     def _download(file_token: str) -> str:
         if download_review_copy is not None:
@@ -1203,6 +1303,8 @@ def build_registration_fields(
             fields.get(REVIEW_COPY_FIELD),
             download_review_copy=_download,
             fill_missing_with_test=fill_missing_with_test,
+            skip_missing=skip_missing,
+            skipped=skipped,
         )
     )
     return account, application
@@ -1523,6 +1625,13 @@ def _bind_vm(
     return current
 
 
+def format_skipped_fields_marker(skipped_fields: Iterable[str]) -> str:
+    names = [str(name).strip() for name in skipped_fields if str(name).strip()]
+    if not names:
+        return "status=verified"
+    return "status=verified;skipped_fields=" + ",".join(names)
+
+
 def execute(
     *,
     run_id: str = "",
@@ -1530,8 +1639,11 @@ def execute(
     vm_name: str = "",
     database: Path = DEFAULT_DATABASE,
     fill_missing_with_test: bool = False,
+    skip_missing: bool = False,
     rename_from: str = "",
 ) -> dict[str, object]:
+    if fill_missing_with_test and skip_missing:
+        raise RuntimeError(SKIP_MISSING_MUTEX_ERROR)
     explicit_vm_name = bool(vm_name)
     runtime_config = load_runtime_config(env_path=PROJECT_ROOT / ".env")
     token = get_tenant_access_token(
@@ -1549,9 +1661,12 @@ def execute(
     )
     record = client.find_exact_record(run_id=run_id, app_name=app_name)
     fields = dict(record.get("fields") or {})
+    skipped_fields: list[str] = []
     account_replacements, application_replacements = build_registration_fields(
         fields,
         fill_missing_with_test=fill_missing_with_test,
+        skip_missing=skip_missing,
+        skipped_fields=skipped_fields,
         feishu_token=token,
         feishu_table_id=table_id,
     )
@@ -1623,6 +1738,7 @@ def execute(
             for label, value in {**account_replacements, **application_replacements}.items()
             if fill_missing_with_test and value == TEST_MISSING_VALUE
         ),
+        "skipped_fields": list(skipped_fields),
         "account_bytes": len(account_after.encode("utf-8")),
         "account_sha256": hashlib.sha256(account_after.encode("utf-8")).hexdigest(),
         "application_bytes": len(application_after.encode("utf-8")),
@@ -1632,30 +1748,55 @@ def execute(
     }
 
 
-def main() -> int:
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--run-id", default="")
     target.add_argument("--app-name", default="")
     parser.add_argument("--vm-name", default="")
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
-    parser.add_argument("--fill-missing-with-test", action="store_true")
+    missing_mode = parser.add_mutually_exclusive_group()
+    missing_mode.add_argument("--fill-missing-with-test", action="store_true")
+    missing_mode.add_argument(
+        "--skip-missing",
+        action="store_true",
+        help=(
+            "Skip Feishu fields that are empty instead of failing. "
+            "Leave the matching Notion template rows blank. "
+            "Mutually exclusive with --fill-missing-with-test."
+        ),
+    )
     parser.add_argument("--rename-from", default="")
+    return parser
+
+
+def main() -> int:
+    parser = build_arg_parser()
     args = parser.parse_args()
-    return run_clean_cli(
-        skill_name="utm-notion",
-        success_marker="status=verified",
-        operation=lambda: (
+    if args.fill_missing_with_test and args.skip_missing:
+        parser.error(SKIP_MISSING_MUTEX_ERROR)
+    result: dict[str, object] = {}
+
+    def operation() -> int:
+        result.update(
             execute(
                 run_id=args.run_id,
                 app_name=args.app_name,
                 vm_name=args.vm_name,
                 database=args.database,
                 fill_missing_with_test=args.fill_missing_with_test,
+                skip_missing=args.skip_missing,
                 rename_from=args.rename_from,
-            ),
-            0,
-        )[1],
+            )
+        )
+        return 0
+
+    return run_clean_cli(
+        skill_name="utm-notion",
+        success_marker=lambda: format_skipped_fields_marker(
+            [str(item) for item in list(result.get("skipped_fields") or [])]
+        ),
+        operation=operation,
         preserve_error_detail=True,
     )
 

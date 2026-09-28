@@ -39,5 +39,14 @@ def test_utm_notion_skill_is_a_thin_deterministic_script_entry() -> None:
 def test_utm_notion_skill_keeps_missing_value_fill_explicitly_test_only() -> None:
     text = SKILL.read_text(encoding="utf-8")
 
-    assert "--fill-missing-with-test" not in text
+    assert "--skip-missing" in text
+    assert "skipped_fields" in text
+    assert "mutually exclusive" in text
+    assert "--fill-missing-with-test" in text
+    assert text.count("--fill-missing-with-test") == 1
     assert "映射必填字段" not in text
+    public_entry = (
+        'python3 "$PROJECT_ROOT/scripts/utm_notion.py" --run-id \'<run-id>\''
+    )
+    assert public_entry in text
+    assert "--skip-missing" not in public_entry
