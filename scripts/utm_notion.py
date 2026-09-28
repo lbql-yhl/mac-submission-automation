@@ -1185,6 +1185,16 @@ def build_registration_fields(
     return account, application
 
 
+def verify_registration_readback(
+    account_after: str,
+    account_desired: str,
+    application_after: str,
+    application_desired: str,
+) -> None:
+    if account_after != account_desired or application_after != application_desired:
+        raise RuntimeError("Notion independent registration readback mismatch")
+
+
 def fill_template_fields(
     template: str,
     labels: Iterable[str],
@@ -1224,6 +1234,43 @@ def fill_template_fields(
                 raise RuntimeError(f"Notion field must remain one line: {label}")
             lines[start] = label + value
     return "\n".join(lines)
+
+
+def read_template_fields(
+    template: str,
+    labels: Iterable[str],
+    *,
+    multiline_labels: set[str] | None = None,
+) -> dict[str, str]:
+    """Read filled Notion section values with the same single-row ranges as fill."""
+    ordered_labels = tuple(labels)
+    multiline = multiline_labels or set()
+    lines = template.split("\n")
+    indexes: dict[str, int] = {}
+    for label in ordered_labels:
+        matches = [index for index, line in enumerate(lines) if line.startswith(label)]
+        if len(matches) != 1:
+            raise RuntimeError(f"Notion template label count must be one: {label}")
+        indexes[label] = matches[0]
+    positions = [indexes[label] for label in ordered_labels]
+    if positions != sorted(positions):
+        raise RuntimeError("Notion template labels are out of order")
+
+    values: dict[str, str] = {}
+    for position, label in enumerate(ordered_labels):
+        start = indexes[label]
+        if label in multiline:
+            end = (
+                indexes[ordered_labels[position + 1]]
+                if position + 1 < len(ordered_labels)
+                else len(lines)
+            )
+            first = lines[start][len(label) :]
+            rest = lines[start + 1 : end]
+            values[label] = "\n".join([first, *rest]) if rest else first
+        else:
+            values[label] = lines[start][len(label) :]
+    return values
 
 
 def _stable_field_value(value: object) -> object:
@@ -1529,8 +1576,12 @@ def execute(
     notion.verify_parent(runtime_config.host_title)
     account_after = notion.read_section(page_title, "账号信息")
     application_after = notion.read_section(page_title, "应用信息")
-    if account_after != account_desired or application_after != application_desired:
-        raise RuntimeError("Notion independent registration readback mismatch")
+    verify_registration_readback(
+        account_after,
+        account_desired,
+        application_after,
+        application_desired,
+    )
 
     return {
         "action": "utm-notion",

@@ -26,7 +26,9 @@ from scripts.utm_notion import (
     fill_template_fields,
     normalize_category,
     parse_review_copy_html,
+    read_template_fields,
     review_copy_file_token,
+    verify_registration_readback,
 )
 
 
@@ -155,8 +157,8 @@ Subtitle：
 Promotional Text：
 Description：
 Keywords：
-App Review Notes：
-"""
+App Review Notes："""
+
 
 def review_copy_attachment(
     file_token: str = REVIEW_COPY_FILE_TOKEN,
@@ -411,12 +413,26 @@ def test_application_labels_append_review_copy_after_existing_fields() -> None:
     assert APPLICATION_LABELS[-5:] == REVIEW_COPY_LABELS
     assert APPLICATION_LABELS.index("关键词:") < APPLICATION_LABELS.index("Subtitle：")
     assert APPLICATION_LABELS.index("应用描述：") < APPLICATION_LABELS.index("关键词:")
+    assert "关键词:" not in APPLICATION_MULTILINE_LABELS
     assert APPLICATION_MULTILINE_LABELS == {
         "正式域名: ",
         "应用描述：",
         "Description：",
         "App Review Notes：",
     }
+
+
+def test_application_template_matches_live_sixteen_line_block() -> None:
+    lines = APPLICATION_TEMPLATE.split("\n")
+
+    assert len(APPLICATION_LABELS) == 16
+    assert len(lines) == 16
+    assert not APPLICATION_TEMPLATE.endswith("\n")
+    assert lines == [
+        label if label != "团队: " else "团队: 灵光" for label in APPLICATION_LABELS
+    ]
+    for label, line in zip(APPLICATION_LABELS, lines, strict=True):
+        assert line.startswith(label)
 
 
 def test_parse_review_copy_html_reads_textarea_ids_and_unescapes_entities() -> None:
@@ -600,9 +616,37 @@ def test_fill_template_fields_writes_multiline_review_copy_labels() -> None:
         "\n"
         "Please check the demo account."
     )
+    assert not application_text.endswith("\n")
 
 
-def test_build_registration_fields_uses_url_cell_link_when_sms_url_is_not_inline() -> None:
+def test_application_section_readback_preserves_multiline_fields_without_trailing_newline() -> None:
+    _account, application = build_registration_fields(stringbed_fields())
+    desired = fill_template_fields(
+        APPLICATION_TEMPLATE,
+        APPLICATION_LABELS,
+        application,
+        multiline_labels=APPLICATION_MULTILINE_LABELS,
+    )
+
+    assert not desired.endswith("\n")
+    verify_registration_readback("", "", desired, desired)
+    with pytest.raises(RuntimeError, match="readback mismatch"):
+        verify_registration_readback("", "", desired + "\n", desired)
+
+    readback = read_template_fields(
+        desired,
+        APPLICATION_LABELS,
+        multiline_labels=APPLICATION_MULTILINE_LABELS,
+    )
+    for label, value in application.items():
+        assert readback[label] == value
+    assert readback["应用描述："] == application["应用描述："]
+    assert readback["关键词:"] == "生活,记录"
+    assert readback["App Review Notes："] == application["App Review Notes："]
+    for label in REVIEW_COPY_LABELS:
+        assert label not in readback["关键词:"]
+        assert application[label] not in readback["关键词:"]
+        assert readback[label] == application[label]
     fields = stringbed_fields()
     fields["账号信息"] = {
         "text": "stringbed@example.comAbc1D2ef🇩🇪德国2025550123",
