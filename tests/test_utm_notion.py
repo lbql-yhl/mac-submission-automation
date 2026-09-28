@@ -20,14 +20,20 @@ from scripts.utm_notion import (
     ACCOUNT_LABELS,
     APPLICATION_LABELS,
     APPLICATION_MULTILINE_LABELS,
+    REVIEW_COPY_LABELS,
     FeishuBitableClient,
     build_registration_fields,
     fill_template_fields,
     normalize_category,
+    parse_review_copy_html,
+    read_template_fields,
+    review_copy_file_token,
+    verify_registration_readback,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = ROOT / "tests" / "fixtures"
 TARGET_FEISHU_WIKI_URL = (
     "https://qv0zc1dq6qy.feishu.cn/wiki/C70TwyJevipDZakMTWYcusTwnhh"
     "?table=tbl5OOyYst8BqZ6x&view=vewjQVBVeu"
@@ -36,6 +42,44 @@ FIXTURE_APP_IDENTIFIER = "app-id"
 FIXTURE_APP_CREDENTIAL = "app-secret"
 FIXTURE_NOTION_CREDENTIAL = "notion-token"
 FIXTURE_NOTION_ROOT = "notion-root"
+REVIEW_COPY_FILE_TOKEN = "file-review-copy-synthetic"
+REVIEW_COPY_HTML_FULL = (FIXTURES / "review_copy_full.html").read_text(encoding="utf-8")
+REVIEW_COPY_HTML_MERGED = (
+    FIXTURES / "review_copy_merged_heading.html"
+).read_text(encoding="utf-8")
+REVIEW_COPY_HTML_BY_TOKEN = {
+    REVIEW_COPY_FILE_TOKEN: REVIEW_COPY_HTML_FULL,
+    "file-review-copy-merged": REVIEW_COPY_HTML_MERGED,
+}
+REAL_DOWNLOAD_REVIEW_COPY_HTML = utm_notion.download_review_copy_html
+
+FULL_REVIEW_COPY_PARSED = {
+    "Subtitle：": "Daily notes in one glance",
+    "Promotional Text：": "Capture, tag, and revisit what matters",
+    "Description：": (
+        "StringBed keeps short notes and reminders together.\n"
+        "\n"
+        "Write freely, then find them later. It doesn't keep drafts."
+    ),
+    "Keywords：": "notes, reminders, tags",
+    "App Review Notes：": (
+        "This submission uses placeholder review notes\n"
+        "for a synthetic fixture only.\n"
+        "\n"
+        "Please check the demo account."
+    ),
+}
+MERGED_REVIEW_COPY_PARSED = {
+    "Subtitle：": "Compact habit tracker",
+    "Promotional Text：": "Track a habit without extra noise",
+    "Description：": (
+        "FixtureApp records one habit a day.\n"
+        "\n"
+        "Open it, tap once, and close it."
+    ),
+    "Keywords：": "habit, tracker, daily",
+    "App Review Notes：": "Synthetic review notes for the merged-heading fixture.",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +88,17 @@ def isolate_utm_notion_feishu_source(
 ) -> None:
     for key in utm_notion.UTM_NOTION_FEISHU_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def mock_review_copy_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        utm_notion,
+        "download_review_copy_html",
+        lambda file_token, token="": REVIEW_COPY_HTML_BY_TOKEN.get(
+            file_token, REVIEW_COPY_HTML_FULL
+        ),
+    )
 
 
 def test_account_template_keeps_one_explicit_year_month_day_birthday_label() -> None:
@@ -98,7 +153,30 @@ APPLICATION_TEMPLATE = """应用名:
 应用类型：
 应用描述：
 关键词:
-"""
+Subtitle：
+Promotional Text：
+Description：
+Keywords：
+App Review Notes："""
+
+
+def review_copy_attachment(
+    file_token: str = REVIEW_COPY_FILE_TOKEN,
+    name: str = "StringBed-review-copy-synthetic.html",
+) -> list[dict[str, object]]:
+    return [
+        {
+            "file_token": file_token,
+            "name": name,
+            "size": 2048,
+            "tmp_url": "https://expired.example.test/tmp/review-copy",
+            "type": "text/html",
+            "url": (
+                "https://open.feishu.cn/open-apis/drive/v1/medias/"
+                f"{file_token}/download"
+            ),
+        }
+    ]
 
 
 def stringbed_fields() -> dict[str, object]:
@@ -128,6 +206,7 @@ def stringbed_fields() -> dict[str, object]:
         "应用类型": "生活方式-LIFESTYLE",
         "应用描述": "第一段\n\n第二段",
         "关键词": "生活,记录",
+        "提审文案": review_copy_attachment(),
         "虚拟机": "",
     }
 
@@ -326,10 +405,248 @@ def test_build_registration_fields_uses_verified_sources_and_fixed_team() -> Non
         "应用类型：": "LIFESTYLE",
         "应用描述：": "第一段\n\n第二段",
         "关键词:": "生活,记录",
+        **FULL_REVIEW_COPY_PARSED,
     }
 
 
-def test_build_registration_fields_uses_url_cell_link_when_sms_url_is_not_inline() -> None:
+def test_application_labels_append_review_copy_after_existing_fields() -> None:
+    assert APPLICATION_LABELS[-5:] == REVIEW_COPY_LABELS
+    assert APPLICATION_LABELS.index("关键词:") < APPLICATION_LABELS.index("Subtitle：")
+    assert APPLICATION_LABELS.index("应用描述：") < APPLICATION_LABELS.index("关键词:")
+    assert "关键词:" not in APPLICATION_MULTILINE_LABELS
+    assert APPLICATION_MULTILINE_LABELS == {
+        "正式域名: ",
+        "应用描述：",
+        "Description：",
+        "App Review Notes：",
+    }
+
+
+def test_application_template_matches_live_sixteen_line_block() -> None:
+    lines = APPLICATION_TEMPLATE.split("\n")
+
+    assert len(APPLICATION_LABELS) == 16
+    assert len(lines) == 16
+    assert not APPLICATION_TEMPLATE.endswith("\n")
+    assert lines == [
+        label if label != "团队: " else "团队: 灵光" for label in APPLICATION_LABELS
+    ]
+    for label, line in zip(APPLICATION_LABELS, lines, strict=True):
+        assert line.startswith(label)
+
+
+def test_parse_review_copy_html_reads_textarea_ids_and_unescapes_entities() -> None:
+    parsed = parse_review_copy_html(REVIEW_COPY_HTML_FULL)
+
+    assert parsed == FULL_REVIEW_COPY_PARSED
+    assert "MUST-NOT-USE-THIS-SUBTITLE" not in parsed.values()
+    assert "MUST-NOT-USE-THIS-DESCRIPTION" not in parsed.values()
+    assert "GAMES" not in parsed.values()
+    assert "doesn't" in parsed["Description："]
+    assert "whats_new" not in parsed
+    assert "copyright" not in parsed
+    assert "Name" not in parsed
+
+
+def test_parse_review_copy_html_accepts_merged_heading_without_copyright() -> None:
+    assert parse_review_copy_html(REVIEW_COPY_HTML_MERGED) == MERGED_REVIEW_COPY_PARSED
+
+
+def test_parse_review_copy_html_falls_back_to_values_json_for_a_missing_textarea() -> None:
+    html = """
+    <h1>App Store Connect 复制区</h1>
+    <textarea id="subtitle">From textarea</textarea>
+    <script>
+    const values={
+      subtitle: 'From JSON subtitle',
+      promotional_text: 'From JSON promo',
+      description: 'From JSON description',
+      keywords: 'json, keywords',
+      review_notes: 'From JSON notes'
+    };
+    </script>
+    """
+
+    assert parse_review_copy_html(html) == {
+        "Subtitle：": "From textarea",
+        "Promotional Text：": "From JSON promo",
+        "Description：": "From JSON description",
+        "Keywords：": "json, keywords",
+        "App Review Notes：": "From JSON notes",
+    }
+
+
+def test_review_copy_file_token_reads_attachment_list_shape() -> None:
+    cell = review_copy_attachment()
+    assert review_copy_file_token(cell) == REVIEW_COPY_FILE_TOKEN
+    assert review_copy_file_token(None) == ""
+    assert review_copy_file_token([]) == ""
+    assert review_copy_file_token("not-an-attachment") == ""
+    with pytest.raises(RuntimeError, match="exactly one attachment"):
+        review_copy_file_token(review_copy_attachment() + review_copy_attachment("other"))
+
+
+def test_download_review_copy_html_gets_media_by_file_token_not_tmp_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_request(
+        url: str,
+        *,
+        method: str = "GET",
+        token: str | None = None,
+        json_body: object = None,
+        label: str,
+    ) -> bytes:
+        seen.update(url=url, method=method, token=token, label=label)
+        return REVIEW_COPY_HTML_FULL.encode("utf-8")
+
+    monkeypatch.setattr(utm_notion, "_feishu_media_request", fake_request)
+    html = REAL_DOWNLOAD_REVIEW_COPY_HTML(
+        REVIEW_COPY_FILE_TOKEN, token="tenant-token"
+    )
+
+    assert html == REVIEW_COPY_HTML_FULL
+    assert seen == {
+        "url": (
+            "https://open.feishu.cn/open-apis/drive/v1/medias/"
+            f"{REVIEW_COPY_FILE_TOKEN}/download"
+        ),
+        "method": "GET",
+        "token": "tenant-token",
+        "label": "提审文案 attachment download",
+    }
+    assert "expired.example.test" not in str(seen["url"])
+
+
+def test_build_registration_fields_downloads_review_copy_by_file_token() -> None:
+    seen: list[str] = []
+
+    def download(file_token: str) -> str:
+        seen.append(file_token)
+        return REVIEW_COPY_HTML_FULL
+
+    _, application = build_registration_fields(
+        stringbed_fields(),
+        download_review_copy=download,
+    )
+
+    assert seen == [REVIEW_COPY_FILE_TOKEN]
+    assert application["应用描述："] == "第一段\n\n第二段"
+    assert application["关键词:"] == "生活,记录"
+    for label, value in FULL_REVIEW_COPY_PARSED.items():
+        assert application[label] == value
+
+
+def test_build_registration_fields_maps_merged_heading_attachment() -> None:
+    fields = stringbed_fields()
+    fields["提审文案"] = review_copy_attachment(
+        "file-review-copy-merged",
+        "FixtureApp-review-copy-synthetic.html",
+    )
+
+    _, application = build_registration_fields(fields)
+
+    assert application["应用描述："] == "第一段\n\n第二段"
+    assert application["关键词:"] == "生活,记录"
+    for label, value in MERGED_REVIEW_COPY_PARSED.items():
+        assert application[label] == value
+
+
+def test_missing_review_copy_attachment_follows_required_field_policy() -> None:
+    fields = stringbed_fields()
+    fields["提审文案"] = None
+
+    with pytest.raises(RuntimeError, match="提审文案"):
+        build_registration_fields(fields)
+
+    _, application = build_registration_fields(fields, fill_missing_with_test=True)
+    for label in REVIEW_COPY_LABELS:
+        assert application[label] == "test"
+    assert application["应用描述："] == "第一段\n\n第二段"
+    assert application["关键词:"] == "生活,记录"
+
+
+def test_missing_review_copy_id_follows_required_field_policy() -> None:
+    html = """
+    <h1>App Store Connect 复制区</h1>
+    <textarea id="subtitle">Only subtitle present</textarea>
+    <script>const values={ subtitle: 'Only subtitle present' };</script>
+    """
+    fields = stringbed_fields()
+
+    with pytest.raises(RuntimeError, match=r"提审文案\.promotional_text"):
+        build_registration_fields(fields, download_review_copy=lambda _token: html)
+
+    _, application = build_registration_fields(
+        fields,
+        fill_missing_with_test=True,
+        download_review_copy=lambda _token: html,
+    )
+    assert application["Subtitle："] == "Only subtitle present"
+    assert application["Promotional Text："] == "test"
+    assert application["Description："] == "test"
+    assert application["Keywords："] == "test"
+    assert application["App Review Notes："] == "test"
+    assert application["应用描述："] == "第一段\n\n第二段"
+    assert application["关键词:"] == "生活,记录"
+
+
+def test_fill_template_fields_writes_multiline_review_copy_labels() -> None:
+    _account, application = build_registration_fields(stringbed_fields())
+
+    application_text = fill_template_fields(
+        APPLICATION_TEMPLATE,
+        APPLICATION_LABELS,
+        application,
+        multiline_labels=APPLICATION_MULTILINE_LABELS,
+    )
+
+    assert "应用描述：第一段\n\n第二段\n关键词:生活,记录\n" in application_text
+    assert application_text.endswith(
+        "Subtitle：Daily notes in one glance\n"
+        "Promotional Text：Capture, tag, and revisit what matters\n"
+        "Description：StringBed keeps short notes and reminders together.\n"
+        "\n"
+        "Write freely, then find them later. It doesn't keep drafts.\n"
+        "Keywords：notes, reminders, tags\n"
+        "App Review Notes：This submission uses placeholder review notes\n"
+        "for a synthetic fixture only.\n"
+        "\n"
+        "Please check the demo account."
+    )
+    assert not application_text.endswith("\n")
+
+
+def test_application_section_readback_preserves_multiline_fields_without_trailing_newline() -> None:
+    _account, application = build_registration_fields(stringbed_fields())
+    desired = fill_template_fields(
+        APPLICATION_TEMPLATE,
+        APPLICATION_LABELS,
+        application,
+        multiline_labels=APPLICATION_MULTILINE_LABELS,
+    )
+
+    assert not desired.endswith("\n")
+    verify_registration_readback("", "", desired, desired)
+    with pytest.raises(RuntimeError, match="readback mismatch"):
+        verify_registration_readback("", "", desired + "\n", desired)
+
+    readback = read_template_fields(
+        desired,
+        APPLICATION_LABELS,
+        multiline_labels=APPLICATION_MULTILINE_LABELS,
+    )
+    for label, value in application.items():
+        assert readback[label] == value
+    assert readback["应用描述："] == application["应用描述："]
+    assert readback["关键词:"] == "生活,记录"
+    assert readback["App Review Notes："] == application["App Review Notes："]
+    for label in REVIEW_COPY_LABELS:
+        assert label not in readback["关键词:"]
+        assert application[label] not in readback["关键词:"]
+        assert readback[label] == application[label]
     fields = stringbed_fields()
     fields["账号信息"] = {
         "text": "stringbed@example.comAbc1D2ef🇩🇪德国2025550123",
@@ -877,6 +1194,10 @@ def test_build_registration_fields_fills_missing_values_with_test_only_when_requ
     assert application["应用名: "] == "StringBed"
     assert application["正式域名: "] == "test"
     assert application["应用类型："] == "LIFESTYLE"
+    assert application["应用描述："] == "第一段\n\n第二段"
+    assert application["关键词:"] == "生活,记录"
+    for label, value in FULL_REVIEW_COPY_PARSED.items():
+        assert application[label] == value
 
 
 def test_build_registration_fields_rejects_an_invalid_agreement_url() -> None:
@@ -954,7 +1275,16 @@ log.example.com
 
 第二段
 关键词:生活,记录
-"""
+Subtitle：Daily notes in one glance
+Promotional Text：Capture, tag, and revisit what matters
+Description：StringBed keeps short notes and reminders together.
+
+Write freely, then find them later. It doesn't keep drafts.
+Keywords：notes, reminders, tags
+App Review Notes：This submission uses placeholder review notes
+for a synthetic fixture only.
+
+Please check the demo account."""
 
 
 class FakeFeishu(FeishuBitableClient):

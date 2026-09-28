@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import html
 import json
@@ -14,8 +15,9 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -43,6 +45,7 @@ from services.utm_notion_source import (
     configured_feishu_source as configured_utm_notion_source,
     resolve_feishu_source as resolve_utm_notion_source,
 )
+from scripts.utm_env_download_assets import _request as _feishu_media_request
 
 
 DEFAULT_DATABASE = PROJECT_ROOT / "runtime" / "vm-inventory.sqlite3"
@@ -81,8 +84,41 @@ APPLICATION_LABELS = (
     "应用类型：",
     "应用描述：",
     "关键词:",
+    "Subtitle：",
+    "Promotional Text：",
+    "Description：",
+    "Keywords：",
+    "App Review Notes：",
 )
-APPLICATION_MULTILINE_LABELS = {"正式域名: ", "应用描述："}
+APPLICATION_MULTILINE_LABELS = {
+    "正式域名: ",
+    "应用描述：",
+    "Description：",
+    "App Review Notes：",
+}
+REVIEW_COPY_FIELD = "提审文案"
+REVIEW_COPY_LABELS = (
+    "Subtitle：",
+    "Promotional Text：",
+    "Description：",
+    "Keywords：",
+    "App Review Notes：",
+)
+REVIEW_COPY_TEXTAREA_IDS = (
+    ("subtitle", "Subtitle："),
+    ("promotional_text", "Promotional Text："),
+    ("description", "Description："),
+    ("keywords", "Keywords："),
+    ("review_notes", "App Review Notes："),
+)
+_REVIEW_COPY_ID_TO_LABEL = dict(REVIEW_COPY_TEXTAREA_IDS)
+_REVIEW_COPY_VALUES_PATTERN = re.compile(r"const\s+values\s*=\s*\{", re.IGNORECASE)
+_REVIEW_COPY_JS_STRING = re.compile(
+    r"(?P<key>name|subtitle|promotional_text|description|whats_new|"
+    r"keywords|copyright|review_notes)\s*:\s*"
+    r"(?P<quote>['\"])(?P<value>(?:\\.|(?!(?P=quote)).)*)(?P=quote)",
+    re.DOTALL,
+)
 
 CATEGORY_MAP = {
     "报刊杂志": "MAGAZINES_AND_NEWSPAPERS",
@@ -294,6 +330,169 @@ def _cell_text(value: object) -> str:
     if isinstance(value, list):
         return "".join(_cell_text(item) for item in value).strip()
     return ""
+
+
+class _ReviewCopyTextareaParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.values: dict[str, str] = {}
+        self._current_id: str | None = None
+        self._chunks: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "textarea":
+            return
+        textarea_id = dict(attrs).get("id")
+        if textarea_id in _REVIEW_COPY_ID_TO_LABEL:
+            self._current_id = textarea_id
+            self._chunks = []
+
+    def handle_data(self, data: str) -> None:
+        if self._current_id is not None:
+            self._chunks.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "textarea" and self._current_id is not None:
+            self.values[self._current_id] = "".join(self._chunks)
+            self._current_id = None
+            self._chunks = []
+
+
+def _normalize_review_copy_value(label: str, value: str) -> str:
+    normalized = html.unescape(value).replace("\r\n", "\n").replace("\r", "\n")
+    if label in APPLICATION_MULTILINE_LABELS:
+        lines = [line.rstrip() for line in normalized.split("\n")]
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return "\n".join(lines)
+    return " ".join(normalized.split())
+
+
+def _slice_balanced_braces(text: str, start: int) -> str:
+    if start >= len(text) or text[start] != "{":
+        return ""
+    depth = 0
+    in_quote = ""
+    escape = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_quote:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == in_quote:
+                in_quote = ""
+            continue
+        if char in {'"', "'"}:
+            in_quote = char
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return ""
+
+
+def _js_string_value(quote: str, raw: str) -> str:
+    try:
+        decoded = ast.literal_eval(quote + raw + quote)
+    except (SyntaxError, ValueError):
+        decoded = raw.replace("\\n", "\n").replace("\\'", "'").replace('\\"', '"')
+    if not isinstance(decoded, str):
+        decoded = raw
+    return html.unescape(decoded)
+
+
+def _review_copy_values_json(html_text: str) -> dict[str, str]:
+    match = _REVIEW_COPY_VALUES_PATTERN.search(html_text)
+    if not match:
+        return {}
+    blob = _slice_balanced_braces(html_text, match.end() - 1)
+    if not blob:
+        return {}
+    parsed: dict[str, str] = {}
+    for item in _REVIEW_COPY_JS_STRING.finditer(blob):
+        parsed[item.group("key")] = _js_string_value(
+            item.group("quote"), item.group("value")
+        )
+    return parsed
+
+
+def parse_review_copy_html(html_text: str) -> dict[str, str]:
+    """Parse review-copy fields from an App Store Connect 复制区 HTML attachment.
+
+    Prefer textarea elements by stable id. If a mapped id is missing or empty,
+    fall back to the same key in ``const values={...}``. Never read the later
+    「不复制、只检查」 section or heading label text.
+    """
+    parser = _ReviewCopyTextareaParser()
+    parser.feed(html_text)
+    parser.close()
+    fallback = _review_copy_values_json(html_text)
+    parsed: dict[str, str] = {}
+    for textarea_id, label in REVIEW_COPY_TEXTAREA_IDS:
+        raw = parser.values.get(textarea_id, "")
+        if not raw.strip():
+            raw = fallback.get(textarea_id, "")
+        value = _normalize_review_copy_value(label, raw)
+        if value:
+            parsed[label] = value
+    return parsed
+
+
+def review_copy_file_token(cell: object) -> str:
+    if not isinstance(cell, list):
+        return ""
+    tokens = [
+        str(item.get("file_token") or "").strip()
+        for item in cell
+        if isinstance(item, dict) and str(item.get("file_token") or "").strip()
+    ]
+    if len(tokens) > 1:
+        raise RuntimeError("Feishu 提审文案 must contain exactly one attachment")
+    return tokens[0] if tokens else ""
+
+
+def download_review_copy_html(file_token: str, *, token: str) -> str:
+    if not file_token or not token:
+        raise RuntimeError("Feishu 提审文案 download is not configured")
+    quoted = urllib.parse.quote(file_token, safe="")
+    url = f"{API_BASE}/drive/v1/medias/{quoted}/download"
+    body = _feishu_media_request(
+        url,
+        token=token,
+        label="提审文案 attachment download",
+    )
+    return body.decode("utf-8")
+
+
+def load_review_copy_fields(
+    cell: object,
+    *,
+    download_review_copy: Callable[[str], str],
+    fill_missing_with_test: bool = False,
+) -> dict[str, str]:
+    file_token = review_copy_file_token(cell)
+    if not file_token:
+        if fill_missing_with_test:
+            return {label: TEST_MISSING_VALUE for label in REVIEW_COPY_LABELS}
+        raise RuntimeError(f"Feishu field is empty: {REVIEW_COPY_FIELD}")
+    parsed = parse_review_copy_html(download_review_copy(file_token))
+    loaded: dict[str, str] = {}
+    for textarea_id, label in REVIEW_COPY_TEXTAREA_IDS:
+        value = parsed.get(label, "")
+        if value:
+            loaded[label] = value
+        elif fill_missing_with_test:
+            loaded[label] = TEST_MISSING_VALUE
+        else:
+            raise RuntimeError(f"Feishu field is empty: {REVIEW_COPY_FIELD}.{textarea_id}")
+    return loaded
 
 
 def _required_text(
@@ -873,6 +1072,8 @@ def build_registration_fields(
     fields: dict[str, object],
     *,
     fill_missing_with_test: bool = False,
+    download_review_copy: Callable[[str], str] | None = None,
+    feishu_token: str = "",
 ) -> tuple[dict[str, str], dict[str, str]]:
     app_name = _required_text(fields, "应用名")
     if fill_missing_with_test and not _cell_text(fields.get("账号信息")):
@@ -968,7 +1169,30 @@ def build_registration_fields(
         "应用描述：": text("应用描述"),
         "关键词:": text("关键词"),
     }
+
+    def _download(file_token: str) -> str:
+        if download_review_copy is not None:
+            return download_review_copy(file_token)
+        return download_review_copy_html(file_token, token=feishu_token)
+
+    application.update(
+        load_review_copy_fields(
+            fields.get(REVIEW_COPY_FIELD),
+            download_review_copy=_download,
+            fill_missing_with_test=fill_missing_with_test,
+        )
+    )
     return account, application
+
+
+def verify_registration_readback(
+    account_after: str,
+    account_desired: str,
+    application_after: str,
+    application_desired: str,
+) -> None:
+    if account_after != account_desired or application_after != application_desired:
+        raise RuntimeError("Notion independent registration readback mismatch")
 
 
 def fill_template_fields(
@@ -1010,6 +1234,43 @@ def fill_template_fields(
                 raise RuntimeError(f"Notion field must remain one line: {label}")
             lines[start] = label + value
     return "\n".join(lines)
+
+
+def read_template_fields(
+    template: str,
+    labels: Iterable[str],
+    *,
+    multiline_labels: set[str] | None = None,
+) -> dict[str, str]:
+    """Read filled Notion section values with the same single-row ranges as fill."""
+    ordered_labels = tuple(labels)
+    multiline = multiline_labels or set()
+    lines = template.split("\n")
+    indexes: dict[str, int] = {}
+    for label in ordered_labels:
+        matches = [index for index, line in enumerate(lines) if line.startswith(label)]
+        if len(matches) != 1:
+            raise RuntimeError(f"Notion template label count must be one: {label}")
+        indexes[label] = matches[0]
+    positions = [indexes[label] for label in ordered_labels]
+    if positions != sorted(positions):
+        raise RuntimeError("Notion template labels are out of order")
+
+    values: dict[str, str] = {}
+    for position, label in enumerate(ordered_labels):
+        start = indexes[label]
+        if label in multiline:
+            end = (
+                indexes[ordered_labels[position + 1]]
+                if position + 1 < len(ordered_labels)
+                else len(lines)
+            )
+            first = lines[start][len(label) :]
+            rest = lines[start + 1 : end]
+            values[label] = "\n".join([first, *rest]) if rest else first
+        else:
+            values[label] = lines[start][len(label) :]
+    return values
 
 
 def _stable_field_value(value: object) -> object:
@@ -1268,6 +1529,7 @@ def execute(
     account_replacements, application_replacements = build_registration_fields(
         fields,
         fill_missing_with_test=fill_missing_with_test,
+        feishu_token=token,
     )
     exact_app_name = application_replacements["应用名: "]
     if not explicit_vm_name:
@@ -1314,8 +1576,12 @@ def execute(
     notion.verify_parent(runtime_config.host_title)
     account_after = notion.read_section(page_title, "账号信息")
     application_after = notion.read_section(page_title, "应用信息")
-    if account_after != account_desired or application_after != application_desired:
-        raise RuntimeError("Notion independent registration readback mismatch")
+    verify_registration_readback(
+        account_after,
+        account_desired,
+        application_after,
+        application_desired,
+    )
 
     return {
         "action": "utm-notion",
