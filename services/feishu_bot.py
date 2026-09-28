@@ -975,7 +975,11 @@ def resolve_submission_application(app_name: str, config: Config) -> dict[str, s
         )
         record = client.find_exact_record(app_name=app_name)
         fields = dict(record.get("fields") or {})
-        utm_notion.build_registration_fields(fields)
+        utm_notion.build_registration_fields(
+            fields,
+            feishu_token=token,
+            feishu_table_id=table_id,
+        )
         exact_app = utm_notion._cell_text(fields.get("应用名"))
         run_id = utm_notion._cell_text(fields.get("Run ID"))
         vm_name = utm_notion._cell_text(fields.get("虚拟机"))

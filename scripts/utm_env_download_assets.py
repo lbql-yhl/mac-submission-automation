@@ -272,6 +272,11 @@ def _request(
                 raise ValueError(f"{label} exceeds the download size limit")
             body = response.read(MAX_DOWNLOAD_BYTES + 1)
     except urllib.error.HTTPError as exc:
+        if exc.code == 400:
+            raise RuntimeError(
+                f"{label} failed with HTTP 400; "
+                "advanced-permission extra may be required"
+            ) from None
         raise RuntimeError(f"{label} failed with HTTP {exc.code}") from None
     except urllib.error.URLError as exc:
         raise RuntimeError(

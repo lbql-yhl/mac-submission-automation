@@ -651,7 +651,11 @@ def test_application_resolution_returns_base_run_id(
         "resolve_utm_notion_source",
         lambda *_args: ("base-token", "table-id", "view-id"),
     )
-    monkeypatch.setattr(utm_notion, "build_registration_fields", lambda _fields: ({}, {}))
+    monkeypatch.setattr(
+        utm_notion,
+        "build_registration_fields",
+        lambda _fields, **_kwargs: ({}, {}),
+    )
 
     class FakeClient:
         def __init__(self, *_args: object) -> None:
