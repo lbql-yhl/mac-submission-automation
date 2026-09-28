@@ -20,10 +20,12 @@ from scripts.utm_notion import (
     ACCOUNT_LABELS,
     APPLICATION_LABELS,
     APPLICATION_MULTILINE_LABELS,
+    REVIEW_COPY_LABELS,
     FeishuBitableClient,
     build_registration_fields,
     fill_template_fields,
     normalize_category,
+    parse_review_copy,
 )
 
 
@@ -98,7 +100,37 @@ APPLICATION_TEMPLATE = """应用名:
 应用类型：
 应用描述：
 关键词:
+Subtitle：
+Promotional Text：
+Description：
+Keywords：
+App Review Notes：
 """
+
+SAMPLE_REVIEW_COPY = """Subtitle：Daily notes in one glance
+Promotional Text：Capture, tag, and revisit what matters
+Description：StringBed keeps short notes and reminders together.
+
+Write freely, then find them later.
+Keywords：notes, reminders, tags
+App Review Notes：This submission uses placeholder review notes
+for a synthetic fixture only.
+"""
+
+SAMPLE_REVIEW_COPY_PARSED = {
+    "Subtitle：": "Daily notes in one glance",
+    "Promotional Text：": "Capture, tag, and revisit what matters",
+    "Description：": (
+        "StringBed keeps short notes and reminders together.\n"
+        "\n"
+        "Write freely, then find them later."
+    ),
+    "Keywords：": "notes, reminders, tags",
+    "App Review Notes：": (
+        "This submission uses placeholder review notes\n"
+        "for a synthetic fixture only."
+    ),
+}
 
 
 def stringbed_fields() -> dict[str, object]:
@@ -327,6 +359,124 @@ def test_build_registration_fields_uses_verified_sources_and_fixed_team() -> Non
         "应用描述：": "第一段\n\n第二段",
         "关键词:": "生活,记录",
     }
+    for label in REVIEW_COPY_LABELS:
+        assert label not in application
+
+
+def test_application_labels_append_review_copy_after_existing_fields() -> None:
+    assert APPLICATION_LABELS[-5:] == REVIEW_COPY_LABELS
+    assert APPLICATION_LABELS.index("关键词:") < APPLICATION_LABELS.index("Subtitle：")
+    assert APPLICATION_LABELS.index("应用描述：") < APPLICATION_LABELS.index("关键词:")
+    assert APPLICATION_MULTILINE_LABELS == {
+        "正式域名: ",
+        "应用描述：",
+        "Description：",
+        "App Review Notes：",
+    }
+
+
+def test_parse_review_copy_reads_labeled_segments() -> None:
+    assert parse_review_copy(SAMPLE_REVIEW_COPY) == SAMPLE_REVIEW_COPY_PARSED
+
+
+def test_parse_review_copy_accepts_reordered_ascii_and_bold_labels() -> None:
+    cell = (
+        "**keywords:** tagged, ordered\n"
+        "APP REVIEW NOTES：First note line\n"
+        "second note line\n"
+        "subtitle: Reordered subtitle\n"
+        "**Promotional Text**：Reordered promo\n"
+        "description：First description line\n"
+        "Second description line\n"
+    )
+
+    assert parse_review_copy(cell) == {
+        "Keywords：": "tagged, ordered",
+        "App Review Notes：": "First note line\nsecond note line",
+        "Subtitle：": "Reordered subtitle",
+        "Promotional Text：": "Reordered promo",
+        "Description：": "First description line\nSecond description line",
+    }
+
+
+def test_parse_review_copy_missing_labels_yield_no_value() -> None:
+    assert parse_review_copy("") == {}
+    assert parse_review_copy(None) == {}
+    assert parse_review_copy("no recognized review-copy labels") == {}
+    assert parse_review_copy("Subtitle：Only subtitle present") == {
+        "Subtitle：": "Only subtitle present"
+    }
+
+
+def test_parse_review_copy_accepts_rich_text_fragments() -> None:
+    cell = [
+        {"text": "Subtitle：Fragment subtitle"},
+        {"text": "Promotional Text：Fragment promo"},
+        {"text": "Description：Fragment line one\nFragment line two"},
+        {"text": "Keywords：fragment, keywords"},
+        {"text": "App Review Notes：Fragment notes"},
+    ]
+
+    assert parse_review_copy(cell) == {
+        "Subtitle：": "Fragment subtitle",
+        "Promotional Text：": "Fragment promo",
+        "Description：": "Fragment line one\nFragment line two",
+        "Keywords：": "fragment, keywords",
+        "App Review Notes：": "Fragment notes",
+    }
+
+
+def test_build_registration_fields_maps_review_copy_without_changing_existing_fields() -> None:
+    fields = stringbed_fields()
+    fields["提审文案"] = SAMPLE_REVIEW_COPY
+
+    _, application = build_registration_fields(fields)
+
+    assert application["应用描述："] == "第一段\n\n第二段"
+    assert application["关键词:"] == "生活,记录"
+    assert application["应用名: "] == "StringBed"
+    for label, value in SAMPLE_REVIEW_COPY_PARSED.items():
+        assert application[label] == value
+
+
+def test_build_registration_fields_fills_missing_review_copy_labels_with_test() -> None:
+    fields = stringbed_fields()
+    fields["提审文案"] = "Subtitle：Present subtitle"
+
+    _, application = build_registration_fields(fields, fill_missing_with_test=True)
+
+    assert application["Subtitle："] == "Present subtitle"
+    assert application["Promotional Text："] == "test"
+    assert application["Description："] == "test"
+    assert application["Keywords："] == "test"
+    assert application["App Review Notes："] == "test"
+    assert application["应用描述："] == "第一段\n\n第二段"
+    assert application["关键词:"] == "生活,记录"
+
+
+def test_fill_template_fields_writes_multiline_review_copy_labels() -> None:
+    account, application = build_registration_fields(
+        {**stringbed_fields(), "提审文案": SAMPLE_REVIEW_COPY}
+    )
+
+    application_text = fill_template_fields(
+        APPLICATION_TEMPLATE,
+        APPLICATION_LABELS,
+        application,
+        multiline_labels=APPLICATION_MULTILINE_LABELS,
+    )
+
+    assert "应用描述：第一段\n\n第二段\n关键词:生活,记录\n" in application_text
+    assert application_text.endswith(
+        "Subtitle：Daily notes in one glance\n"
+        "Promotional Text：Capture, tag, and revisit what matters\n"
+        "Description：StringBed keeps short notes and reminders together.\n"
+        "\n"
+        "Write freely, then find them later.\n"
+        "Keywords：notes, reminders, tags\n"
+        "App Review Notes：This submission uses placeholder review notes\n"
+        "for a synthetic fixture only."
+    )
 
 
 def test_build_registration_fields_uses_url_cell_link_when_sms_url_is_not_inline() -> None:
@@ -877,6 +1027,10 @@ def test_build_registration_fields_fills_missing_values_with_test_only_when_requ
     assert application["应用名: "] == "StringBed"
     assert application["正式域名: "] == "test"
     assert application["应用类型："] == "LIFESTYLE"
+    assert application["应用描述："] == "第一段\n\n第二段"
+    assert application["关键词:"] == "生活,记录"
+    for label in REVIEW_COPY_LABELS:
+        assert application[label] == "test"
 
 
 def test_build_registration_fields_rejects_an_invalid_agreement_url() -> None:
@@ -954,6 +1108,11 @@ log.example.com
 
 第二段
 关键词:生活,记录
+Subtitle：
+Promotional Text：
+Description：
+Keywords：
+App Review Notes：
 """
 
 

@@ -27,6 +27,9 @@ def test_utm_notion_skill_is_a_thin_deterministic_script_entry() -> None:
     assert "## Result and handoff" in text
     assert "status=verified" in text
     assert "utm-clash-ip" in text
+    assert "提审文案" in text
+    assert "Subtitle：" in text
+    assert "unconfirmed" in text
     for redundant in ("Computer Use", "浏览器", "剪贴板", "视觉", "LIFESTYLE", "初始密码"):
         assert redundant not in text
 

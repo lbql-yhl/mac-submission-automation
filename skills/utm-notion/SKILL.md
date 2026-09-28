@@ -20,6 +20,7 @@ Read and obey [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRA
   Standalone selector: `python3 "$PROJECT_ROOT/scripts/utm_notion.py" --app-name '<app-name>' --vm-name '<vm-name>'`.
 - Require one matching parent and one `<app-name>-<vm-name>` page. Re-read all written fields and preserve unrelated page content.
 - Retry the same entry and identity at most three rounds using 0/5/10 seconds; never select a nearby or newest page.
+- Feishu `提审文案` is parsed into `应用信息` labels `Subtitle：`, `Promotional Text：`, `Description：`, `Keywords：`, and `App Review Notes：`. Assumed cell format, **unconfirmed against a live cell**: those English labels with `:` or `：`, optional surrounding whitespace or markdown bold, case-insensitive, any order; each value runs until the next recognized label. `Description：` and `App Review Notes：` may be multi-line. Missing labels yield no value. Existing `应用描述：` and `关键词:` sources stay unchanged.
 
 ## Result and handoff
 

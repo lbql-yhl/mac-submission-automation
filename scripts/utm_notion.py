@@ -81,8 +81,45 @@ APPLICATION_LABELS = (
     "应用类型：",
     "应用描述：",
     "关键词:",
+    "Subtitle：",
+    "Promotional Text：",
+    "Description：",
+    "Keywords：",
+    "App Review Notes：",
 )
-APPLICATION_MULTILINE_LABELS = {"正式域名: ", "应用描述："}
+APPLICATION_MULTILINE_LABELS = {
+    "正式域名: ",
+    "应用描述：",
+    "Description：",
+    "App Review Notes：",
+}
+REVIEW_COPY_FIELD = "提审文案"
+REVIEW_COPY_LABELS = (
+    "Subtitle：",
+    "Promotional Text：",
+    "Description：",
+    "Keywords：",
+    "App Review Notes：",
+)
+_REVIEW_COPY_NAME_TO_LABEL = {
+    "subtitle": "Subtitle：",
+    "promotional text": "Promotional Text：",
+    "description": "Description：",
+    "keywords": "Keywords：",
+    "app review notes": "App Review Notes：",
+}
+_REVIEW_COPY_LABEL_PATTERN = re.compile(
+    r"(?i)"
+    r"(?:^|(?<=[\s*]))"
+    r"(?:\*\*)?"
+    r"[ \t]*"
+    r"(?P<name>Subtitle|Promotional[ \t]+Text|Description|Keywords|App[ \t]+Review[ \t]+Notes)"
+    r"[ \t]*"
+    r"(?:\*\*)?"
+    r"[ \t]*[:：][ \t]*"
+    r"(?:\*\*)?"
+    r"[ \t]*",
+)
 
 CATEGORY_MAP = {
     "报刊杂志": "MAGAZINES_AND_NEWSPAPERS",
@@ -294,6 +331,56 @@ def _cell_text(value: object) -> str:
     if isinstance(value, list):
         return "".join(_cell_text(item) for item in value).strip()
     return ""
+
+
+def _review_copy_cell_text(cell: object) -> str:
+    concatenated = _cell_text(cell)
+    if not isinstance(cell, list):
+        return concatenated
+    lined = "\n".join(part for part in (_cell_text(item) for item in cell) if part)
+    concatenated_hits = len(_REVIEW_COPY_LABEL_PATTERN.findall(concatenated))
+    lined_hits = len(_REVIEW_COPY_LABEL_PATTERN.findall(lined))
+    if lined_hits > concatenated_hits:
+        return lined
+    return concatenated or lined
+
+
+def _normalize_review_copy_value(label: str, value: str) -> str:
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    if label in APPLICATION_MULTILINE_LABELS:
+        lines = [line.rstrip() for line in normalized.split("\n")]
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return "\n".join(lines)
+    return " ".join(normalized.split())
+
+
+def parse_review_copy(cell: object) -> dict[str, str]:
+    """Parse labeled App Store review-copy segments from Feishu 「提审文案」.
+
+    Assumed format (unconfirmed against a live cell): English labels
+    Subtitle / Promotional Text / Description / Keywords / App Review Notes,
+    with ``:`` or ``：``, optional surrounding whitespace or markdown bold,
+    case-insensitive, any order. Each value runs until the next recognized
+    label. Missing labels yield no value.
+    """
+    text = _review_copy_cell_text(cell)
+    if not text:
+        return {}
+    matches = list(_REVIEW_COPY_LABEL_PATTERN.finditer(text))
+    parsed: dict[str, str] = {}
+    for index, match in enumerate(matches):
+        name = " ".join(match.group("name").casefold().split())
+        label = _REVIEW_COPY_NAME_TO_LABEL.get(name)
+        if label is None:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        value = _normalize_review_copy_value(label, text[match.end() : end])
+        if value:
+            parsed.setdefault(label, value)
+    return parsed
 
 
 def _required_text(
@@ -968,6 +1055,13 @@ def build_registration_fields(
         "应用描述：": text("应用描述"),
         "关键词:": text("关键词"),
     }
+    review_copy = parse_review_copy(fields.get(REVIEW_COPY_FIELD))
+    for label in REVIEW_COPY_LABELS:
+        value = review_copy.get(label, "")
+        if value:
+            application[label] = value
+        elif fill_missing_with_test:
+            application[label] = TEST_MISSING_VALUE
     return account, application
 
 
