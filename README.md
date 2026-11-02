@@ -101,6 +101,18 @@ git diff --check
 - 运行时目录只在本地生成，目录权限应为 `0700`，包含元数据的普通文件权限应为 `0600`，且不允许符号链接。
 - 切勿在 issue、日志、卡片或故障报告中粘贴配置值；只报告键名、错误类型和脱敏状态。
 
+
+## Agent / Skills / MCP（机器分发底座）
+
+来自 `lbql-yhl` `origin/main` 的 machine MCP 与架构文档已合并进本分支，供 init / 机器分发开发使用：
+
+- [项目架构说明](docs/project-architecture.md)
+- [文档导航](docs/README.md)
+- [integrations / MCP Worker](integrations/README.md)
+- 示例配置：`config/mcp-worker.example.json`；依赖：`requirements-mcp.txt`
+
+主线技能仍以本仓 hardening 的 `skills/` 与 [`AUTOMATION_CONTRACT`](skills/_shared/AUTOMATION_CONTRACT.md) 为准；不要回退到旧版 `utm-1`…`utm-25` 命名。
+
 ## 文档层级
 
 1. 本 README：项目介绍与快速启动。
