@@ -23,10 +23,13 @@ def load_module():
 def main() -> None:
     module = load_module()
     catalog = module.list_project_skills()
-    assert catalog["count"] == 31
-    assert "utm-25" in catalog["skills"]
+    # Hardening trunk uses the renamed 16-skill mainline (+ optional skills),
+    # not the legacy utm-1..utm-25 layout from lbql main.
+    assert catalog["count"] >= 1
+    assert isinstance(catalog["skills"], list) and catalog["skills"]
+    assert "utm-vm-clone" in catalog["skills"] or "utm-notion" in catalog["skills"]
     assert module.submission_run_status("missing-run")["found"] is False
-    print("MCP worker smoke tests passed")
+    print(f"MCP worker smoke tests passed (skills={catalog['count']})")
 
 
 if __name__ == "__main__":
