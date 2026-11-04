@@ -485,6 +485,7 @@ def test_verify_clash_retries_a_transient_read_only_failure(
             "CLASH_PROCESS=verified",
             "CLASH_HELPER=verified",
             "UI_SETTINGS=verified",
+            "CLASH_THEME_MODE=system_selected",
             "PROFILE=verified",
             "RUNTIME_TUN=verified",
         ]

@@ -20,6 +20,7 @@ Read and obey [`../_shared/AUTOMATION_CONTRACT.md`](../_shared/AUTOMATION_CONTRA
   ```
 
 - Require one inventory-bound VM and one authoritative proxy assignment. Verify guest proxy configuration and outbound identity without printing proxy credentials.
+- Clash Verge Settings → Basic Setting → Theme Mode must stay **System** (blue selected). Script forces `theme_mode: system` in `verge.yaml`, verifies it, emits `CLASH_THEME_MODE=system_selected`, or fails with `CLASH_THEME_MODE_NOT_SYSTEM`.
 - Tun/service install uses configured `SUBMISSION_GUEST_PASSWORD` through guest `sudo` (no GUI password dialog).
 - Retry the same VM/proxy checkpoint at most three rounds using 0/5/10 seconds. Never claim, switch, or guess another proxy or VM.
 
