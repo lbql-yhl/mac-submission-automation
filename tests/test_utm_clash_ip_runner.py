@@ -143,7 +143,7 @@ def test_patch_top_level_scalars_changes_only_unique_requested_keys() -> None:
 enable_system_proxy: true
 enable_auto_launch: false
 enable_silent_start: false
-theme_mode: system
+theme_mode: light
 """
 
     after = patch_top_level_scalars(
@@ -153,6 +153,7 @@ theme_mode: system
             "enable_system_proxy": False,
             "enable_auto_launch": True,
             "enable_silent_start": True,
+            "theme_mode": "system",
         },
     )
 
@@ -161,7 +162,18 @@ theme_mode: system
     assert "enable_auto_launch: true" in after
     assert "enable_silent_start: true" in after
     assert "theme_mode: system" in after
+    assert "theme_mode: light" not in after
 
+
+
+
+def test_runner_requires_theme_mode_system_selected() -> None:
+    text = (ROOT / "scripts" / "utm_clash_ip.py").read_text(encoding="utf-8")
+
+    assert "'theme_mode':'system'" in text
+    assert "CLASH_THEME_MODE=system_selected" in text
+    assert "CLASH_THEME_MODE_NOT_SYSTEM" in text
+    assert "theme_mode: system" in text
 
 def test_patch_top_level_scalars_rejects_missing_or_duplicate_keys() -> None:
     with pytest.raises(ValueError, match="missing"):
@@ -343,6 +355,9 @@ def test_runner_persists_ui_settings_and_uses_the_official_clash_lifecycle() -> 
     assert "'enable_system_proxy':False" in text
     assert "'enable_auto_launch':True" in text
     assert "'enable_silent_start':True" in text
+    assert "'theme_mode':'system'" in text
+    assert "CLASH_THEME_MODE=system_selected" in text
+    assert "CLASH_THEME_MODE_NOT_SYSTEM" in text
     assert "config_payload=patch_scalars(config.read_text(),{'ipv6':False,'unified-delay':True}).encode()" in text
     assert "/bin/launchctl bootstrap system \"$plist\"" in text
     assert "/usr/bin/open -gja 'Clash Verge'" in text

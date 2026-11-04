@@ -175,7 +175,7 @@ def render_headless_runtime_profile(profile: str) -> str:
     return "ipv6: false\nunified-delay: true\n" + profile
 
 
-def patch_top_level_scalars(text: str, values: Mapping[str, bool]) -> str:
+def patch_top_level_scalars(text: str, values: Mapping[str, bool | str | int]) -> str:
     """Replace only unique top-level YAML scalars and preserve all other text."""
     lines = text.splitlines(keepends=True)
     for key, desired in values.items():
@@ -186,7 +186,11 @@ def patch_top_level_scalars(text: str, values: Mapping[str, bool]) -> str:
         if len(indexes) != 1:
             raise ValueError(f"duplicate top-level YAML key: {key}")
         newline = "\r\n" if lines[indexes[0]].endswith("\r\n") else "\n"
-        lines[indexes[0]] = f"{key}: {'true' if desired else 'false'}{newline}"
+        if isinstance(desired, bool):
+            rendered = "true" if desired else "false"
+        else:
+            rendered = str(desired)
+        lines[indexes[0]] = f"{key}: {rendered}{newline}"
     return "".join(lines)
 
 
@@ -788,10 +792,14 @@ for path in managed:
 
 stage='render_verge'
 try:
- verge_payload=patch_scalars(verge.read_text(),{
+ verge_text=verge.read_text()
+ if not re.search(r'(?m)^theme_mode:\s*',verge_text):
+  verge_text=verge_text.rstrip('\n')+'\ntheme_mode: system\n'
+ verge_payload=patch_scalars(verge_text,{
   'enable_tun_mode':True,'enable_system_proxy':False,
   'enable_auto_launch':True,'enable_silent_start':True,
   'enable_dns_settings':False,'verge_mixed_port':7897,
+  'theme_mode':'system',
  }).encode()
  stage='render_config'
  config_payload=patch_scalars(config.read_text(),{'ipv6':False,'unified-delay':True}).encode()
@@ -815,11 +823,15 @@ try:
  atomic(headless_target,headless_payload)
 
  stage='readback_verge'
- if patch_scalars(verge.read_text(),{
+ verge_text=verge.read_text()
+ if not re.search(r'(?m)^theme_mode:\s*',verge_text):
+  raise SystemExit('VERGE_theme_mode=failed')
+ if patch_scalars(verge_text,{
   'enable_tun_mode':True,'enable_system_proxy':False,
   'enable_auto_launch':True,'enable_silent_start':True,
   'enable_dns_settings':False,'verge_mixed_port':7897,
- }) != verge.read_text(): raise RuntimeError('VERGE_READBACK=failed')
+  'theme_mode':'system',
+ }) != verge_text: raise RuntimeError('VERGE_READBACK=failed')
  stage='readback_config'
  if patch_scalars(config.read_text(),{'ipv6':False,'unified-delay':True,'mixed-port':7897,'allow-lan':False}) != config.read_text(): raise RuntimeError('CONFIG_SOURCE_READBACK=failed')
  stage='readback_registry'
@@ -943,9 +955,12 @@ def patch_registry(text):
  lines.extend(['- uid: '+profile_uid,'  type: local','  name: My-SOCKS5-Proxy','  file: '+profile_uid+'.yaml','  desc: null','  updated: 0'])
  return '\n'.join(lines)+'\n'
 
-verge_values={'enable_tun_mode':True,'enable_system_proxy':False,'enable_auto_launch':True,'enable_silent_start':True,'enable_dns_settings':False,'verge_mixed_port':7897}
+verge_values={'enable_tun_mode':True,'enable_system_proxy':False,'enable_auto_launch':True,'enable_silent_start':True,'enable_dns_settings':False,'verge_mixed_port':7897,'theme_mode':'system'}
 config_values={'ipv6':False,'unified-delay':True,'mixed-port':7897,'allow-lan':False}
-verge_payload=patch_scalars(verge.read_text(),verge_values).encode()
+verge_text=verge.read_text()
+if not re.search(r'(?m)^theme_mode:\s*',verge_text):
+ verge_text=verge_text.rstrip('\n')+'\ntheme_mode: system\n'
+verge_payload=patch_scalars(verge_text,verge_values).encode()
 config_payload=patch_scalars(config.read_text(),config_values).encode()
 registry_payload=patch_registry(registry.read_text()).encode()
 profile_payload=download.read_bytes()
@@ -1235,9 +1250,12 @@ required={
  'enable_tun_mode':'true','enable_system_proxy':'false',
  'enable_auto_launch':'true','enable_silent_start':'true',
  'enable_dns_settings':'false','verge_mixed_port':'7897',
+ 'theme_mode':'system',
 }
 for key,value in required.items():
- if one(base/'verge.yaml',key)!=[value]: raise SystemExit('VERGE_'+key+'=failed')
+ if one(base/'verge.yaml',key)!=[value]:
+  if key=='theme_mode': raise SystemExit('CLASH_THEME_MODE_NOT_SYSTEM')
+  raise SystemExit('VERGE_'+key+'=failed')
 runtime_required={'ipv6':'false','unified-delay':'true','mixed-port':'7897'}
 for key,value in runtime_required.items():
  if one(base/'config.yaml',key)!=[value]: raise SystemExit('CONFIG_SOURCE_'+key+'=failed')
@@ -1275,13 +1293,14 @@ if config.get('mixed-port')!=7897: raise SystemExit('RUNTIME_MIXED_PORT=failed')
 if proxy.get('name')!='PROXY' or proxy.get('now')!='My-SOCKS5-Proxy': raise SystemExit('PROFILE_SELECTION=failed')
 delay=api('/proxies/My-SOCKS5-Proxy/delay?timeout=5000&url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204')
 if not isinstance(delay.get('delay'),int) or delay.get('delay')<=0: raise SystemExit('PROFILE_DELAY=failed')
-print('CLASH=verified\nCLASH_PROCESS=verified\nCLASH_HELPER=verified\nUI_SETTINGS=verified\nPROFILE=verified\nRUNTIME_TUN=verified')
+print('CLASH=verified\nCLASH_PROCESS=verified\nCLASH_HELPER=verified\nUI_SETTINGS=verified\nCLASH_THEME_MODE=system_selected\nPROFILE=verified\nRUNTIME_TUN=verified')
 '''.replace("from pathlib import Path\n", "from pathlib import Path\nimport sys\n")
         required_markers = {
             "CLASH=verified",
             "CLASH_PROCESS=verified",
             "CLASH_HELPER=verified",
             "UI_SETTINGS=verified",
+            "CLASH_THEME_MODE=system_selected",
             "PROFILE=verified",
             "RUNTIME_TUN=verified",
         }
@@ -1311,6 +1330,7 @@ print('CLASH=verified\nCLASH_PROCESS=verified\nCLASH_HELPER=verified\nUI_SETTING
         print("CLASH_PROCESS=verified")
         print("CLASH_HELPER=verified")
         print("UI_SETTINGS=verified")
+        print("CLASH_THEME_MODE=system_selected")
         print("PROFILE=verified")
         print("RUNTIME_TUN=verified")
 
